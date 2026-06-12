@@ -1,0 +1,160 @@
+/**
+ * Schema Builder mock — content-type modeling (types + their fields) plus the
+ * site-wide structured-data defaults. Per-page SEO/JSON-LD is edited inside the
+ * block editor's "Schema" panel; this page defines the universal schema.
+ */
+
+export type FieldType =
+    | "Text"
+    | "Rich text"
+    | "Number"
+    | "Boolean"
+    | "Date"
+    | "Media"
+    | "Reference"
+    | "Slug"
+    | "URL"
+    | "Component";
+
+export const FIELD_TYPES: FieldType[] = [
+    "Text",
+    "Rich text",
+    "Number",
+    "Boolean",
+    "Date",
+    "Media",
+    "Reference",
+    "Slug",
+    "URL",
+    "Component",
+];
+
+/** schema.org types offered as the default for a content type. */
+export const SCHEMA_JSONLD = [
+    "Article",
+    "BlogPosting",
+    "WebPage",
+    "FAQPage",
+    "HowTo",
+    "Product",
+    "Event",
+];
+
+export type SchemaField = {
+    id: string;
+    name: string;
+    type: FieldType;
+    required: boolean;
+    /** Component fields can repeat (a list) and nest their own fields. */
+    repeatable?: boolean;
+    fields?: SchemaField[];
+};
+
+export type ContentTypeSchema = {
+    id: string;
+    name: string;
+    /** Machine name returned by the API (e.g. "article"); absent on local mock seeds. */
+    apiId?: string;
+    icon: string;
+    color: string;
+    jsonLd: string;
+    fields: SchemaField[];
+};
+
+export const contentTypeSchemas: ContentTypeSchema[] = [
+    {
+        id: "blog",
+        name: "Blog Post",
+        apiId: "article",
+        icon: "document",
+        color: "#6C5CE7",
+        jsonLd: "BlogPosting",
+        fields: [
+            { id: "b1", name: "Title", type: "Text", required: true },
+            { id: "b2", name: "Slug", type: "Slug", required: true },
+            { id: "b3", name: "Body", type: "Rich text", required: true },
+            { id: "b4", name: "Cover image", type: "Media", required: false },
+            { id: "b5", name: "Author", type: "Reference", required: true },
+            {
+                id: "b6",
+                name: "SEO",
+                type: "Component",
+                required: false,
+                repeatable: false,
+                fields: [
+                    { id: "b6a", name: "Meta title", type: "Text", required: false },
+                    { id: "b6b", name: "Meta description", type: "Text", required: false },
+                    { id: "b6c", name: "OG image", type: "Media", required: false },
+                ],
+            },
+            {
+                id: "b7",
+                name: "FAQ",
+                type: "Component",
+                required: false,
+                repeatable: true,
+                fields: [
+                    { id: "b7a", name: "Question", type: "Text", required: true },
+                    { id: "b7b", name: "Answer", type: "Rich text", required: true },
+                ],
+            },
+        ],
+    },
+    {
+        id: "page",
+        name: "Page",
+        apiId: "page",
+        icon: "overview",
+        color: "#3B82F6",
+        jsonLd: "WebPage",
+        fields: [
+            { id: "p1", name: "Title", type: "Text", required: true },
+            { id: "p2", name: "Slug", type: "Slug", required: true },
+            { id: "p3", name: "Sections", type: "Rich text", required: true },
+            { id: "p4", name: "Hero image", type: "Media", required: false },
+        ],
+    },
+    {
+        id: "landing",
+        name: "Landing Page",
+        apiId: "landing",
+        icon: "chart",
+        color: "#E0529C",
+        jsonLd: "WebPage",
+        fields: [
+            { id: "l1", name: "Headline", type: "Text", required: true },
+            { id: "l2", name: "Slug", type: "Slug", required: true },
+            { id: "l3", name: "Hero", type: "Media", required: false },
+            { id: "l4", name: "CTA URL", type: "URL", required: true },
+            { id: "l5", name: "Blocks", type: "Rich text", required: false },
+        ],
+    },
+    {
+        id: "case_study",
+        name: "Case Study",
+        apiId: "case_study",
+        icon: "star",
+        color: "#00B894",
+        jsonLd: "Article",
+        fields: [
+            { id: "cs1", name: "Title", type: "Text", required: true },
+            { id: "cs2", name: "Slug", type: "Slug", required: true },
+            { id: "cs3", name: "Client", type: "Text", required: true },
+            { id: "cs4", name: "Summary", type: "Text", required: false },
+            { id: "cs5", name: "Body", type: "Rich text", required: true },
+            { id: "cs6", name: "Cover image", type: "Media", required: false },
+        ],
+    },
+];
+
+export const globalSchemaDefaults = {
+    orgName: "Northbound",
+    logo: "https://wearenorthbound.com/logo.png",
+    url: "https://wearenorthbound.com",
+    sameAs: [
+        "https://twitter.com/wearenorthbound",
+        "https://linkedin.com/company/wearenorthbound",
+        "https://instagram.com/wearenorthbound",
+        "https://dribbble.com/wearenorthbound",
+    ],
+};

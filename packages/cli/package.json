@@ -1,0 +1,16 @@
+{
+  "name": "@flowcms/cli",
+  "version": "0.1.0",
+  "description": "Setup & operations CLI for self-hosting Flow CMS (init env, generate secrets, migrate, seed, doctor).",
+  "type": "module",
+  "bin": {
+    "flowcms": "bin/flowcms.mjs"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

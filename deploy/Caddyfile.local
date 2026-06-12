@@ -1,0 +1,22 @@
+# Local smoke-test proxy — plain HTTP on :80, no TLS (no cert warnings).
+# Use for quick local verification only. To use it, mount this instead of the
+# main Caddyfile in docker-compose.prod.yml:
+#   - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+#
+# NOTE: over plain HTTP the API session cookie is set `Secure` when
+# NODE_ENV=production, so the browser won't store it. For login testing prefer
+# DOMAIN=localhost with the main Caddyfile (internal HTTPS), or set
+# NODE_ENV=development for the smoke test.
+
+:80 {
+	encode zstd gzip
+
+	@backend path /api/* /media/* /socket.io/*
+	handle @backend {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy studio:3000
+	}
+}

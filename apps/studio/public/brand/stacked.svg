@@ -1,0 +1,7 @@
+<svg width="160" height="120" viewBox="0 0 160 120" xmlns="http://www.w3.org/2000/svg">
+  <rect x="54" y="0" width="52" height="52" rx="14" fill="#6C5CE7"/>
+  <rect x="66" y="14" width="28" height="7" rx="3.5" fill="#FFFFFF"/>
+  <rect x="66" y="25" width="20" height="7" rx="3.5" fill="#FFFFFF" fill-opacity="0.6"/>
+  <rect x="66" y="36" width="12" height="7" rx="3.5" fill="#FFFFFF" fill-opacity="0.35"/>
+  <text x="80" y="92" font-family="Poppins, sans-serif" font-size="28" font-weight="700" fill="#1A1A2E" letter-spacing="-1.1" text-anchor="middle">flow<tspan fill="#6C5CE7" font-weight="600">cms</tspan></text>
+</svg>

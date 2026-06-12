@@ -1,0 +1,27 @@
+Flow CMS Commercial License (Enterprise Edition)
+================================================
+
+Copyright (c) Flow CMS. All rights reserved.
+
+This directory ("EE" / Enterprise Edition) and all code within it is COMMERCIAL,
+PROPRIETARY software. It is NOT covered by the open-source license that applies
+to the rest of the Flow CMS repository.
+
+1. Grant. Subject to a valid, current Flow CMS commercial subscription (Pro or
+   Enterprise) and the entitlements encoded in your license key, you are granted
+   a non-exclusive, non-transferable right to use this software on the
+   installation(s) the license covers, for the term of the subscription.
+
+2. Restrictions. Without a valid license you may not use, run, copy, modify,
+   distribute, sublicense, or create derivative works of this software, nor
+   circumvent or disable the license checks (including the signature
+   verification or feature gating). You may not remove this notice.
+
+3. Redistribution. Open-source distributions of Flow CMS must EXCLUDE this
+   directory. The open-source core functions fully without it (as the free
+   Community edition).
+
+4. No warranty. This software is provided "as is", without warranty of any kind,
+   to the maximum extent permitted by law.
+
+For licensing, contact the vendor. See docs/business/LICENSING.md and docs/business/MONETIZATION.md.

@@ -1,0 +1,129 @@
+# Flow CMS — production stack (single domain, automatic HTTPS).
+#
+#   Caddy  :80/:443  ──/api,/media,/socket.io──▶  api:4000
+#                    ──everything else───────────▶  studio:3000
+#   api ──▶ postgres   (bundled; or point DATABASE_URL at an external DB)
+#
+# Run from this directory so `.env` here is picked up:
+#   cd deploy && cp .env.production.example .env && edit it
+#   docker compose -f docker-compose.prod.yml up -d --build      # build from source
+#   docker compose -f docker-compose.prod.yml up -d              # use prebuilt images
+#
+# Optional services:  --profile cache (redis)   --profile search (meilisearch)
+name: flowcms
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env (e.g. cms.yoursite.com, or localhost)}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # Let's Encrypt account + certs — MUST persist
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      studio:
+        condition: service_started
+    networks: [flow]
+
+  studio:
+    image: ${STUDIO_IMAGE:-flowcms-studio:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: studio-runner
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+    restart: unless-stopped
+    expose: ["3000"]
+    networks: [flow]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api:
+    image: ${API_IMAGE:-flowcms-api:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: api-runner
+    restart: unless-stopped
+    env_file: .env # DATABASE_URL, secrets, STUDIO_URL, SEED_ADMIN_*, TRUST_PROXY, NODE_ENV…
+    volumes:
+      - media_data:/app/storage/media
+    expose: ["4000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s # first boot runs migrate + seed
+    networks: [flow]
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flowcms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-flowcms}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flowcms} -d ${POSTGRES_DB:-flowcms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [flow]
+    # No host port published — only `api` reaches Postgres on the internal network.
+
+  # ── Optional: Redis (queues/webhooks). Enable with `--profile cache`
+  #    and set REDIS_URL=redis://redis:6379 in .env.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles: ["cache"]
+    volumes:
+      - redis_data:/data
+    networks: [flow]
+
+  # ── Scaffolding (NOT yet used): Meilisearch. The API does not integrate it yet
+  #    — search currently runs on Postgres, so enabling `--profile search` has no
+  #    effect on the app. Reserved for a future search upgrade; leave it off.
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    restart: unless-stopped
+    profiles: ["search"]
+    environment:
+      # Set MEILI_MASTER_KEY in .env before enabling the `search` profile.
+      # (Meilisearch in production mode refuses to start without a strong key.)
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-}
+      MEILI_ENV: production
+    volumes:
+      - meili_data:/meili_data
+    networks: [flow]
+
+networks:
+  flow:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pg_data:
+  media_data:
+  redis_data:
+  meili_data:

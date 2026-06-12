@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Primary gate: typecheck + unit tests. Fully offline, no database needed.
+  test:
+    name: Typecheck + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Typecheck API
+        run: npx tsc --noEmit -p apps/api/tsconfig.json
+
+      - name: Typecheck Studio
+        run: npx tsc --noEmit -p apps/studio/tsconfig.json
+
+      - name: Unit tests (shared)
+        run: npm run test -w @flowcms/shared
+
+      - name: Unit tests (API)
+        run: npm run test -w @flowcms/api
+
+  # DB-backed integration tests: boots Postgres, applies migrations (a de-facto
+  # migration smoke test), and runs the gated *.int.spec.ts suite (bootstrap
+  # idempotency / non-destructiveness, workspace isolation, token soft-delete).
+  integration:
+    name: Integration tests (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flowcms
+          POSTGRES_PASSWORD: flowcms
+          POSTGRES_DB: flowcms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowcms"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://flowcms:flowcms@localhost:5432/flowcms_test?schema=public
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Apply migrations (smoke test)
+        run: npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+
+      - name: Integration specs (bootstrap idempotency, isolation, soft-delete)
+        env:
+          RUN_DB_TESTS: "1"
+        run: npm run test -w @flowcms/db

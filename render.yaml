@@ -1,0 +1,46 @@
+# render.yaml — Render Blueprint for Flow CMS (one-click managed deploy).
+# In Render: New > Blueprint > connect this repo. It provisions the app (the
+# prebuilt all-in-one image) + a managed Postgres and generates the secrets.
+# STUDIO_URL is auto-derived from RENDER_EXTERNAL_URL at boot.
+#
+# The app PULLS a published image (no build from your repo). On first load you are
+# taken to the /welcome first-run wizard to create your admin account — there are no
+# admin credentials to set here ahead of time.
+#
+# NOTE: set `image.url` to the owner that published the images (the release.yml
+# workflow pushes to ghcr.io/<repo-owner>/flowcms). Make the GHCR package public.
+#
+# IMPORTANT — media storage: Render's container filesystem is EPHEMERAL, so
+# uploaded media on the app's local disk is LOST on every deploy/restart. For any
+# real use, configure S3-compatible object storage (Cloudflare R2 / Supabase
+# Storage / S3) so the app stays stateless and media persists. Add the S3_* vars
+# in the dashboard (see deploy/.env.production.example for the full list):
+#   STORAGE_DRIVER=s3  S3_BUCKET=...  S3_ENDPOINT=...  S3_ACCESS_KEY_ID=...
+#   S3_SECRET_ACCESS_KEY=...  S3_REGION=...  S3_PUBLIC_URL=...
+services:
+  - type: web
+    name: flowcms
+    runtime: image
+    image:
+      url: ghcr.io/flowcms-co/flowcms:latest
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+      - key: SECRETS_ENCRYPTION_KEY   # encrypts stored credentials — never change after first boot
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: flowcms-db
+          property: connectionString
+
+databases:
+  - name: flowcms-db
+    plan: basic-256mb
+    databaseName: flowcms
+    user: flowcms

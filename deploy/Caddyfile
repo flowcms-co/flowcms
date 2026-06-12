@@ -1,0 +1,23 @@
+# Flow CMS reverse proxy — automatic HTTPS on a single domain.
+#   {$DOMAIN}  e.g. cms.yoursite.com  (or `localhost` for a local test)
+#
+# Caddy obtains + renews a Let's Encrypt certificate automatically for a real
+# domain, and uses its own internal CA for `localhost` (self-signed). Routing:
+#   /api/*  /media/*  /socket.io/*  -> the API; everything else -> the studio.
+# (Optional: to get Let's Encrypt expiry emails, add a global options block with
+#  `email you@you.com` — Caddy auto-renews regardless, so it's not required.)
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# API, uploaded media, and websockets -> NestJS backend.
+	@backend path /api/* /media/* /socket.io/*
+	handle @backend {
+		reverse_proxy api:4000
+	}
+
+	# Everything else -> Next.js studio (admin UI + first-run /setup).
+	handle {
+		reverse_proxy studio:3000
+	}
+}

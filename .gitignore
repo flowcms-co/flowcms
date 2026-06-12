@@ -1,0 +1,69 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies (any workspace)
+node_modules/
+.pnp
+.pnp.*
+
+# builds / outputs
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# turborepo
+.turbo/
+
+# prisma generated client
+**/.prisma/
+
+# testing
+coverage/
+
+# env files (keep example templates: .env.example, deploy/.env.production.example, …)
+.env
+.env.*
+!*.example
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# misc
+.DS_Store
+*.pem
+.vercel
+
+# graphify / codegraph — internal code-intelligence output, not shipped
+graphify-out/
+.codegraph/
+
+# internal docs — ALL of docs/ is kept local, never published to the public repo
+# (business strategy, security audit, handovers, status, roadmaps, planning, etc.)
+docs/
+
+# AI-assistant tooling / config — not part of the product
+CLAUDE.md
+.claude/
+.claudeignore
+.mcp.json
+
+# license-key minting (drives the private Ed25519 signing key)
+scripts/license/
+
+# local scratch / screenshots
+lp-check.png
+
+# uploaded media (served at /media) — root-anchored so it never matches source
+# dirs like apps/api/src/assets/storage/
+apps/api/storage/
+/storage/
+
+# overview illustrations: the heavy auto-traced SVG sources (~7 MB each) are kept
+# locally but never committed — the rasterized .webp (~50 KB each) are the shipped
+# assets. Remove this line when flat layered vector art replaces the traces.
+apps/studio/public/illustrations/*.svg

@@ -1,0 +1,697 @@
+// Flow CMS — data model.
+// One Postgres database powers the whole platform. Self-hosters point
+// DATABASE_URL at any Postgres (the bundled Docker one, Neon, Supabase, RDS…).
+//
+// Conventions:
+//  - cuid() ids everywhere.
+//  - Everything is scoped to a Workspace (a "project/site"); even single-tenant
+//    self-host installs have one Workspace, but the model supports many.
+//  - Secrets (API keys, SMTP creds) are stored ENCRYPTED at rest in
+//    Integration.encryptedSecret — never in plaintext.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────── Tenancy & identity ────────────────────────────
+
+model Workspace {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  locales       Json     @default("[\"en\"]") // enabled content locales (string[])
+  defaultLocale String   @default("en")
+  aiAutoModel   Boolean  @default(true) // cost-aware routing: pick model by task unless one is specified
+  aiMonthlyBudgetUsd Float? // Pro (ai_budgets): monthly AI spend cap in USD; null = no cap
+  approvalsRequired Int @default(1) // Pro (approval_workflows): distinct sign-offs needed before publish
+  // Enterprise (ip_policies): access + session controls (enforced only when licensed).
+  ipAllowlist        Json @default("[]") // string[] of allowed IPs / CIDRs; empty = any
+  sessionMaxHours    Int? // hard session lifetime cap; null = default 30d
+  sessionIdleMinutes Int? // sign out after this much inactivity; null = no idle limit
+  // Pro+ (seo_automation): scheduled AI auditing. Opt-in, default off; config +
+  // last-run stamps live on the core model but the scheduler only runs when licensed.
+  defaultWeeklyGoal     Int       @default(3) // fallback weekly content goal per writer
+  aiScanEnabled         Boolean   @default(false) // opt-in to the auto AI pass
+  aiScanConfig          Json? // { incrementalHours, fullHours, perRunCap } (Enterprise-editable)
+  lastIncrementalScanAt DateTime? // last scheduled incremental AI pass
+  lastFullScanAt        DateTime? // last scheduled full re-audit + AI pass
+  jsonLdOrg     Json? // site-wide Organization structured data (JSON-LD) defaults
+  ignoredFindings String[] @default([]) // SEO findings the user permanently dismissed: "CODE" (whole issue) or "CODE:entryId" (one page)
+  previewUrl    String? // frontend live-preview URL template, e.g. https://site.com/preview?slug={slug} ({slug}/{id}/{type}/{locale})
+  // White-label (Enterprise `white_label`): a workspace's own studio branding.
+  // Stored on the core model (nullable) but only APPLIED when licensed; writes are
+  // gated by the ee/white-label controller.
+  brandName     String? // replaces the "Flow CMS" wordmark in the studio chrome
+  brandLogoUrl  String? // custom logo shown in the sidebar (image URL or /media ref)
+  brandAccent   String? // hex accent (e.g. #0EA5E9); retints the studio's primary
+  onboardedAt   DateTime? // null until the first-run guided setup is finished/skipped
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships     Membership[]
+  roles           Role[]
+  apiTokens       ApiToken[]
+  ssoConfig       SsoConfig?
+  integrations    Integration[]
+  contentTypes    ContentType[]
+  contentEntries  ContentEntry[]
+  media           Media[]
+  webhooks        Webhook[]
+  emailTemplates  EmailTemplate[]
+  notifications   Notification[]
+  channels        ChatChannel[]
+  usageRecords    UsageRecord[]
+  auditLogs       AuditLog[]
+  metricSnapshots MetricSnapshot[]
+  knowledgeFiles  KnowledgeFile[]
+  plugins         Plugin[]
+  pageTemplates   PageTemplate[]
+  pageAudits      PageAudit[]
+  aiQuotaDaily    AiQuotaDaily[]
+  jobs            Job[]
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String?
+  // Free-text job title shown in the UI (e.g. "Chief Search Strategist").
+  title            String?
+  passwordHash     String?
+  avatarUrl        String? // uploaded image override (takes precedence over the generated one)
+  // Generated illustrated avatar (DiceBear). Style + seed + bg are chosen at
+  // signup from a few vibe questions; the avatar is rendered server-side at
+  // /avatars/u/:id so it works in-app and in email.
+  avatarStyle      String?
+  avatarSeed       String?
+  avatarBg         String?
+  emailVerifiedAt  DateTime?
+  twoFactorSecret  String? // TOTP secret, AES-256-GCM encrypted; null until enrolled
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorBackupCodes Json   @default("[]") // hashed one-time recovery codes
+  isActive         Boolean   @default(true)
+  // Email digest of unread notifications: "off" | "daily" | "weekly".
+  digestFrequency  String    @default("off")
+  notificationPrefs Json     @default("{}") // per-event email toggles (e.g. {"review":true,"published":false})
+  lastDigestAt     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  memberships   Membership[]
+  sessions      Session[]
+  notifications Notification[]
+  messages      ChatMessage[]
+  auditLogs     AuditLog[]
+  reviews       ContentReview[]
+}
+
+// A user's seat in a workspace, carrying their Role (permission set).
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  roleId      String
+  role        Role      @relation(fields: [roleId], references: [id])
+  // Weekly content goal for this writer (published + scheduled pieces per week).
+  // null = use the workspace default; topic is an optional focus note.
+  weeklyGoal      Int?
+  weeklyGoalTopic String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+// Roles are customizable permission templates. Ships with system defaults
+// (super_admin, admin, search_strategist, editor); admins can add/rename/clone
+// and toggle granular permissions later.
+model Role {
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key         String // super_admin | admin | search_strategist | editor | custom-*
+  name        String // display name
+  description String?
+  permissions Json // string[] of permission keys, e.g. ["content.publish","seo.read"]
+  dashboard   String? // landing dashboard: overview | seo | editor | research
+  // Pro (advanced_rbac) field-level permissions — config lives here; enforcement is
+  // gated by the license (so these are inert on Community/Pro-without-the-feature).
+  lockSeoMeta    Boolean @default(false) // can't edit SEO/meta fields
+  allowedTypeIds Json    @default("[]") // string[] of ContentType ids; empty = all types
+  isSystem    Boolean  @default(false) // system roles can't be deleted
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships Membership[]
+
+  @@unique([workspaceId, key])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  userAgent String?
+  ip        String?
+  // Multi-workspace: which workspace this session is currently acting in. Null
+  // falls back to the user's first membership. Always re-validated against the
+  // user's memberships when resolved, so a stale value can't grant access.
+  activeWorkspaceId String?
+  lastSeenAt DateTime? // updated lazily; drives the Enterprise idle-timeout policy
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ──────────────────────── API access (sites & agents) ───────────────────────
+
+enum ApiTokenType {
+  CONTENT // read published content from an external site
+  PREVIEW // read draft + published content for headless preview
+  AGENT // third-party AI agent operating the CMS
+  ADMIN // full programmatic admin
+  SCIM // Enterprise: IdP-driven user provisioning (SCIM 2.0)
+}
+
+// Enterprise (sso): per-workspace OIDC single sign-on. clientSecret is AES-encrypted
+// at rest. Enforced/usable only when the install is licensed for `sso`.
+model SsoConfig {
+  id               String    @id @default(cuid())
+  workspaceId      String    @unique
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  enabled          Boolean   @default(false)
+  issuer           String?
+  authorizationUrl String?
+  tokenUrl         String?
+  jwksUri          String?
+  clientId         String?
+  clientSecret     String? // AES-256-GCM encrypted
+  autoProvision    Boolean   @default(false) // create a Flow user on first SSO login
+  allowedDomain    String? // only auto-provision emails on this domain (e.g. acme.com)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model ApiToken {
+  id          String       @id @default(cuid())
+  workspaceId String
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  tokenHash   String       @unique
+  prefix      String // first chars shown in UI for identification
+  type        ApiTokenType @default(CONTENT)
+  scopes      Json // string[] of permission keys
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime? // soft-delete: set on revoke; revoked tokens are rejected at auth + hidden from lists (no hard delete)
+  createdById String?
+  createdAt   DateTime     @default(now())
+
+  @@index([workspaceId])
+}
+
+// ──────────────────────────── Integrations ─────────────────────────────────
+
+enum IntegrationType {
+  AI_PROVIDER // openai, anthropic, openrouter, nvidia, deepseek, kimi, litellm
+  OBSERVABILITY // helicone
+  SEARCH_CONSOLE // google search console
+  ANALYTICS // ga4
+  SMTP // outbound email
+  SEARCH // meilisearch
+  CMS_CONNECTOR // strapi, etc.
+  SEO_TOOL // pagespeed, keyword_data — BYO-key SEO data providers
+  AUTOMATION // slack, zapier — outbound notification / automation connectors
+}
+
+enum IntegrationStatus {
+  PENDING
+  CONNECTED
+  ERROR
+  DISCONNECTED
+}
+
+model Integration {
+  id              String            @id @default(cuid())
+  workspaceId     String
+  workspace       Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  type            IntegrationType
+  provider        String // openai | anthropic | openrouter | nvidia | deepseek | kimi | litellm | helicone | gsc | ga4 | smtp | meilisearch | strapi
+  label           String
+  config          Json // non-secret config (default model, base url, property id…)
+  encryptedSecret String? // AES-encrypted API key / credentials JSON
+  status          IntegrationStatus @default(PENDING)
+  lastCheckedAt   DateTime?
+  createdById     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([workspaceId, type])
+}
+
+/// Reusable page/content starter preset: a target content type (scaffolded on
+/// first use) plus a sample body the editor opens pre-filled with.
+model PageTemplate {
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  icon        String   @default("document")
+  color       String   @default("#6C5CE7")
+  typeApiId   String // content type apiId to find-or-create when used
+  typeName    String // display name for that content type
+  jsonLd      String   @default("WebPage")
+  fields      Json     @default("[]") // content-type field defs [{id,name,type,required}]
+  body        String   @default("") // starter body (HTML) the editor opens with
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+}
+
+// ──────────────────────── Content engine (headless CMS) ─────────────────────
+
+enum ContentKind {
+  COLLECTION
+  SINGLE
+  COMPONENT
+}
+
+model ContentType {
+  id              String         @id @default(cuid())
+  workspaceId     String
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name            String
+  apiId           String // singular api identifier, e.g. "article"
+  pluralApiId     String // plural, e.g. "articles"
+  kind            ContentKind    @default(COLLECTION)
+  schema          Json // field definitions authored in the Schema Builder
+  draftAndPublish Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  entries         ContentEntry[]
+
+  @@unique([workspaceId, apiId])
+}
+
+enum ContentStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+model ContentEntry {
+  id            String           @id @default(cuid())
+  workspaceId   String
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentTypeId String
+  contentType   ContentType      @relation(fields: [contentTypeId], references: [id], onDelete: Cascade)
+  data          Json
+  status        ContentStatus    @default(DRAFT)
+  locale        String           @default("en")
+  slug          String?
+  publishedAt   DateTime?
+  scheduledAt   DateTime?
+  authorId      String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  versions      ContentVersion[]
+  reviews       ContentReview[]
+
+  @@index([workspaceId, contentTypeId, status])
+  @@index([workspaceId, slug])
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, authorId])
+  @@index([workspaceId, locale])
+}
+
+model ContentVersion {
+  id            String        @id @default(cuid())
+  entryId       String
+  entry         ContentEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  data          Json
+  status        ContentStatus
+  versionNumber Int
+  createdById   String?
+  createdAt     DateTime      @default(now())
+
+  @@index([entryId])
+}
+
+// A reviewer's sign-off decision on an entry's current review cycle. Recorded for
+// everyone (advisory); the Pro `approval_workflows` feature turns enough APPROVED
+// decisions into a hard gate before publishing. One decision per reviewer per entry
+// (re-deciding updates it); decisions are cleared when an entry re-enters review.
+model ContentReview {
+  id         String         @id @default(cuid())
+  entryId    String
+  entry      ContentEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  reviewerId String
+  reviewer   User           @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
+  decision   ReviewDecision
+  note       String?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([entryId, reviewerId])
+  @@index([entryId])
+}
+
+enum ReviewDecision {
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+// Per-workspace on/off + config for a built-in plugin (server registry holds the
+// actual hook logic; this row just records enabled state + JSON config).
+model Plugin {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key         String // matches a built-in plugin key, e.g. "reading-time"
+  enabled     Boolean   @default(false)
+  config      Json      @default("{}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId])
+}
+
+model Media {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  filename    String
+  mimeType    String
+  size        Int
+  url         String
+  width       Int?
+  height      Int?
+  alt         String?
+  altSource   String? // ai | manual | none
+  folder      String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+  @@index([workspaceId, createdAt])
+}
+
+// ──────────────────────── Automation & connectivity ─────────────────────────
+
+model Webhook {
+  id          String            @id @default(cuid())
+  workspaceId String
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  url         String
+  events      Json // string[] of event names
+  secret      String? // HMAC signing secret
+  headers     Json? // custom headers
+  enabled     Boolean           @default(true)
+  deletedAt   DateTime? // soft-delete: set on remove; hidden from lists + never dispatched (no hard delete)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  deliveries  WebhookDelivery[]
+
+  @@index([workspaceId])
+}
+
+model WebhookDelivery {
+  id           String   @id @default(cuid())
+  webhookId    String
+  webhook      Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event        String
+  payload      Json
+  statusCode   Int?
+  success      Boolean  @default(false)
+  responseBody String?
+  attempt      Int      @default(1)
+  createdAt    DateTime @default(now())
+
+  @@index([webhookId, createdAt])
+}
+
+model EmailTemplate {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key         String // welcome | invite | reset_password | content_published | alert
+  name        String
+  subject     String
+  html        String // code-based template (handlebars-style tokens)
+  text        String?
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, key])
+}
+
+// ──────────────────────── Collaboration & signals ───────────────────────────
+
+model Notification {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String
+  title       String
+  body        String?
+  href        String?
+  read        Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, read])
+}
+
+enum ChannelKind {
+  UNIVERSAL // everyone, auto-joined
+  TASK // tied to a task/content item, members only
+  GROUP // ad-hoc group
+  DIRECT // 1:1
+}
+
+model ChatChannel {
+  id          String          @id @default(cuid())
+  workspaceId String
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  kind        ChannelKind     @default(GROUP)
+  isPrivate   Boolean         @default(false)
+  createdById String?
+  createdAt   DateTime        @default(now())
+  members     ChannelMember[]
+  messages    ChatMessage[]
+
+  @@index([workspaceId])
+}
+
+model ChannelMember {
+  id        String      @id @default(cuid())
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String
+  joinedAt  DateTime    @default(now())
+
+  @@unique([channelId, userId])
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime    @default(now())
+
+  @@index([channelId, createdAt])
+}
+
+// ──────────────────────── Usage, audit & metrics ────────────────────────────
+
+// One row per AI call — powers the Usage & Cost dashboards and budget alerts.
+model UsageRecord {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId           String?
+  provider         String
+  model            String
+  feature          String // which AI tool generated the call
+  promptTokens     Int       @default(0)
+  completionTokens Int       @default(0)
+  totalTokens      Int       @default(0)
+  costUsd          Decimal?  @db.Decimal(12, 6)
+  createdAt        DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, provider, createdAt])
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id])
+  action      String // e.g. "content.publish"
+  resource    String // e.g. "ContentEntry"
+  resourceId  String?
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+}
+
+// Cached metrics pulled from Search Console / Analytics — what the dashboards
+// and charts read from (instead of the old mock data).
+model MetricSnapshot {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  source         String // gsc | ga4
+  metric         String // clicks | impressions | ctr | position | sessions | bounceRate
+  dimension      String? // page | query | country | device
+  dimensionValue String?
+  value          Float
+  date           DateTime // the calendar day the metric is for
+  createdAt      DateTime  @default(now())
+
+  @@index([workspaceId, source, date])
+  @@index([workspaceId, metric, date])
+}
+
+// Workspace-scoped Markdown knowledge injected into AI system prompts (brand voice,
+// writing rules, SEO learning memory). Provider-agnostic: the content is fed into
+// the system message of whichever AI provider is used.
+model KnowledgeFile {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name              String
+  content           String // Markdown body
+  kind              String    @default("doc") // doc | seo_memory
+  enabled           Boolean   @default(true)
+  universal         Boolean   @default(false) // applies to all AI content generation
+  contentTypeApiIds Json      @default("[]") // string[] of ContentType.apiId it applies to
+  tools             Json      @default("[]") // string[] feature keys e.g. ["content.generate","seo.meta_fix"]
+  managed           Boolean   @default(false) // true for the auto-maintained SEO memory (still editable)
+  createdById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([workspaceId])
+}
+
+// Per-INSTALL commercial license key (open-core). Singleton-ish: the active
+// signed token unlocks the paid @flowcms/ee modules. May also be supplied via
+// the FLOWCMS_LICENSE_KEY env var (which takes precedence).
+model License {
+  id        String   @id @default(cuid())
+  key       String // Ed25519-signed entitlement token
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// SEO Automation Engine — per-(page, task) audit ledger. One row per page+task;
+// stores the deterministic L1 findings + (later) the AI L2 findings as compact
+// codes, plus the content hash for change-detection. Findings are coded (see
+// apps/api/src/seo/audit/seo-codes.ts); the UI expands them via renderFinding.
+model PageAudit {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // Non-null target key for the unique index (= entryId or url). Avoids NULLs in
+  // the unique so upserts are reliable. entryId/url keep the readable reference.
+  target      String
+  entryId     String?
+  url         String?
+  task        String // scope: "page" for a full L1 page audit, or a specific SeoTask
+  contentHash String // change-detection: skip re-runs when unchanged
+  l1Findings  Json   @default("[]") // Finding[] from the deterministic detectors
+  l2Findings  Json   @default("[]") // Finding[] from the AI pass (compact, coded)
+  score       Int? // optional per-task score (0-100)
+  severity    Int    @default(0) // max severity across findings (0 = clean)
+  escalated   Boolean @default(false) // has an AI-addressable finding pending an L2 pass
+  lastCheckedAt DateTime @default(now()) // last L1 run
+  lastAiPassAt  DateTime? // last L2 run
+  hashAtAiPass  String? // contentHash at the last L2 run (re-run AI only when changed)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, target, task])
+  @@index([workspaceId, task])
+  @@index([workspaceId, lastCheckedAt])
+  @@index([workspaceId, escalated])
+}
+
+// Best-effort daily free-quota counter per (workspace, model). The router's
+// quotaAvailable gate reads this against the model's documented free limit; a
+// real provider 429 also flips the model exhausted for the day.
+model AiQuotaDaily {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  model       String
+  date        String // YYYY-MM-DD (UTC)
+  count       Int      @default(0)
+  exhausted   Boolean  @default(false) // set on a real free-tier 429
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, model, date])
+  @@index([workspaceId, date])
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+// A background job (bulk publish/delete, SEO auto-apply/batch-fix, asset processing,
+// etc.). The DB row is the source of truth for the UI + history; it's executed by the
+// in-process runner, or by a BullMQ worker when REDIS_URL is set. Progress is pushed
+// to the client over the realtime socket and persisted here for the poll fallback.
+model Job {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String // who started it (for per-user toasts + history)
+  type        String // handler key, e.g. "content.bulkPublish"
+  label       String // human summary, e.g. "Publish 12 pages"
+  status      JobStatus @default(QUEUED)
+  total       Int       @default(0)
+  completed   Int       @default(0)
+  failed      Int       @default(0)
+  progress    Int       @default(0) // 0-100
+  payload     Json      @default("{}") // handler input (ids, group, etc.)
+  result      Json? // handler output summary
+  error       String? // fatal error message, if any
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  finishedAt  DateTime?
+
+  @@index([workspaceId, userId, status])
+  @@index([workspaceId, createdAt])
+}

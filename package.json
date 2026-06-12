@@ -1,0 +1,38 @@
+{
+  "name": "flowcms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Flow CMS — an AI-powered, self-hostable headless CMS. Monorepo: studio (admin UI), api (headless backend), and shared packages.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "dev:studio": "npm run dev -w @flowcms/studio",
+    "dev:api": "npm run dev -w @flowcms/api",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "npm run generate -w @flowcms/db",
+    "db:migrate": "npm run migrate -w @flowcms/db",
+    "db:studio": "npm run studio -w @flowcms/db",
+    "db:seed": "npm run seed -w @flowcms/db",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f",
+    "docker:build:api": "docker build -f deploy/Dockerfile --target api-runner -t flowcms-api:local .",
+    "docker:build:studio": "docker build -f deploy/Dockerfile --target studio-runner --build-arg NEXT_PUBLIC_API_URL=/api -t flowcms-studio:local .",
+    "docker:build": "npm run docker:build:api && npm run docker:build:studio",
+    "prod:up": "cd deploy && docker compose -f docker-compose.prod.yml up -d",
+    "prod:down": "cd deploy && docker compose -f docker-compose.prod.yml down",
+    "prod:logs": "cd deploy && docker compose -f docker-compose.prod.yml logs -f"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.5"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "packageManager": "npm@11.6.2"
+}

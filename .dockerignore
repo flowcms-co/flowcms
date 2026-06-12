@@ -1,0 +1,33 @@
+# Keep the build context small and avoid leaking host artifacts/secrets into images.
+# Host node_modules + build outputs must NOT enter the image — they may contain
+# macOS-native binaries (lightningcss, Prisma engine) that break on Linux.
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+.turbo
+**/.turbo
+
+# Secrets — never bake into image layers
+.env
+.env.*
+!.env.example
+*.pem
+license-signing-key.pem
+
+# VCS / tooling / local junk
+.git
+.gitignore
+**/.DS_Store
+coverage
+**/coverage
+graphify-out
+.codegraph
+npm-debug.log*
+*.log
+
+# Local dev infra + storage (regenerated/mounted at runtime)
+storage
+deploy/.env

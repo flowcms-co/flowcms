@@ -1,0 +1,21 @@
+# Flow CMS all-in-one proxy (single-service PaaS image: Railway / Render / Fly).
+# Listens on $PORT (the platform's routed port) over plain HTTP — the platform's
+# edge terminates TLS — and fans out to the two local Node servers:
+#   /api/*  /media/*  /socket.io/*  -> the API ($API_PORT);  everything else -> the studio ($STUDIO_PORT).
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT:8080} {
+	encode zstd gzip
+
+	@backend path /api/* /media/* /socket.io/*
+	handle @backend {
+		reverse_proxy 127.0.0.1:{$API_PORT:4000}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:{$STUDIO_PORT:3000}
+	}
+}

@@ -1,0 +1,27 @@
+Flow CMS — License
+===================
+
+Flow CMS is open-core. This repository contains two differently-licensed parts.
+
+1. Open-source core
+-------------------
+Everything EXCEPT `apps/api/src/ee/` (the studio, the headless API, content
+modeling, the delivery APIs, auth/RBAC, the AI + SEO suites, media, webhooks,
+importers, CLI, SDK, and all packages) is free and open source.
+
+Intended license: Apache-2.0 (permissive, with an explicit patent grant).
+
+  NOTE: The exact open-source license is pending final confirmation by the
+  project owner. Until the verbatim license text is committed here, treat the
+  core as "source-available, intended Apache-2.0" and contact the vendor for any
+  use beyond evaluation. Candidate licenses and trade-offs are discussed in
+  `docs/business/LICENSING.md` and `docs/business/MONETIZATION.md`.
+
+2. Commercial (Enterprise Edition)
+----------------------------------
+Everything under `apps/api/src/ee/` is commercial, proprietary code, governed by
+`apps/api/src/ee/LICENSE` — NOT by the open-source license above. It may be used
+only with a valid Flow CMS commercial license (Pro / Enterprise) and is unlocked
+at runtime by an Ed25519-signed license key.
+
+Full details: `docs/business/LICENSING.md`.

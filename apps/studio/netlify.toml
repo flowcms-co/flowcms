@@ -1,0 +1,14 @@
+# Netlify deployment config for Flow CMS (Next.js 16 App Router).
+# Vercel needs no config (zero-config Next.js). This file makes the same build
+# run cleanly on Netlify via the official Next.js runtime plugin.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next.js 16 requires Node >= 20.9
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

@@ -1,0 +1,59 @@
+# Flow CMS — local infrastructure ("the box").
+# Start everything:  npm run infra:up   (or: docker compose up -d)
+# Stop:              npm run infra:down
+#
+# Only Postgres is strictly required. Redis (queues/cache/throttle) is optional —
+# the platform degrades gracefully without it. Meilisearch is scaffolded here for a
+# future search upgrade but is NOT yet wired into the API (search runs on Postgres).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: flowcms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flowcms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowcms}
+      POSTGRES_DB: ${POSTGRES_DB:-flowcms}
+    ports:
+      # Bind to localhost only so the dev DB isn't exposed on the network
+      # (default creds flowcms:flowcms) — SECURITY_AUDIT_REPORT F-13.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - flowcms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flowcms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: flowcms-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - flowcms_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: flowcms-meilisearch
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-flowcms_dev_master_key}
+      MEILI_ENV: development
+    ports:
+      - "127.0.0.1:${MEILI_PORT:-7700}:7700"
+    volumes:
+      - flowcms_meilidata:/meili_data
+
+volumes:
+  flowcms_pgdata:
+  flowcms_redisdata:
+  flowcms_meilidata:
