@@ -22,8 +22,8 @@ const REPO = "flowcms-co/flowcms";
 const RAW_REF = "main";
 const SCRIPT_URL = `https://raw.githubusercontent.com/${REPO}/${RAW_REF}/deploy/install.sh`;
 
-// Set this once you publish a Railway template (Railway > your template > Share).
-const RAILWAY_TEMPLATE_URL = "https://railway.com/new";
+// Published Railway template (one-click app + managed Postgres).
+const RAILWAY_TEMPLATE_URL = "https://railway.com/deploy/flowcms?referralCode=nMR5GG&utm_medium=integration&utm_source=template&utm_campaign=landing_page";
 
 export default {
   async fetch(request) {

@@ -29,7 +29,7 @@ CMS cloud). Full walkthrough in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 - **Managed platform (no server to run)** — one all-in-one container on Railway or
   Render, with managed Postgres + HTTPS. Easiest for non-developers.
 
-  [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new) &nbsp; (Railway → New Project → Deploy from repo; see the 5 steps in the deploy guide)
+  [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/flowcms?referralCode=nMR5GG&utm_medium=integration&utm_source=template&utm_campaign=github) &nbsp; (one click: provisions the app + a managed Postgres with secrets auto-generated, then open the URL and create your admin in the /welcome wizard)
 
 - **Your own server** — `curl -fsSL https://get.flowcms.co/install.sh | bash` on a
   fresh VPS: Docker + Caddy auto-HTTPS, ~2 minutes.
@@ -89,3 +89,20 @@ Postgres, or any external one (Neon, Supabase, RDS). **Redis** is optional (the
 platform degrades gracefully without it; enable it for multi-instance deploys).
 **Meilisearch** is scaffolded in Docker but not yet wired into the API — search
 runs on Postgres today.
+
+## License
+
+Flow CMS is **open-core**:
+
+- The **core** (everything except `apps/api/src/ee/`: the studio, headless API,
+  content modeling, delivery APIs, auth/RBAC, the AI and SEO suites, media,
+  webhooks, importers, CLI, SDK, and all packages) is licensed under the
+  **Apache License 2.0**. See [`LICENSE`](LICENSE).
+- The **Enterprise Edition** under `apps/api/src/ee/` is commercial, proprietary
+  software under a separate license
+  ([`apps/api/src/ee/LICENSE`](apps/api/src/ee/LICENSE)). It runs only with a
+  valid Flow CMS commercial license, unlocked by a signed license key. A
+  distribution that excludes `apps/api/src/ee/` runs fully as the free Community
+  edition.
+
+Copyright 2026 Flow CMS.
