@@ -23,6 +23,14 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate
 
+      # Workspace packages resolve from their compiled dist/ (see each package.json
+      # "main"/"exports"), so they must be built before anything typechecks or
+      # imports them. Order matters: db depends on shared.
+      - name: Build workspace packages (shared, db)
+        run: |
+          npm run build -w @flowcms/shared
+          npm run build -w @flowcms/db
+
       - name: Typecheck API
         run: npx tsc --noEmit -p apps/api/tsconfig.json
 
@@ -70,6 +78,11 @@ jobs:
 
       - name: Generate Prisma client
         run: npm run db:generate
+
+      # The db integration specs import @flowcms/shared, which resolves from its
+      # compiled dist/ — build it before the suite runs.
+      - name: Build workspace packages (shared)
+        run: npm run build -w @flowcms/shared
 
       - name: Apply migrations (smoke test)
         run: npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
