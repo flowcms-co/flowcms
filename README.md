@@ -24,7 +24,7 @@ backend, and so other websites and AI agents can connect to the same API.
 ## Deploy
 
 Three ways to run Flow CMS in production — you own all of them (there's no Flow
-CMS cloud).
+CMS cloud). Full walkthrough in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 - **Managed platform (no server to run)** — one all-in-one container on Railway or
   Render, with managed Postgres + HTTPS. Easiest for non-developers.

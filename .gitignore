@@ -42,9 +42,11 @@ yarn-error.log*
 graphify-out/
 .codegraph/
 
-# internal docs — ALL of docs/ is kept local, never published to the public repo
+# internal docs — kept local, never published to the public repo
 # (business strategy, security audit, handovers, status, roadmaps, planning, etc.)
-docs/
+# Exception: the public deploy guide is shipped.
+docs/*
+!docs/DEPLOY.md
 
 # AI-assistant tooling / config — not part of the product
 CLAUDE.md
