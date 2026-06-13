@@ -445,6 +445,14 @@ const FieldRow = ({
     );
 };
 
+/** Example social URLs shown as placeholders (never prefilled values). */
+const SAMEAS_PLACEHOLDERS = [
+    "https://twitter.com/yourbrand",
+    "https://linkedin.com/company/yourbrand",
+    "https://instagram.com/yourbrand",
+    "https://youtube.com/@yourbrand",
+];
+
 /** Site-wide structured data (Organization) with a live JSON-LD preview. */
 const GlobalSchemaCard = () => {
     const [org, setOrg] = useState(globalSchemaDefaults);
@@ -452,21 +460,30 @@ const GlobalSchemaCard = () => {
     const [saved, setSaved] = useState(false);
 
     useEffect(() => {
-        api<{ jsonLdOrg: Partial<typeof globalSchemaDefaults> | null }>("/workspace")
+        api<{ name?: string; jsonLdOrg: Partial<typeof globalSchemaDefaults> | null }>("/workspace")
             .then((w) => {
-                if (w.jsonLdOrg) setOrg((d) => ({ ...d, ...w.jsonLdOrg }));
+                setOrg((d) => ({
+                    ...d,
+                    ...(w.jsonLdOrg ?? {}),
+                    // No saved org schema yet: seed the name from the workspace name
+                    // chosen in the welcome wizard, so it is never blank or sample data.
+                    orgName: w.jsonLdOrg?.orgName || w.name || d.orgName,
+                }));
             })
             .catch(() => {});
     }, []);
 
+    // Only include fields the user has actually filled in; an Organization schema
+    // with empty name/url/logo would be invalid to inject site-wide.
+    const cleanSameAs = org.sameAs.map((s) => s.trim()).filter(Boolean);
     const jsonLd = JSON.stringify(
         {
             "@context": "https://schema.org",
             "@type": "Organization",
-            name: org.orgName,
-            url: org.url,
-            logo: org.logo,
-            sameAs: org.sameAs,
+            ...(org.orgName.trim() ? { name: org.orgName.trim() } : {}),
+            ...(org.url.trim() ? { url: org.url.trim() } : {}),
+            ...(org.logo.trim() ? { logo: org.logo.trim() } : {}),
+            ...(cleanSameAs.length ? { sameAs: cleanSameAs } : {}),
         },
         null,
         2,
@@ -475,7 +492,17 @@ const GlobalSchemaCard = () => {
     const save = async () => {
         setSaving(true);
         try {
-            await api("/workspace", { method: "PATCH", body: JSON.stringify({ jsonLdOrg: org }) });
+            await api("/workspace", {
+                method: "PATCH",
+                body: JSON.stringify({
+                    jsonLdOrg: {
+                        orgName: org.orgName.trim(),
+                        url: org.url.trim(),
+                        logo: org.logo.trim(),
+                        sameAs: cleanSameAs,
+                    },
+                }),
+            });
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
         } catch {
@@ -503,6 +530,7 @@ const GlobalSchemaCard = () => {
                         <input
                             value={org.orgName}
                             onChange={(e) => setOrg({ ...org, orgName: e.target.value })}
+                            placeholder="Your organization"
                             className="flow-input"
                         />
                     </Field>
@@ -510,6 +538,7 @@ const GlobalSchemaCard = () => {
                         <input
                             value={org.url}
                             onChange={(e) => setOrg({ ...org, url: e.target.value })}
+                            placeholder="https://yourdomain.com"
                             className="flow-input"
                         />
                     </Field>
@@ -517,6 +546,7 @@ const GlobalSchemaCard = () => {
                         <input
                             value={org.logo}
                             onChange={(e) => setOrg({ ...org, logo: e.target.value })}
+                            placeholder="https://yourdomain.com/logo.png"
                             className="flow-input"
                         />
                     </Field>
@@ -534,6 +564,7 @@ const GlobalSchemaCard = () => {
                                             ),
                                         })
                                     }
+                                    placeholder={SAMEAS_PLACEHOLDERS[i] ?? "https://..."}
                                     className="flow-input"
                                 />
                             ))}

@@ -147,14 +147,12 @@ export const contentTypeSchemas: ContentTypeSchema[] = [
     },
 ];
 
+// Empty by default: the Organization name is prefilled from the workspace name
+// (set in the first-run welcome wizard) and the rest stay blank with placeholders
+// until the user fills them in. No sample data ships on a fresh install.
 export const globalSchemaDefaults = {
-    orgName: "Northbound",
-    logo: "https://wearenorthbound.com/logo.png",
-    url: "https://wearenorthbound.com",
-    sameAs: [
-        "https://twitter.com/wearenorthbound",
-        "https://linkedin.com/company/wearenorthbound",
-        "https://instagram.com/wearenorthbound",
-        "https://dribbble.com/wearenorthbound",
-    ],
+    orgName: "",
+    logo: "",
+    url: "",
+    sameAs: ["", "", "", ""],
 };
