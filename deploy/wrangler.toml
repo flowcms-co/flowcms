@@ -1,0 +1,14 @@
+# Cloudflare Worker config for https://get.flowcms.co
+# Deploy:  cd deploy && npx wrangler login && npx wrangler deploy
+# The Worker logic + landing page live in get-flowcms-worker.js.
+name = "get"
+main = "get-flowcms-worker.js"
+account_id = "2f756970462a765e994808a4082791a1"
+compatibility_date = "2026-06-01"
+workers_dev = true
+
+# Custom domain is added AFTER the workers.dev URL is verified working.
+# Uncomment, then `npx wrangler deploy`, to bind get.flowcms.co:
+# routes = [
+#   { pattern = "get.flowcms.co", custom_domain = true }
+# ]
