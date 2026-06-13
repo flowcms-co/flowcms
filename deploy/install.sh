@@ -86,7 +86,9 @@ compose() { $SUDO docker compose -f docker-compose.prod.yml "$@"; }
 # --- 3. .env (generate once; never overwrite) -------------------------------
 if [ -f .env ]; then
   ok "Existing .env found — keeping your secrets"
-  DOMAIN="$(grep -E '^DOMAIN=' .env | head -1 | cut -d= -f2-)"
+  # .env is root-owned, mode 600 — read it with $SUDO so a non-root re-run
+  # doesn't die on "Permission denied". `|| true` guards set -e under pipefail.
+  DOMAIN="$($SUDO grep -E '^DOMAIN=' .env | head -1 | cut -d= -f2- || true)"
 else
   command -v openssl >/dev/null 2>&1 || die "openssl is required to generate secrets."
   bold "Configure your install"
@@ -135,6 +137,28 @@ EOF
   ok ".env created"
 fi
 
+# --- 3.5 DNS sanity check (warn only) ---------------------------------------
+# Caddy can only get an HTTPS cert if $DOMAIN's A record points at THIS server
+# and ports 80/443 are open. The #1 first-deploy snag on AWS/GCP/Azure. We warn
+# but never block: Caddy keeps retrying, so it self-heals once DNS/ports are set.
+if [ "$DOMAIN" != "localhost" ]; then
+  info "Checking DNS for $DOMAIN…"
+  server_ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)"
+  server_ip="$(printf '%s' "$server_ip" | tr -d '[:space:]')"
+  domain_ip="$(dig +short A "$DOMAIN" 2>/dev/null | tail -1)"
+  [ -n "$domain_ip" ] || domain_ip="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}')"
+  if [ -n "$server_ip" ] && [ "$server_ip" = "$domain_ip" ]; then
+    ok "DNS OK — $DOMAIN -> $server_ip"
+  elif [ -z "$domain_ip" ]; then
+    warn "$DOMAIN does not resolve yet. Add a DNS A record pointing it at this server${server_ip:+ ($server_ip)}."
+    warn "HTTPS will fail until DNS resolves and ports 80 + 443 are open. Continuing…"
+  else
+    warn "$DOMAIN resolves to $domain_ip but this server looks like ${server_ip:-an unknown IP}."
+    warn "If you proxy DNS (e.g. Cloudflare) this can be expected; otherwise fix the A record. Continuing…"
+  fi
+fi
+
 # --- 4. Start ----------------------------------------------------------------
 if [ "$BUILD_FROM_SOURCE" = "1" ]; then
   bold "Building images (a few minutes on first run)…"
@@ -151,7 +175,13 @@ i=0
 until curl -fsSk "https://$DOMAIN/api/health" >/dev/null 2>&1; do
   i=$((i + 1))
   if [ "$i" -ge 60 ]; then
-    warn "Not healthy yet. Check logs:  cd $APP_DIR && docker compose -f docker-compose.prod.yml logs -f"
+    warn "Flow CMS did not pass its public health check in time."
+    warn "On AWS/GCP/Azure the cause is almost always the cloud firewall or DNS, not the app:"
+    warn "  • Open inbound ports 80 AND 443 in your security group / firewall"
+    warn "    (Caddy needs port 80 to obtain the Let's Encrypt certificate)."
+    warn "  • Point $DOMAIN's DNS A record at this server."
+    warn "Once both are set, Caddy issues the cert automatically (~1 min). Then open https://$DOMAIN."
+    warn "Logs:  cd $APP_DIR && docker compose -f docker-compose.prod.yml logs -f"
     break
   fi
   sleep 5
