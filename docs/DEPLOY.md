@@ -72,12 +72,26 @@ image `ghcr.io/flowcms-co/flowcms:latest` and provision a managed Postgres.
 
 ### Railway
 
-1. Create a new project from the repo (or use the **Deploy on Railway** button in
-   the README).
-2. Add a **PostgreSQL** plugin. Railway sets `DATABASE_URL` for you.
-3. Set the required environment variables (below).
-4. Deploy. On first load you are taken to the `/welcome` wizard to create your
+1. Create a new project (or use the **Deploy on Railway** button in the README).
+2. Set the service **source to the prebuilt image** `ghcr.io/flowcms-co/flowcms:latest`
+   (Service > Settings > Source > Docker Image) and the health check path to
+   `/api/health`. Pulling the image is faster than building from the repo and reports
+   the correct version, which is baked into the image at release.
+3. Add a **PostgreSQL** plugin. Railway sets `DATABASE_URL` for you.
+4. Set the required environment variables (below); include `TRUST_PROXY=1`.
+5. Deploy. On first load you are taken to the `/welcome` wizard to create your
    admin account.
+
+**Updating to a new release:** click **Redeploy** to pull the newer `:latest` (or point
+the image at the new `:vX.Y.Z`). Database migrations apply automatically on boot. The
+platform manages updates here, so the in-app **Settings > System** panel shows "managed
+by your platform" instead of an upgrade button (the one-click in-app upgrade is for the
+docker-compose self-host).
+
+> Prefer to build from the repo instead? `railway.json` builds `deploy/Dockerfile`. That
+> works, but set a `FLOWCMS_VERSION=<version>` service variable so the version reads
+> correctly (Railway forwards service variables to the build as build args). The prebuilt
+> image bakes this in for you, which is why pulling it is the simpler default.
 
 ### Render
 
@@ -99,6 +113,7 @@ the secrets. `STUDIO_URL` is derived automatically.
 | `NEXT_PUBLIC_API_URL` | no | Defaults to `/api` in the all in one image. |
 | `TRUST_PROXY` | no | Set to `1` behind a reverse proxy / managed platform. |
 | `SEED_ON_BOOT` | no | `true` runs first boot setup (workspace + roles). |
+| `FLOWCMS_VERSION` | no | Baked into prebuilt images. Only set it when building from source (e.g. a Railway repo build) so Settings > System reports the right version. |
 
 Generate the two secrets with:
 
