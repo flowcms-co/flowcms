@@ -7,6 +7,7 @@ import { KnowledgeService, SEO_LEARN_START, SEO_LEARN_END } from "../knowledge/k
 import { safeFetch } from "../common/ssrf";
 import { CacheService } from "../cache/cache.service";
 import { ContentEntriesService } from "../content/content-entries.service";
+import { entryToCanonicalContent } from "../content/canonical-content";
 
 /** Splits the packed "querypage" dimensionValue. */
 const PAIR_SEP = String.fromCharCode(1);
@@ -69,7 +70,9 @@ export class SeoService {
         const d = (e.data ?? {}) as Record<string, unknown>;
         return {
             title: typeof d.title === "string" ? d.title : "",
-            body: typeof d.body === "string" ? d.body : "",
+            // Assembled HTML across body + components + sections, so link scanning
+            // sees section content too (apply still edits `data.body` — see below).
+            body: entryToCanonicalContent({ data: d }).html,
             // The SEO panel stores the focus keyword as `focusKeyword`; `keywords` is the
             // legacy comma-list. Use either so the link finder sees the real keyword.
             keywords: [typeof d.keywords === "string" ? d.keywords : "", typeof d.focusKeyword === "string" ? d.focusKeyword : ""].filter(Boolean).join(", "),

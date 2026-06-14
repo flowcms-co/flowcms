@@ -25,6 +25,17 @@ const SOURCES: { kind: Kind; label: string; icon: string; desc: string }[] = [
 ];
 const field = "w-full h-11 px-4 rounded-2xl border border-grey-light bg-white text-black placeholder:text-grey outline-none transition-colors focus:border-primary dark:border-dark-3 dark:bg-dark-2 dark:text-white";
 
+// What the user still needs to provide before Preview is possible, per source.
+const INPUT_HINT: Record<Kind, string> = {
+    wordpress: "Enter your WordPress site URL above to begin.",
+    strapi: "Enter your Strapi URL and at least one collection type above to begin.",
+    markdown: "Choose one or more .md files above to begin.",
+    csv: "Paste your CSV rows above to begin.",
+    json: "Paste your JSON array above to begin.",
+    contentful: "Enter your Space ID and Delivery token above to begin.",
+    sanity: "Enter your Project ID above to begin.",
+};
+
 /**
  * Import wizard — bring content in from WordPress, Strapi, Markdown, CSV or JSON.
  * Preview shows what would be imported; Import runs it (idempotent — re-running
@@ -95,6 +106,16 @@ const Import = () => {
     };
 
     const reset = () => { setPreview(null); setReport(null); setError(null); };
+
+    // Enough provided to preview? (mirrors the server's required fields per source.)
+    const hasInput =
+        kind === "wordpress" ? !!url.trim()
+        : kind === "strapi" ? !!url.trim() && !!typesStr.trim()
+        : kind === "markdown" ? files.length > 0
+        : kind === "csv" || kind === "json" ? !!text.trim()
+        : kind === "contentful" ? !!space.trim() && !!token.trim()
+        : kind === "sanity" ? !!project.trim()
+        : false;
 
     return (
         <div className="flex flex-col gap-6">
@@ -169,9 +190,43 @@ const Import = () => {
                     )}
                 </div>
 
-                <div className="mt-5 flex flex-wrap gap-3">
-                    <button type="button" onClick={() => run("preview")} disabled={!!busy} className="btn-secondary disabled:opacity-60">{busy === "preview" ? "Checking…" : "Preview"}</button>
-                    <button type="button" onClick={() => run("run")} disabled={!!busy || !preview} className="btn-primary disabled:opacity-60"><Icon className="w-5 h-5 fill-white" name="download" />{busy === "run" ? "Importing…" : "Import"}</button>
+                {/* Guided two-step actions: 1) Preview checks what would come in,
+                    2) Import applies it. Import stays locked until a preview succeeds,
+                    and the hint below always says what to do next. */}
+                <div className="mt-6 flex flex-col gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                        <button
+                            type="button"
+                            onClick={() => run("preview")}
+                            disabled={!!busy || !hasInput}
+                            className={cn("disabled:opacity-50", preview ? "btn-secondary" : "btn-primary")}
+                        >
+                            <Icon className="h-4 w-4 fill-current" name="eye" />
+                            {busy === "preview" ? "Checking…" : preview ? "Re-check" : "Preview"}
+                        </button>
+                        <Icon name="arrow-right" className="hidden h-4 w-4 shrink-0 fill-grey/60 sm:block" />
+                        <button
+                            type="button"
+                            onClick={() => run("run")}
+                            disabled={!!busy || !preview}
+                            title={preview ? "Import the previewed content" : "Run Preview first to unlock Import"}
+                            className={cn("disabled:opacity-50", preview ? "btn-primary" : "btn-secondary")}
+                        >
+                            <Icon className="h-4 w-4 fill-current" name={preview ? "download" : "lock"} />
+                            {busy === "run" ? "Importing…" : "Import"}
+                        </button>
+                    </div>
+
+                    {/* Always tell the user the next step. */}
+                    <p className="flex items-center gap-1.5 text-caption-2 text-grey">
+                        {!hasInput ? (
+                            <><Icon name="info" className="h-3.5 w-3.5 shrink-0 fill-grey" />{INPUT_HINT[kind]}</>
+                        ) : preview ? (
+                            <><Icon name="check" className="h-3.5 w-3.5 shrink-0 fill-success" />Checked {preview.total} item{preview.total === 1 ? "" : "s"} — now click <b className="font-semibold text-black dark:text-white">Import</b> to bring them in.</>
+                        ) : (
+                            <><span className="font-semibold text-primary">Step 1 of 2:</span>&nbsp;click <b className="font-semibold text-black dark:text-white">Preview</b> to check what will be imported (nothing changes yet). <b className="font-semibold text-black dark:text-white">Import</b> unlocks after.</>
+                        )}
+                    </p>
                 </div>
                 {error && <div className="mt-4 rounded-2xl bg-error/10 px-4 py-3 text-body-sm text-error">{error}</div>}
             </Card>

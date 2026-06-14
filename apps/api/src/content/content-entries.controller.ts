@@ -94,6 +94,20 @@ export class ContentEntriesController {
         return this.entries.unpublish(user.workspaceId, id, user.id);
     }
 
+    /** Approve a published entry's pending draft (step 1 of Approve → Publish). */
+    @Post(":id/approve-draft")
+    @RequirePermissions(PERMISSIONS.CONTENT_PUBLISH)
+    approveDraft(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+        return this.entries.approveDraft(user.workspaceId, id, user.id);
+    }
+
+    /** Discard a published entry's pending draft and revert to the live version. */
+    @Post(":id/discard-draft")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    discardDraft(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+        return this.entries.discardDraft(user.workspaceId, id);
+    }
+
     @Post(":id/duplicate")
     @RequirePermissions(PERMISSIONS.CONTENT_CREATE)
     duplicate(@CurrentUser() user: AuthUser, @Param("id") id: string) {

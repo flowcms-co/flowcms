@@ -1,17 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Editor } from "@tiptap/react";
 import Icon from "@/components/ui/Icon";
 import StatusPill, { type PillStatus } from "@/components/ui/StatusPill";
+import SaveStatus from "@/components/ui/SaveStatus";
 import Select from "@/components/ui/Select";
 import EditorCanvas from "@/components/editor/EditorCanvas";
 import RightPanel from "@/components/editor/RightPanel";
+import FieldsForm from "@/components/editor/FieldsForm";
+import SectionEditor, { EditorStatsBar, type ComponentDef, type Section } from "@/components/editor/SectionEditor";
 import { api, ApiError } from "@/lib/api";
 import { useRevealBatch } from "@/lib/useReveal";
 import { cn } from "@/lib/cn";
+import type { SchemaField } from "@/mocks/schema";
 
 type ApiEntry = {
     id: string;
@@ -20,7 +24,15 @@ type ApiEntry = {
     status: string;
     contentType: { id: string; name: string };
     data: Record<string, unknown> | null;
+    // Draft-over-published overlay: a live entry with pending, not-yet-published edits.
+    hasDraft?: boolean;
+    draftApproved?: boolean;
 };
+
+/** Content type as returned by /content-types (includes the field schema). */
+type ApiType = { id: string; name: string; fields: SchemaField[] };
+/** Reusable component as returned by /content-types/components. */
+type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",
@@ -97,15 +109,20 @@ const EditorPage = () => {
     const [editor, setEditor] = useState<Editor | null>(null);
     const [entryId, setEntryId] = useState<string | null>(idParam);
     const [title, setTitle] = useState("Untitled");
+    const [slug, setSlug] = useState("");
     const [status, setStatus] = useState("DRAFT");
     const [initialBody, setInitialBody] = useState<string>("");
     const [entryData, setEntryData] = useState<Record<string, unknown>>({});
-    const [types, setTypes] = useState<{ id: string; name: string }[]>([]);
+    const [types, setTypes] = useState<ApiType[]>([]);
+    const [components, setComponents] = useState<ApiComponent[]>([]);
     const [typeId, setTypeId] = useState<string | undefined>(typeParam ?? undefined);
     const [ready, setReady] = useState(false);
     const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving">("saved");
     const [error, setError] = useState<string | null>(null);
     const [rev, setRev] = useState(0);
+    // Draft-over-published: a live entry whose edits are staged (not yet published).
+    const [hasDraft, setHasDraft] = useState(false);
+    const [draftApproved, setDraftApproved] = useState(false);
 
     /** Mark the doc dirty + tick the autosave debounce (called on every edit). */
     const bump = useCallback(() => {
@@ -116,18 +133,25 @@ const EditorPage = () => {
     useEffect(() => {
         let cancelled = false;
         (async () => {
-            const cts = await api<{ id: string; name: string }[]>("/content-types").catch(() => []);
+            const [cts, comps] = await Promise.all([
+                api<ApiType[]>("/content-types").catch(() => []),
+                api<ApiComponent[]>("/content-types/components").catch(() => [] as ApiComponent[]),
+            ]);
             if (cancelled) return;
             setTypes(cts);
+            setComponents(comps);
             if (idParam) {
                 try {
                     const e = await api<ApiEntry>(`/entries/${idParam}`);
                     if (cancelled) return;
                     setTitle(e.title || "Untitled");
+                    setSlug(e.slug ?? "");
                     setStatus(e.status);
                     setTypeId(e.contentType.id);
                     setInitialBody(typeof e.data?.body === "string" ? (e.data.body as string) : "");
                     setEntryData((e.data ?? {}) as Record<string, unknown>);
+                    setHasDraft(!!e.hasDraft);
+                    setDraftApproved(!!e.draftApproved);
                 } catch (err) {
                     if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load this entry.");
                 }
@@ -168,13 +192,43 @@ const EditorPage = () => {
         if (window.matchMedia("(min-width: 768px)").matches) setPanelOpen(true);
     }, []);
 
+    // Fields of the active type, and whether it has a rich-text body (so we know
+    // to mount the TipTap canvas vs. a fields-only form).
+    const fields: SchemaField[] = types.find((t) => t.id === typeId)?.fields ?? [];
+    // Dynamic-zone (section builder) field, if the type has one. Its sections are an
+    // ordered array of { __component, __uid, ...fields } stored in the entry data.
+    const zoneField = fields.find((f) => f.type === "DynamicZone");
+    const formFields = zoneField ? fields.filter((f) => f.id !== zoneField.id) : fields;
+    const sections: Section[] = zoneField && Array.isArray(entryData[zoneField.name]) ? (entryData[zoneField.name] as Section[]) : [];
+    const hasBody = !zoneField && (fields.length === 0 || fields.some((f) => f.type === "Rich text"));
+    // Resolved component defs (apiId → {name, icon, fields}) for the section builder.
+    const componentDefs = useMemo(() => {
+        const map: Record<string, ComponentDef> = {};
+        for (const c of components) map[c.apiId] = { apiId: c.apiId, name: c.name, icon: c.icon, fields: c.fields };
+        return map;
+    }, [components]);
+    // Live word count across the body + all section text (drives the footer stats).
+    const wordCount = useMemo(() => {
+        const strip = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        const parts: string[] = [];
+        if (hasBody) parts.push(strip(editor?.getHTML() ?? initialBody ?? ""));
+        for (const s of sections) for (const [k, v] of Object.entries(s)) if (!k.startsWith("__") && typeof v === "string") parts.push(strip(v));
+        return parts.join(" ").split(/\s+/).filter(Boolean).length;
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- rev ticks on every edit so this recomputes live
+    }, [sections, editor, initialBody, hasBody, rev]);
+
     const persist = useCallback(async (): Promise<string | null> => {
-        const body = editor?.getHTML() ?? "";
+        // Send the full field data (the backend merges it) plus the rich-text body
+        // when the type has one, and the slug from its dedicated input.
+        const data: Record<string, unknown> = { ...entryData };
+        if (hasBody) data.body = editor?.getHTML() ?? "";
+        const payload = { title, slug: slug.trim() || null, data };
         if (entryId) {
-            await api(`/entries/${entryId}`, {
-                method: "PATCH",
-                body: JSON.stringify({ title, data: { body } }),
-            });
+            // The PATCH response tells us whether this edit was staged as a draft
+            // (live entries) so the toolbar can switch to Approve → Publish.
+            const saved = await api<ApiEntry>(`/entries/${entryId}`, { method: "PATCH", body: JSON.stringify(payload) });
+            setHasDraft(!!saved.hasDraft);
+            setDraftApproved(!!saved.draftApproved);
             return entryId;
         }
         if (!typeId) {
@@ -183,12 +237,12 @@ const EditorPage = () => {
         }
         const created = await api<ApiEntry>("/entries", {
             method: "POST",
-            body: JSON.stringify({ contentTypeId: typeId, title, data: { body } }),
+            body: JSON.stringify({ contentTypeId: typeId, ...payload }),
         });
         setEntryId(created.id);
         router.replace(`/content/editor?id=${created.id}`);
         return created.id;
-    }, [editor, entryId, title, typeId, router]);
+    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router]);
 
     /** Re-pull the entry (after a version restore) and reset the canvas to it. */
     const reload = useCallback(async () => {
@@ -196,8 +250,11 @@ const EditorPage = () => {
         try {
             const e = await api<ApiEntry>(`/entries/${entryId}`);
             setTitle(e.title || "Untitled");
+            setSlug(e.slug ?? "");
             setStatus(e.status);
             setEntryData((e.data ?? {}) as Record<string, unknown>);
+            setHasDraft(!!e.hasDraft);
+            setDraftApproved(!!e.draftApproved);
             editor?.commands.setContent(typeof e.data?.body === "string" ? (e.data.body as string) : "");
             setSaveState("saved");
         } catch {
@@ -238,8 +295,60 @@ const EditorPage = () => {
         try {
             const e = await api<ApiEntry>(`/entries/${entryId}/unpublish`, { method: "POST" });
             setStatus(e.status);
+            setHasDraft(false);
+            setDraftApproved(false);
         } catch {
             /* ignore */
+        }
+    };
+
+    /** Step 1 of promoting edits made to a live entry: flush the latest edits into the
+     *  draft, then mark it approved so the Publish button appears. */
+    const approveDraft = async () => {
+        setSaveState("saving");
+        setError(null);
+        try {
+            await persist(); // ensure the newest edits are in the draft before approving
+            if (!entryId) return;
+            const e = await api<ApiEntry>(`/entries/${entryId}/approve-draft`, { method: "POST" });
+            setHasDraft(!!e.hasDraft);
+            setDraftApproved(!!e.draftApproved);
+            setSaveState("saved");
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Couldn't approve the changes.");
+            setSaveState("dirty");
+        }
+    };
+
+    /** Step 2: promote the approved draft to the live version (goes public now). */
+    const publishChanges = async () => {
+        setSaveState("saving");
+        setError(null);
+        try {
+            await persist();
+            if (!entryId) return;
+            const e = await api<ApiEntry>(`/entries/${entryId}/publish`, { method: "POST" });
+            setStatus(e.status);
+            setHasDraft(false);
+            setDraftApproved(false);
+            setSaveState("saved");
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Publish failed.");
+            setSaveState("dirty");
+        }
+    };
+
+    /** Throw away staged edits and revert the editor to the live version. */
+    const discardDraft = async () => {
+        if (!entryId) return;
+        if (!window.confirm("Discard your unpublished changes and revert to the live version?")) return;
+        try {
+            await api(`/entries/${entryId}/discard-draft`, { method: "POST" });
+            setHasDraft(false);
+            setDraftApproved(false);
+            await reload();
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Couldn't discard the draft.");
         }
     };
 
@@ -267,7 +376,11 @@ const EditorPage = () => {
         if (saveState === "saving") return;
         const body = editor?.getHTML() ?? "";
         if (!entryId) {
-            const pristine = (!title || title === "Untitled") && (!body || body === "<p></p>" || body === "");
+            const pristine =
+                (!title || title === "Untitled") &&
+                (!body || body === "<p></p>" || body === "") &&
+                !slug.trim() &&
+                Object.keys(entryData).length === 0;
             if (!typeId || pristine) return;
         }
         setSaveState("saving");
@@ -277,7 +390,7 @@ const EditorPage = () => {
         } catch {
             setSaveState("dirty");
         }
-    }, [saveState, editor, entryId, title, typeId, persist]);
+    }, [saveState, editor, entryId, title, slug, typeId, entryData, persist]);
 
     const autosaveRef = useRef(autosave);
     useEffect(() => {
@@ -303,7 +416,6 @@ const EditorPage = () => {
         return () => window.removeEventListener("beforeunload", handler);
     }, [saveState]);
 
-    const saveLabel = saveState === "saving" ? "Saving…" : saveState === "dirty" ? "Save" : "Saved";
 
     // Reveal the editor surface (canvas + side panel) once it's ready.
     const bodyScope = useRef<HTMLDivElement>(null);
@@ -334,6 +446,12 @@ const EditorPage = () => {
                     />
                     <div className="flex items-center gap-2 text-caption-2 text-grey">
                         <StatusPill status={STATUS_PILL[status] ?? "draft"} />
+                        {entryId && <SaveStatus state={saveState} />}
+                        {status === "PUBLISHED" && hasDraft && (
+                            <span className={cn("inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-wide", draftApproved ? "bg-success/15 text-success" : "bg-warning/15 text-warning")}>
+                                {draftApproved ? "Approved · ready to publish" : "Unpublished changes"}
+                            </span>
+                        )}
                         {!entryId && typeId && (
                             <Select
                                 ariaLabel="Content type"
@@ -352,9 +470,27 @@ const EditorPage = () => {
                         <span className="hidden sm:inline">Preview</span>
                     </button>
                     {status === "PUBLISHED" ? (
-                        <button type="button" onClick={unpublish} className="btn-secondary btn-md">
-                            Unpublish
-                        </button>
+                        hasDraft ? (
+                            // Live entry with staged edits: two-step Approve → Publish.
+                            <>
+                                <button type="button" onClick={discardDraft} className="btn-ghost btn-md" title="Discard unpublished changes">
+                                    Discard
+                                </button>
+                                {draftApproved ? (
+                                    <button type="button" onClick={publishChanges} disabled={saveState === "saving"} className="btn-primary btn-md disabled:opacity-60">
+                                        Publish changes
+                                    </button>
+                                ) : (
+                                    <button type="button" onClick={approveDraft} disabled={saveState === "saving"} className="btn-secondary btn-md disabled:opacity-60">
+                                        Approve
+                                    </button>
+                                )}
+                            </>
+                        ) : (
+                            <button type="button" onClick={unpublish} className="btn-secondary btn-md">
+                                Unpublish
+                            </button>
+                        )
                     ) : (
                         <button type="button" onClick={publish} className="btn-secondary btn-md">
                             Publish
@@ -363,10 +499,11 @@ const EditorPage = () => {
                     <button
                         type="button"
                         onClick={save}
-                        disabled={saveState === "saving"}
-                        className="btn-primary btn-md disabled:opacity-60"
+                        disabled={saveState !== "dirty"}
+                        className="btn-primary btn-md min-w-[4.75rem] disabled:opacity-45"
+                        title={saveState === "saved" ? "All changes saved" : "Save changes"}
                     >
-                        {saveLabel}
+                        Save
                     </button>
                     <button
                         type="button"
@@ -387,14 +524,64 @@ const EditorPage = () => {
 
             {/* Body: canvas + panel */}
             <div ref={bodyScope} className="relative flex grow min-h-0">
-                <div className="reveal-up grow overflow-y-auto scrollbar-thin px-4">
+                <div className="reveal-up flex grow min-w-0 flex-col bg-gradient-to-br from-lavender-mist/70 via-white to-purple-100/40 dark:from-dark-2 dark:via-dark-1 dark:to-dark-2/80">
+                    <div className="grow overflow-y-auto scrollbar-thin px-3 sm:px-5">
                     {ready ? (
-                        <EditorCanvas onReady={onEditorReady} initialContent={initialBody} />
+                        <div className="flex w-full flex-col gap-4 py-6">
+                            {/* Slug — the page's URL path. */}
+                            <label className="flex flex-col gap-1.5">
+                                <span className="text-caption-1 text-grey">Slug</span>
+                                <input
+                                    value={slug}
+                                    onChange={(e) => {
+                                        setSlug(e.target.value);
+                                        bump();
+                                    }}
+                                    placeholder="page-url-slug"
+                                    aria-label="Slug"
+                                    className="flow-input font-mono"
+                                />
+                            </label>
+
+                            {/* Schema-driven fields (Text, Number, components…) — the
+                                dynamic-zone field is rendered as sections below. */}
+                            <FieldsForm
+                                fields={formFields}
+                                data={entryData}
+                                onChange={(d) => {
+                                    setEntryData(d);
+                                    bump();
+                                }}
+                            />
+
+                            {/* Section builder (DynamicZone) — Hero / Main Content / … */}
+                            {zoneField && (
+                                <SectionEditor
+                                    sections={sections}
+                                    components={componentDefs}
+                                    allowed={zoneField.allowedComponents}
+                                    onChange={(next) => {
+                                        setEntryData({ ...entryData, [zoneField.name]: next });
+                                        bump();
+                                    }}
+                                />
+                            )}
+
+                            {/* Rich-text body — only for types that define one. */}
+                            {hasBody && (
+                                <div className="flex flex-col gap-1.5">
+                                    {fields.length > 0 && <span className="text-caption-1 text-grey">Body</span>}
+                                    <EditorCanvas onReady={onEditorReady} initialContent={initialBody} />
+                                </div>
+                            )}
+                        </div>
                     ) : (
                         <div className="grid h-full place-items-center">
                             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-lavender-mist border-t-primary" />
                         </div>
                     )}
+                    </div>
+                    {ready && <EditorStatsBar words={wordCount} />}
                 </div>
 
                 {/* Mobile backdrop for the slide-over panel. */}

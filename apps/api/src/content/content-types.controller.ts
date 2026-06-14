@@ -16,6 +16,14 @@ export class ContentTypesController {
         return this.types.list(user.workspaceId);
     }
 
+    // Reusable components (kind=COMPONENT) — for the Schema Builder library + the
+    // block editor's "Add block" picker. Declared before any `:id` route.
+    @Get("components")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    listComponents(@CurrentUser() user: AuthUser) {
+        return this.types.listComponents(user.workspaceId);
+    }
+
     // Defining the content model is a structural action — Super Admin / Admin.
     @Post()
     @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)

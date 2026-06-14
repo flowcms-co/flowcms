@@ -7,6 +7,7 @@ import Icon from "@/components/ui/Icon";
 import Checkbox from "@/components/ui/Checkbox";
 import Switch from "@/components/ui/Switch";
 import Select from "@/components/ui/Select";
+import SaveStatus from "@/components/ui/SaveStatus";
 import {
     FIELD_TYPES,
     SCHEMA_JSONLD,
@@ -19,7 +20,25 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
 let idSeq = 0;
-const newId = () => `nf-${(idSeq += 1)}`;
+// Globally-unique id. A plain counter ("nf-1") resets to 0 each page load, so a
+// freshly-added field would collide with an already-saved "nf-1" and the two rows
+// would then edit/delete together. A random suffix makes collisions impossible.
+const newId = () =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto ? `nf-${crypto.randomUUID()}` : `nf-${(idSeq += 1)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** Guarantee every field (recursively) has a UNIQUE id. Imported/seeded schemas can
+ *  contain duplicate ids; since the schema builder edits/removes fields by id, a
+ *  collision makes two rows move together and resist deletion. Field identity is
+ *  client-only (entry data is keyed by field name), so reassigning is safe. */
+const uniqueFieldIds = (fields: SchemaField[] | undefined, seen: Set<string>): SchemaField[] =>
+    (fields ?? []).map((f) => {
+        let id = f.id;
+        if (!id || seen.has(id)) id = newId();
+        seen.add(id);
+        return f.fields ? { ...f, id, fields: uniqueFieldIds(f.fields, seen) } : { ...f, id };
+    });
+const normalizeTypes = (list: ContentTypeSchema[]): ContentTypeSchema[] =>
+    list.map((t) => ({ ...t, fields: uniqueFieldIds(t.fields, new Set<string>()) }));
 const blankField = (): SchemaField => ({
     id: newId(),
     name: "New field",
@@ -35,14 +54,20 @@ const blankComponent = (): SchemaField => ({
     fields: [],
 });
 
+/** A reusable component the schema can reference (apiId + display name). */
+type ComponentRef = { apiId: string; name: string };
+
 /**
  * Schema Builder (Content Model) — Strapi-style content-type builder. Define
- * content types and their fields, including nested + repeatable **components**,
- * with drag-to-reorder at every level. Plus site-wide structured-data defaults.
- * Mock state for now; the backend persists the model later.
+ * content types and their fields, including inline + **reusable** components and
+ * **dynamic zones** (an ordered list of mixed component sections), with
+ * drag-to-reorder at every level. A separate Components tab manages the reusable
+ * component library. Persisted via the content-types API.
  */
 const SchemaPage = () => {
     const [types, setTypes] = useState<ContentTypeSchema[]>([]);
+    const [components, setComponents] = useState<ContentTypeSchema[]>([]);
+    const [tab, setTab] = useState<"types" | "components">("types");
     const [activeId, setActiveId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -50,9 +75,13 @@ const SchemaPage = () => {
 
     const load = useCallback(async () => {
         try {
-            const data = await api<ContentTypeSchema[]>("/content-types");
-            setTypes(data);
-            setActiveId((cur) => cur ?? data[0]?.id ?? null);
+            const [t, c] = await Promise.all([
+                api<ContentTypeSchema[]>("/content-types"),
+                api<ContentTypeSchema[]>("/content-types/components").catch(() => [] as ContentTypeSchema[]),
+            ]);
+            setTypes(normalizeTypes(t));
+            setComponents(normalizeTypes(c));
+            setActiveId((cur) => cur ?? t[0]?.id ?? null);
         } catch {
             /* read requires content.read */
         } finally {
@@ -65,25 +94,38 @@ const SchemaPage = () => {
         void load();
     }, [load]);
 
-    const active = types.find((t) => t.id === activeId) ?? null;
+    const collection = tab === "types" ? types : components;
+    const setCollection = tab === "types" ? setTypes : setComponents;
+    const active = collection.find((t) => t.id === activeId) ?? null;
+    const componentRefs: ComponentRef[] = components.map((c) => ({ apiId: c.apiId ?? "", name: c.name })).filter((c) => c.apiId);
+
+    const switchTab = (next: "types" | "components") => {
+        if (next === tab) return;
+        setTab(next);
+        const list = next === "types" ? types : components;
+        setActiveId(list[0]?.id ?? null);
+        setDirty(false);
+    };
 
     const patchActive = (patch: Partial<ContentTypeSchema>) => {
         if (!active) return;
-        setTypes((prev) => prev.map((t) => (t.id === active.id ? { ...t, ...patch } : t)));
+        setCollection((prev) => prev.map((t) => (t.id === active.id ? { ...t, ...patch } : t)));
         setDirty(true);
     };
     const setActiveFields = (fields: SchemaField[]) => patchActive({ fields });
     const setJsonLd = (jsonLd: string) => patchActive({ jsonLd });
 
-    const addType = async () => {
+    const add = async () => {
+        const isComp = tab === "components";
         const created = await api<ContentTypeSchema>("/content-types", {
             method: "POST",
             body: JSON.stringify({
-                name: "New type",
-                schema: { icon: "document", color: "#6C5CE7", jsonLd: "Article", fields: [] },
+                name: isComp ? "New component" : "New type",
+                ...(isComp ? { kind: "COMPONENT" } : {}),
+                schema: { icon: isComp ? "copy" : "document", color: "#6C5CE7", jsonLd: "Article", fields: [] },
             }),
         });
-        setTypes((prev) => [...prev, created]);
+        setCollection((prev) => [...prev, created]);
         setActiveId(created.id);
         setDirty(false);
     };
@@ -92,47 +134,68 @@ const SchemaPage = () => {
         if (!active) return;
         setSaving(true);
         try {
-            await api(`/content-types/${active.id}`, {
+            const updated = await api<ContentTypeSchema>(`/content-types/${active.id}`, {
                 method: "PATCH",
                 body: JSON.stringify({
                     name: active.name,
-                    schema: {
-                        icon: active.icon,
-                        color: active.color,
-                        jsonLd: active.jsonLd,
-                        fields: active.fields,
-                    },
+                    // Only send apiId while the type is empty; the backend rejects a
+                    // change once entries exist (or a component is referenced).
+                    ...((active.entryCount ?? 0) === 0 && active.apiId ? { apiId: active.apiId } : {}),
+                    schema: { icon: active.icon, color: active.color, jsonLd: active.jsonLd, fields: active.fields },
                 }),
             });
+            setCollection((prev) => prev.map((t) => (t.id === active.id ? { ...t, apiId: updated.apiId } : t)));
             setDirty(false);
+        } catch (e) {
+            window.alert(e instanceof Error ? e.message : "Could not save.");
         } finally {
             setSaving(false);
         }
     };
 
-    const deleteType = async () => {
+    const deleteActive = async () => {
         if (!active) return;
-        if (!window.confirm(`Delete the "${active.name}" content type?`)) return;
-        await api(`/content-types/${active.id}`, { method: "DELETE" });
-        const next = types.filter((t) => t.id !== active.id);
-        setTypes(next);
-        setActiveId(next[0]?.id ?? null);
-        setDirty(false);
+        const noun = tab === "types" ? "content type" : "component";
+        if (!window.confirm(`Delete the "${active.name}" ${noun}?`)) return;
+        try {
+            await api(`/content-types/${active.id}`, { method: "DELETE" });
+            const next = collection.filter((t) => t.id !== active.id);
+            setCollection(next);
+            setActiveId(next[0]?.id ?? null);
+            setDirty(false);
+        } catch (e) {
+            window.alert(e instanceof Error ? e.message : "Could not delete.");
+        }
     };
 
     return (
         <div className="flex flex-col gap-6">
+            {/* Types / Components toggle */}
+            <div className="inline-flex w-fit items-center gap-1 rounded-2xl bg-lavender-mist p-1 dark:bg-dark-3">
+                {(["types", "components"] as const).map((m) => (
+                    <button
+                        key={m}
+                        type="button"
+                        onClick={() => switchTab(m)}
+                        className={cn(
+                            "h-9 rounded-xl px-4 text-caption-1 font-semibold capitalize transition-colors",
+                            tab === m ? "bg-white text-primary shadow-sm dark:bg-dark-1" : "text-grey hover:text-primary",
+                        )}
+                    >
+                        {m === "types" ? "Content types" : "Components"}
+                    </button>
+                ))}
+            </div>
+
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[18rem_1fr]">
-                {/* Content type list */}
+                {/* Left list */}
                 <Card className="flex flex-col h-full !p-5">
                     <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-h5 text-black dark:text-white">
-                            Content types
-                        </h2>
-                        <span className="text-caption-2 text-grey">{types.length}</span>
+                        <h2 className="text-h5 text-black dark:text-white">{tab === "types" ? "Content types" : "Components"}</h2>
+                        <span className="text-caption-2 text-grey">{collection.length}</span>
                     </div>
                     <div className="flex flex-col gap-1.5">
-                        {types.map((t) => {
+                        {collection.map((t) => {
                             const isActive = t.id === activeId;
                             return (
                                 <button
@@ -141,52 +204,23 @@ const SchemaPage = () => {
                                     onClick={() => setActiveId(t.id)}
                                     className={cn(
                                         "flex items-center gap-3 p-2.5 rounded-2xl text-left transition-all",
-                                        isActive
-                                            ? "bg-primary text-white shadow-glow"
-                                            : "hover:bg-lavender-mist dark:hover:bg-dark-3",
+                                        isActive ? "bg-primary text-white shadow-glow" : "hover:bg-lavender-mist dark:hover:bg-dark-3",
                                     )}
                                 >
-                                    <span
-                                        className="flex items-center justify-center w-9 h-9 rounded-[0.625rem] shrink-0"
-                                        style={{
-                                            backgroundColor: isActive
-                                                ? "rgba(255,255,255,0.18)"
-                                                : `${t.color}22`,
-                                        }}
-                                    >
-                                        <Icon
-                                            className="w-4 h-4"
-                                            name={t.icon}
-                                            fill={isActive ? "#fff" : t.color}
-                                        />
+                                    <span className="flex items-center justify-center w-9 h-9 rounded-[0.625rem] shrink-0" style={{ backgroundColor: isActive ? "rgba(255,255,255,0.18)" : `${t.color}22` }}>
+                                        <Icon className="w-4 h-4" name={t.icon} fill={isActive ? "#fff" : t.color} />
                                     </span>
                                     <span className="min-w-0">
-                                        <span
-                                            className={cn(
-                                                "block truncate text-title",
-                                                isActive
-                                                    ? "text-white"
-                                                    : "text-black dark:text-white",
-                                            )}
-                                        >
-                                            {t.name}
-                                        </span>
-                                        <span
-                                            className={cn(
-                                                "block text-caption-2",
-                                                isActive ? "text-white/70" : "text-grey",
-                                            )}
-                                        >
-                                            {t.fields.length} fields
-                                        </span>
+                                        <span className={cn("block truncate text-title", isActive ? "text-white" : "text-black dark:text-white")}>{t.name}</span>
+                                        <span className={cn("block text-caption-2", isActive ? "text-white/70" : "text-grey")}>{t.fields.length} fields</span>
                                     </span>
                                 </button>
                             );
                         })}
                     </div>
-                    <button type="button" onClick={addType} className="btn-secondary w-full mt-4">
+                    <button type="button" onClick={add} className="btn-secondary w-full mt-4">
                         <Icon className="w-5 h-5 fill-primary dark:fill-lilac" name="plus" />
-                        New type
+                        {tab === "types" ? "New type" : "New component"}
                     </button>
                 </Card>
 
@@ -196,12 +230,12 @@ const SchemaPage = () => {
                         <div className="grid h-full place-items-center py-16 text-center">
                             <div>
                                 <p className="text-body-sm text-grey">
-                                    {loading ? "Loading content types…" : "No content types yet."}
+                                    {loading ? "Loading…" : tab === "types" ? "No content types yet." : "No components yet."}
                                 </p>
                                 {!loading && (
-                                    <button type="button" onClick={addType} className="btn-primary mt-4">
+                                    <button type="button" onClick={add} className="btn-primary mt-4">
                                         <Icon className="w-5 h-5 fill-white" name="plus" />
-                                        Create your first type
+                                        {tab === "types" ? "Create your first type" : "Create your first component"}
                                     </button>
                                 )}
                             </div>
@@ -210,10 +244,7 @@ const SchemaPage = () => {
                         <>
                             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                                 <div className="flex items-center gap-3 min-w-0">
-                                    <span
-                                        className="flex items-center justify-center w-11 h-11 rounded-2xl shrink-0"
-                                        style={{ backgroundColor: `${active.color}22` }}
-                                    >
+                                    <span className="flex items-center justify-center w-11 h-11 rounded-2xl shrink-0" style={{ backgroundColor: `${active.color}22` }}>
                                         <Icon className="w-5 h-5" name={active.icon} fill={active.color} />
                                     </span>
                                     <div className="min-w-0">
@@ -221,46 +252,43 @@ const SchemaPage = () => {
                                             value={active.name}
                                             onChange={(e) => patchActive({ name: e.target.value })}
                                             className="w-full bg-transparent font-poppins text-h5 font-bold text-black outline-none dark:text-white"
-                                            aria-label="Content type name"
+                                            aria-label={tab === "types" ? "Content type name" : "Component name"}
                                         />
-                                        <p className="text-caption-2 text-grey">
-                                            <span className="font-mono">{active.apiId}</span> · {active.fields.length} fields · drag to reorder
+                                        <p className="flex flex-wrap items-center gap-x-1 text-caption-2 text-grey">
+                                            {(active.entryCount ?? 0) === 0 ? (
+                                                <input
+                                                    value={active.apiId ?? ""}
+                                                    onChange={(e) => patchActive({ apiId: e.target.value })}
+                                                    spellCheck={false}
+                                                    aria-label="API ID"
+                                                    title="Machine name used by the delivery API / referenced by other types."
+                                                    className="bg-transparent font-mono text-grey outline-none focus:text-primary dark:focus:text-lilac"
+                                                />
+                                            ) : (
+                                                <span className="font-mono" title="Locked: changing the API ID would break existing content URLs.">{active.apiId}</span>
+                                            )}
+                                            <span>· {active.fields.length} fields · drag to reorder</span>
                                         </p>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <label className="flex items-center gap-2">
-                                        <span className="text-caption-1 text-grey">Schema</span>
-                                        <Select
-                                            variant="field"
-                                            className="!w-auto"
-                                            ariaLabel="Schema type"
-                                            value={active.jsonLd}
-                                            onChange={setJsonLd}
-                                            options={SCHEMA_JSONLD.map((s) => ({ value: s, label: s }))}
-                                        />
-                                    </label>
-                                    <button
-                                        type="button"
-                                        onClick={deleteType}
-                                        aria-label="Delete type"
-                                        className="flex items-center justify-center w-10 h-10 rounded-xl text-grey transition-colors hover:bg-error/10 hover:text-error"
-                                    >
+                                    {tab === "types" && (
+                                        <label className="flex items-center gap-2">
+                                            <span className="text-caption-1 text-grey">Schema</span>
+                                            <Select variant="field" className="!w-auto" ariaLabel="Schema type" value={active.jsonLd} onChange={setJsonLd} options={SCHEMA_JSONLD.map((s) => ({ value: s, label: s }))} />
+                                        </label>
+                                    )}
+                                    <button type="button" onClick={deleteActive} aria-label="Delete" className="flex items-center justify-center w-10 h-10 rounded-xl text-grey transition-colors hover:bg-error/10 hover:text-error">
                                         <Icon className="w-5 h-5 fill-current" name="trash" />
                                     </button>
-                                    <button
-                                        type="button"
-                                        onClick={saveActive}
-                                        disabled={saving || !dirty}
-                                        className="btn-primary disabled:opacity-50"
-                                    >
-                                        {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
+                                    <SaveStatus state={saving ? "saving" : dirty ? "dirty" : "saved"} className="mr-1 hidden sm:inline-flex" />
+                                    <button type="button" onClick={saveActive} disabled={saving || !dirty} className="btn-primary min-w-[8.5rem] disabled:opacity-50">
+                                        Save changes
                                     </button>
                                 </div>
                             </div>
 
-                            {/* Recursive, drag-reorderable field tree */}
-                            <FieldList fields={active.fields} onChange={setActiveFields} />
+                            <FieldList fields={active.fields} onChange={setActiveFields} components={componentRefs} allowZones={tab === "types"} />
                         </>
                     )}
                 </Card>
@@ -271,34 +299,33 @@ const SchemaPage = () => {
     );
 };
 
-/** A reorderable list of fields. Recurses into component fields for nesting. */
+/** A reorderable list of fields. Recurses into inline component fields for nesting. */
 const FieldList = ({
     fields,
     onChange,
+    components,
+    allowZones,
     depth = 0,
 }: {
     fields: SchemaField[];
     onChange: (next: SchemaField[]) => void;
+    components: ComponentRef[];
+    allowZones: boolean;
     depth?: number;
 }) => {
-    const update = (id: string, patch: Partial<SchemaField>) =>
-        onChange(fields.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+    const update = (id: string, patch: Partial<SchemaField>) => onChange(fields.map((f) => (f.id === id ? { ...f, ...patch } : f)));
     const remove = (id: string) => onChange(fields.filter((f) => f.id !== id));
 
     return (
         <div className="flex flex-col gap-2">
-            <Reorder.Group
-                as="div"
-                axis="y"
-                values={fields}
-                onReorder={onChange}
-                className="flex flex-col gap-2"
-            >
+            <Reorder.Group as="div" axis="y" values={fields} onReorder={onChange} className="flex flex-col gap-2">
                 {fields.map((f) => (
                     <FieldRow
                         key={f.id}
                         field={f}
                         depth={depth}
+                        components={components}
+                        allowZones={allowZones}
                         onUpdate={(patch) => update(f.id, patch)}
                         onUpdateChildren={(nf) => update(f.id, { fields: nf })}
                         onRemove={() => remove(f.id)}
@@ -307,49 +334,65 @@ const FieldList = ({
             </Reorder.Group>
 
             <div className="flex flex-wrap gap-2 mt-1">
-                <button
-                    type="button"
-                    onClick={() => onChange([...fields, blankField()])}
-                    className="btn-secondary h-9 px-3.5 text-caption-1"
-                >
+                <button type="button" onClick={() => onChange([...fields, blankField()])} className="btn-secondary h-9 px-3.5 text-caption-1">
                     <Icon className="w-4 h-4 fill-primary dark:fill-lilac" name="plus" />
                     Add field
                 </button>
-                <button
-                    type="button"
-                    onClick={() => onChange([...fields, blankComponent()])}
-                    className="btn-ghost h-9 px-3.5 text-caption-1 border border-grey-light dark:border-grey-light/10"
-                >
+                <button type="button" onClick={() => onChange([...fields, blankComponent()])} className="btn-ghost h-9 px-3.5 text-caption-1 border border-grey-light dark:border-grey-light/10">
                     <Icon className="w-4 h-4 fill-grey" name="copy" />
                     Add component
                 </button>
+                {allowZones && depth === 0 && (
+                    <button
+                        type="button"
+                        onClick={() => onChange([...fields, { id: newId(), name: "Sections", type: "DynamicZone", required: false, allowedComponents: components.map((c) => c.apiId) }])}
+                        className="btn-ghost h-9 px-3.5 text-caption-1 border border-grey-light dark:border-grey-light/10"
+                    >
+                        <Icon className="w-4 h-4 fill-grey" name="grid" />
+                        Add dynamic zone
+                    </button>
+                )}
             </div>
         </div>
     );
 };
 
+const INLINE = "__inline__";
+
 const FieldRow = ({
     field,
     depth,
+    components,
+    allowZones,
     onUpdate,
     onUpdateChildren,
     onRemove,
 }: {
     field: SchemaField;
     depth: number;
+    components: ComponentRef[];
+    allowZones: boolean;
     onUpdate: (patch: Partial<SchemaField>) => void;
     onUpdateChildren: (next: SchemaField[]) => void;
     onRemove: () => void;
 }) => {
     const controls = useDragControls();
+    const [showDesc, setShowDesc] = useState(false);
     const isComp = field.type === "Component";
+    const isZone = field.type === "DynamicZone";
+    const isRef = isComp && !!field.componentApiId;
 
     const changeType = (type: FieldType) => {
-        if (type === "Component") {
-            onUpdate({ type, fields: field.fields ?? [], repeatable: field.repeatable ?? false });
-        } else {
-            onUpdate({ type, fields: undefined, repeatable: undefined });
-        }
+        if (type === "Component") onUpdate({ type, fields: field.fields ?? [], repeatable: field.repeatable ?? false, allowedComponents: undefined, componentApiId: undefined });
+        else if (type === "DynamicZone") onUpdate({ type, allowedComponents: field.allowedComponents ?? components.map((c) => c.apiId), fields: undefined, componentApiId: undefined, repeatable: undefined });
+        else onUpdate({ type, fields: undefined, repeatable: undefined, componentApiId: undefined, allowedComponents: undefined });
+    };
+
+    const toggleAllowed = (apiId: string) => {
+        const set = new Set(field.allowedComponents ?? []);
+        if (set.has(apiId)) set.delete(apiId);
+        else set.add(apiId);
+        onUpdate({ allowedComponents: [...set] });
     };
 
     return (
@@ -358,31 +401,16 @@ const FieldRow = ({
             value={field}
             dragListener={false}
             dragControls={controls}
-            className={cn(
-                "rounded-2xl border border-grey-light dark:border-grey-light/10",
-                isComp ? "bg-lavender-mist/40 dark:bg-dark-3/40" : "bg-white dark:bg-dark-1",
-            )}
+            className={cn("rounded-2xl border border-grey-light dark:border-grey-light/10", isComp || isZone ? "bg-lavender-mist/40 dark:bg-dark-3/40" : "bg-white dark:bg-dark-1")}
         >
             <div className="flex flex-wrap items-center gap-2.5 p-2.5">
-                {/* drag handle */}
-                <button
-                    type="button"
-                    aria-label="Drag to reorder"
-                    onPointerDown={(e) => controls.start(e)}
-                    className="flex items-center justify-center w-7 h-9 shrink-0 cursor-grab text-grey transition-colors hover:text-primary active:cursor-grabbing touch-none"
-                >
+                <button type="button" aria-label="Drag to reorder" onPointerDown={(e) => controls.start(e)} className="flex items-center justify-center w-7 h-9 shrink-0 cursor-grab text-grey transition-colors hover:text-primary active:cursor-grabbing touch-none">
                     <Icon className="w-4 h-4 fill-current" name="grip" />
                 </button>
 
-                {isComp && (
-                    <Icon className="w-4 h-4 fill-primary shrink-0" name="copy" />
-                )}
+                {(isComp || isZone) && <Icon className="w-4 h-4 fill-primary shrink-0" name={isZone ? "grid" : "copy"} />}
 
-                <input
-                    value={field.name}
-                    onChange={(e) => onUpdate({ name: e.target.value })}
-                    className="flow-input !py-2 min-w-0 flex-1 basis-40"
-                />
+                <input value={field.name} onChange={(e) => onUpdate({ name: e.target.value })} className="flow-input !py-2 min-w-0 flex-1 basis-40" />
 
                 <Select
                     variant="field"
@@ -390,54 +418,103 @@ const FieldRow = ({
                     ariaLabel="Field type"
                     value={field.type}
                     onChange={(v) => changeType(v as FieldType)}
-                    options={FIELD_TYPES.map((ft) => ({ value: ft, label: ft }))}
+                    options={FIELD_TYPES.filter((ft) => ft !== "DynamicZone" || allowZones).map((ft) => ({ value: ft, label: ft === "DynamicZone" ? "Dynamic zone" : ft }))}
                 />
 
-                {isComp ? (
-                    <label className="flex items-center gap-2 shrink-0 px-1 cursor-pointer select-none">
-                        <span className="text-caption-2 font-medium text-grey">
-                            Repeatable
-                        </span>
-                        <Switch
-                            checked={!!field.repeatable}
-                            onChange={(v) => onUpdate({ repeatable: v })}
-                            aria-label={`${field.name} repeatable`}
-                        />
-                    </label>
+                {/* Component: inline vs reference a library component */}
+                {isComp && (
+                    <Select
+                        variant="field"
+                        className="!w-auto"
+                        ariaLabel="Component source"
+                        value={field.componentApiId ?? INLINE}
+                        onChange={(v) => (v === INLINE ? onUpdate({ componentApiId: undefined }) : onUpdate({ componentApiId: v, fields: undefined }))}
+                        options={[{ value: INLINE, label: "Inline" }, ...components.map((c) => ({ value: c.apiId, label: c.name }))]}
+                    />
+                )}
+
+                {(isComp || isZone) ? (
+                    isZone ? null : (
+                        <label className="flex items-center gap-2 shrink-0 px-1 cursor-pointer select-none">
+                            <span className="text-caption-2 font-medium text-grey">Repeatable</span>
+                            <Switch checked={!!field.repeatable} onChange={(v) => onUpdate({ repeatable: v })} aria-label={`${field.name} repeatable`} />
+                        </label>
+                    )
                 ) : (
                     <div className="flex items-center gap-1.5 shrink-0 px-1">
-                        <Checkbox
-                            checked={field.required}
-                            onChange={() => onUpdate({ required: !field.required })}
-                            aria-label={`${field.name} required`}
-                        />
+                        <Checkbox checked={field.required} onChange={() => onUpdate({ required: !field.required })} aria-label={`${field.name} required`} />
                         <span className="text-caption-2 text-grey">Req</span>
                     </div>
                 )}
 
-                <button
-                    type="button"
-                    onClick={onRemove}
-                    aria-label={`Remove ${field.name}`}
-                    className="flex items-center justify-center w-8 h-9 rounded-lg text-grey transition-colors hover:bg-error/10 hover:text-error shrink-0"
-                >
+                <button type="button" onClick={onRemove} aria-label={`Remove ${field.name}`} className="flex items-center justify-center w-8 h-9 rounded-lg text-grey transition-colors hover:bg-error/10 hover:text-error shrink-0">
                     <Icon className="w-4 h-4 fill-current" name="close" />
                 </button>
             </div>
 
-            {/* nested fields for component types */}
-            {isComp && (
+            {/* Optional per-field description (helper text shown to editors). */}
+            <div className="px-2.5 pb-2.5 -mt-1">
+                {showDesc || field.description ? (
+                    <input
+                        value={field.description ?? ""}
+                        onChange={(e) => onUpdate({ description: e.target.value })}
+                        onBlur={(e) => !e.target.value && setShowDesc(false)}
+                        autoFocus={showDesc && !field.description}
+                        placeholder="Description shown to editors (optional)"
+                        className="flow-input !py-1.5 !text-caption-2"
+                    />
+                ) : (
+                    <button type="button" onClick={() => setShowDesc(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
+                        <Icon className="h-3 w-3 fill-current" name="plus" />
+                        Add description
+                    </button>
+                )}
+            </div>
+
+            {/* Inline component → nested fields */}
+            {isComp && !isRef && (
                 <div className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25">
                     {depth >= 2 ? (
-                        <p className="py-2 text-caption-2 text-grey">
-                            Max nesting depth reached.
-                        </p>
+                        <p className="py-2 text-caption-2 text-grey">Max nesting depth reached.</p>
                     ) : (
-                        <FieldList
-                            fields={field.fields ?? []}
-                            onChange={onUpdateChildren}
-                            depth={depth + 1}
-                        />
+                        <FieldList fields={field.fields ?? []} onChange={onUpdateChildren} components={components} allowZones={false} depth={depth + 1} />
+                    )}
+                </div>
+            )}
+
+            {/* Reference component → note */}
+            {isRef && (
+                <p className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25 py-1.5 text-caption-2 text-grey">
+                    References the <span className="font-mono text-primary dark:text-lilac">{field.componentApiId}</span> component. Edit its fields in the Components tab.
+                </p>
+            )}
+
+            {/* Dynamic zone → allowed components */}
+            {isZone && (
+                <div className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25">
+                    <div className="py-1 text-caption-2 text-grey">Allowed sections</div>
+                    {components.length === 0 ? (
+                        <p className="pb-2 text-caption-2 text-grey">No components yet — create some in the Components tab.</p>
+                    ) : (
+                        <div className="flex flex-wrap gap-2 pb-2">
+                            {components.map((c) => {
+                                const on = (field.allowedComponents ?? []).includes(c.apiId);
+                                return (
+                                    <button
+                                        key={c.apiId}
+                                        type="button"
+                                        onClick={() => toggleAllowed(c.apiId)}
+                                        className={cn(
+                                            "inline-flex items-center gap-1.5 rounded-xl border px-2.5 h-8 text-caption-2 transition-colors",
+                                            on ? "border-primary bg-primary/10 text-primary dark:text-lilac" : "border-grey-light text-grey hover:text-primary dark:border-grey-light/10",
+                                        )}
+                                    >
+                                        {on && <Icon className="w-3.5 h-3.5 fill-current" name="check" />}
+                                        {c.name}
+                                    </button>
+                                );
+                            })}
+                        </div>
                     )}
                 </div>
             )}
@@ -465,16 +542,12 @@ const GlobalSchemaCard = () => {
                 setOrg((d) => ({
                     ...d,
                     ...(w.jsonLdOrg ?? {}),
-                    // No saved org schema yet: seed the name from the workspace name
-                    // chosen in the welcome wizard, so it is never blank or sample data.
                     orgName: w.jsonLdOrg?.orgName || w.name || d.orgName,
                 }));
             })
             .catch(() => {});
     }, []);
 
-    // Only include fields the user has actually filled in; an Organization schema
-    // with empty name/url/logo would be invalid to inject site-wide.
     const cleanSameAs = org.sameAs.map((s) => s.trim()).filter(Boolean);
     const jsonLd = JSON.stringify(
         {
@@ -495,12 +568,7 @@ const GlobalSchemaCard = () => {
             await api("/workspace", {
                 method: "PATCH",
                 body: JSON.stringify({
-                    jsonLdOrg: {
-                        orgName: org.orgName.trim(),
-                        url: org.url.trim(),
-                        logo: org.logo.trim(),
-                        sameAs: cleanSameAs,
-                    },
+                    jsonLdOrg: { orgName: org.orgName.trim(), url: org.url.trim(), logo: org.logo.trim(), sameAs: cleanSameAs },
                 }),
             });
             setSaved(true);
@@ -516,39 +584,20 @@ const GlobalSchemaCard = () => {
         <Card>
             <div className="mb-1 flex items-center gap-2">
                 <Icon className="w-5 h-5 fill-primary" name="chart" />
-                <h2 className="text-h5 text-black dark:text-white">
-                    Global structured data
-                </h2>
+                <h2 className="text-h5 text-black dark:text-white">Global structured data</h2>
             </div>
-            <p className="mb-5 text-caption-2 text-grey">
-                Organization schema injected site-wide on every page.
-            </p>
+            <p className="mb-5 text-caption-2 text-grey">Organization schema injected site-wide on every page.</p>
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <div className="flex flex-col gap-4">
                     <Field label="Organization name">
-                        <input
-                            value={org.orgName}
-                            onChange={(e) => setOrg({ ...org, orgName: e.target.value })}
-                            placeholder="Your organization"
-                            className="flow-input"
-                        />
+                        <input value={org.orgName} onChange={(e) => setOrg({ ...org, orgName: e.target.value })} placeholder="Your organization" className="flow-input" />
                     </Field>
                     <Field label="Website URL">
-                        <input
-                            value={org.url}
-                            onChange={(e) => setOrg({ ...org, url: e.target.value })}
-                            placeholder="https://yourdomain.com"
-                            className="flow-input"
-                        />
+                        <input value={org.url} onChange={(e) => setOrg({ ...org, url: e.target.value })} placeholder="https://yourdomain.com" className="flow-input" />
                     </Field>
                     <Field label="Logo URL">
-                        <input
-                            value={org.logo}
-                            onChange={(e) => setOrg({ ...org, logo: e.target.value })}
-                            placeholder="https://yourdomain.com/logo.png"
-                            className="flow-input"
-                        />
+                        <input value={org.logo} onChange={(e) => setOrg({ ...org, logo: e.target.value })} placeholder="https://yourdomain.com/logo.png" className="flow-input" />
                     </Field>
                     <Field label="Social profiles (sameAs)">
                         <div className="flex flex-col gap-2">
@@ -556,14 +605,7 @@ const GlobalSchemaCard = () => {
                                 <input
                                     key={i}
                                     value={s}
-                                    onChange={(e) =>
-                                        setOrg({
-                                            ...org,
-                                            sameAs: org.sameAs.map((x, j) =>
-                                                j === i ? e.target.value : x,
-                                            ),
-                                        })
-                                    }
+                                    onChange={(e) => setOrg({ ...org, sameAs: org.sameAs.map((x, j) => (j === i ? e.target.value : x)) })}
                                     placeholder={SAMEAS_PLACEHOLDERS[i] ?? "https://..."}
                                     className="flow-input"
                                 />
@@ -574,9 +616,7 @@ const GlobalSchemaCard = () => {
 
                 <div>
                     <div className="mb-2 text-caption-1 text-grey">JSON-LD preview</div>
-                    <pre className="rounded-2xl bg-ink p-4 text-caption-2 leading-relaxed text-lilac overflow-x-auto scrollbar-thin">
-                        {jsonLd}
-                    </pre>
+                    <pre className="rounded-2xl bg-ink p-4 text-caption-2 leading-relaxed text-lilac overflow-x-auto scrollbar-thin">{jsonLd}</pre>
                 </div>
             </div>
 
@@ -590,13 +630,7 @@ const GlobalSchemaCard = () => {
     );
 };
 
-const Field = ({
-    label,
-    children,
-}: {
-    label: string;
-    children: React.ReactNode;
-}) => (
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <label className="flex flex-col gap-1.5">
         <span className="text-caption-1 text-grey">{label}</span>
         {children}

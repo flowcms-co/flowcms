@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime";
 
 export type JobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "PARTIAL";
+export type JobFailure = { id: string; label: string; reason: string };
 export type Job = {
     id: string;
     type: string;
@@ -15,6 +16,7 @@ export type Job = {
     failed: number;
     progress: number;
     error?: string | null;
+    result?: { done?: number; failed?: number; failures?: JobFailure[] } | null;
 };
 
 const ACTIVE = new Set<JobStatus>(["QUEUED", "RUNNING"]);

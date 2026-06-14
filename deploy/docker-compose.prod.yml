@@ -60,6 +60,9 @@ services:
       target: api-runner
     restart: unless-stopped
     env_file: .env # DATABASE_URL, secrets, STUDIO_URL, SEED_ADMIN_*, TRUST_PROXY, NODE_ENV…
+    environment:
+      # Reach the updater sidecar over the internal network (token is in .env).
+      UPDATER_URL: http://updater:9000
     volumes:
       - media_data:/app/storage/media
     expose: ["4000"]
@@ -72,6 +75,27 @@ services:
       timeout: 5s
       retries: 12
       start_period: 60s # first boot runs migrate + seed
+    networks: [flow]
+
+  # ── Updater sidecar: full backups + one-click upgrade. The ONLY container with
+  #    Docker-socket access; reachable only on the internal network (never published).
+  #    Mounts the compose dir (for .env + compose file + backups) and the media volume.
+  updater:
+    image: ${UPDATER_IMAGE:-ghcr.io/flowcms-co/flowcms-updater:latest}
+    build:
+      context: ./updater
+    restart: unless-stopped
+    environment:
+      UPDATER_TOKEN: ${UPDATER_TOKEN:?set UPDATER_TOKEN in .env}
+      FLOWCMS_DIR: /opt/flowcms
+      MEDIA_DIR: /media
+      COMPOSE_PROJECT: flowcms
+      FLOWCMS_VERSION: ${FLOWCMS_VERSION:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${FLOWCMS_HOST_DIR:-/opt/flowcms}:/opt/flowcms
+      - media_data:/media
+    expose: ["9000"]
     networks: [flow]
 
   postgres:

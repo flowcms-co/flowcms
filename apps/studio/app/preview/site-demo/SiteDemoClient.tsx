@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
+import Sections, { findSections } from "../Sections";
 
 /**
  * Bundled EXAMPLE FRONTEND — a stand-in for a customer's real site, used to
@@ -60,6 +61,21 @@ const SiteDemoClient = () => {
     const date = dateStr ? new Date(dateStr).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
     const minutes = Math.max(1, Math.round((body.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length || 0) / 200));
     const coverSeed = entry?.slug || entry?.id || "cover";
+    // Prefer the entry's own Headline / Hero-image fields (a Landing Page maps its
+    // hero heading + image to these); fall back to the title and a seeded
+    // placeholder so article-style entries still render.
+    const data = entry?.data ?? {};
+    const sections = findSections(data);
+    const heading =
+        ["Headline", "headline", "heading", "Heading"].map((k) => str(data[k])).find(Boolean) || (entry?.title ?? "");
+    const heroImage =
+        ["Hero image", "Hero Image", "hero", "heroImage", "Hero", "cover", "coverImage", "image", "featuredImage"]
+            .map((k) => str(data[k]))
+            .find(Boolean) ||
+        Object.values(data).find(
+            (v): v is string => typeof v === "string" && /^(https?:\/\/|\/)/.test(v) && /\.(jpe?g|png|gif|webp|avif|svg)(\?|$)|picsum|\/image/i.test(v),
+        ) ||
+        "";
 
     // Visual-editing bridge (Storyblok-style): when this site is embedded in Flow's
     // preview, the studio can toggle in-place editing of the article and we stream
@@ -179,13 +195,19 @@ const SiteDemoClient = () => {
                 </div>
             ) : (
                 <>
+                    {sections ? (
+                    <div className="py-6">
+                        <Sections sections={sections} />
+                    </div>
+                    ) : (
+                    <>
                     {/* Hero */}
                     <section className="mx-auto max-w-3xl px-6 pt-16 pb-10 text-center">
                         <div className="mb-4 text-[0.78rem] font-bold uppercase tracking-[0.14em]" style={{ color: ACCENT }}>
                             {client || entry.contentType?.name || "Journal"}
                         </div>
                         <h1 ref={titleRef} className="font-poppins text-[2.6rem] leading-[1.06] font-extrabold tracking-[-0.025em] text-balance focus:outline-none sm:text-[3.5rem]">
-                            {entry.title}
+                            {heading}
                         </h1>
                         {summary && <p ref={summaryRef} className="mx-auto mt-6 max-w-2xl text-[1.2rem] leading-8 text-[#525252] focus:outline-none dark:text-[#b3b0a8]">{summary}</p>}
                         <div className="mt-7 flex items-center justify-center gap-3 text-[0.85rem] text-[#737373]">
@@ -202,8 +224,8 @@ const SiteDemoClient = () => {
                     <div className="mx-auto max-w-5xl px-6">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                            src={img(String(coverSeed), 1600, 760)}
-                            alt={entry.title}
+                            src={heroImage || img(String(coverSeed), 1600, 760)}
+                            alt={heading || entry.title}
                             className="aspect-[16/8] w-full rounded-2xl object-cover shadow-[0_1.5rem_3rem_rgba(0,0,0,0.14)]"
                         />
                     </div>
@@ -214,6 +236,8 @@ const SiteDemoClient = () => {
                         className="nb-article flow-prose mx-auto max-w-[44rem] px-6 py-16 focus:outline-none"
                         dangerouslySetInnerHTML={{ __html: body || "<p>Start writing in the editor…</p>" }}
                     />
+                    </>
+                    )}
 
                     {/* More stories */}
                     <section className="border-t border-black/[0.06] dark:border-white/10">

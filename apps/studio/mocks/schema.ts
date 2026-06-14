@@ -14,7 +14,8 @@ export type FieldType =
     | "Reference"
     | "Slug"
     | "URL"
-    | "Component";
+    | "Component"
+    | "DynamicZone";
 
 export const FIELD_TYPES: FieldType[] = [
     "Text",
@@ -27,6 +28,7 @@ export const FIELD_TYPES: FieldType[] = [
     "Slug",
     "URL",
     "Component",
+    "DynamicZone",
 ];
 
 /** schema.org types offered as the default for a content type. */
@@ -45,9 +47,15 @@ export type SchemaField = {
     name: string;
     type: FieldType;
     required: boolean;
-    /** Component fields can repeat (a list) and nest their own fields. */
+    /** Optional helper text shown under the field in the content editor (Strapi-style). */
+    description?: string;
+    /** Component fields can repeat (a list) and nest their own fields (inline). */
     repeatable?: boolean;
     fields?: SchemaField[];
+    /** Component field referencing a reusable component (by apiId) instead of inline fields. */
+    componentApiId?: string;
+    /** DynamicZone: component apiIds allowed as sections in this ordered list. */
+    allowedComponents?: string[];
 };
 
 export type ContentTypeSchema = {
@@ -55,6 +63,8 @@ export type ContentTypeSchema = {
     name: string;
     /** Machine name returned by the API (e.g. "article"); absent on local mock seeds. */
     apiId?: string;
+    /** Number of entries of this type; the apiId is locked once this is > 0. */
+    entryCount?: number;
     icon: string;
     color: string;
     jsonLd: string;

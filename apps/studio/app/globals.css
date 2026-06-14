@@ -219,10 +219,24 @@ html.dark {
         @apply inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg text-[0.875rem] font-bold whitespace-nowrap disabled:opacity-50 disabled:pointer-events-none;
         /* Raw CSS (not @apply) so the multi-property transition reliably compiles.
            Smooth ease-out (no overshoot → no jerk) for color/shadow; a gentle
-           press-scale gives tactile feedback without bouncing. */
+           press-scale gives tactile feedback without bouncing. will-change +
+           centered origin keep the press from shifting against its shadow/glow. */
         transition-property: transform, box-shadow, background-color, color, opacity;
-        transition-duration: 220ms;
+        transition-duration: 200ms;
         transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+        transform-origin: center;
+        will-change: transform;
+    }
+    /* Hover lifts a hair; press settles back down + scales subtly. Eased, no bounce. */
+    .btn:hover,
+    .btn-primary:hover,
+    .btn-secondary:hover,
+    .btn-ghost:hover,
+    .btn-grey:hover,
+    .btn-white:hover,
+    .btn-danger:hover,
+    .btn-danger-solid:hover {
+        transform: translateY(-1px);
     }
     .btn:active,
     .btn-primary:active,
@@ -232,8 +246,17 @@ html.dark {
     .btn-white:active,
     .btn-danger:active,
     .btn-danger-solid:active {
-        transform: scale(0.97);
-        transition-duration: 110ms;
+        transform: translateY(0) scale(0.97);
+        transition-duration: 90ms;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-grey, .btn-white, .btn-danger, .btn-danger-solid {
+            transition-property: box-shadow, background-color, color, opacity;
+        }
+        .btn:hover, .btn-primary:hover, .btn-secondary:hover, .btn-ghost:hover, .btn-grey:hover, .btn-white:hover, .btn-danger:hover, .btn-danger-solid:hover,
+        .btn:active, .btn-primary:active, .btn-secondary:active, .btn-ghost:active, .btn-grey:active, .btn-white:active, .btn-danger:active, .btn-danger-solid:active {
+            transform: none;
+        }
     }
     /* Primary — solid brand purple + the brand glow (the one focal action). */
     .btn-primary {
@@ -280,6 +303,33 @@ html.dark {
     .card {
         @apply rounded-3xl bg-white p-8 shadow-[0_0.5rem_2rem_rgba(227,230,236,0.55)] dark:bg-dark-1 dark:shadow-[0_0.5rem_2rem_rgba(0,0,0,0.30)];
     }
+}
+
+/* ── Motion primitives (modals, saved indicator) ─────────────────────────── */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes sheetUp {
+    from { opacity: 0; transform: translateY(14px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes popIn {
+    from { opacity: 0; transform: scale(0.85); }
+    to { opacity: 1; transform: scale(1); }
+}
+/* Draws the "Saved" check stroke. pathLength is normalized to 1. */
+@keyframes checkDraw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+}
+.saved-check path {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: checkDraw 360ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+    .saved-check path { animation: none; stroke-dashoffset: 0; }
 }
 
 /**

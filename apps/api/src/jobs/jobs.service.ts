@@ -179,12 +179,27 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
             },
         });
         this.emit(workspaceId, userId, "job:done", job);
-        // Bell history (the durable half of the toast).
+        // Bell history (the durable half of the toast). When the handler reported
+        // per-item failures, list WHICH items failed and WHY so the history is
+        // actionable (the NotificationsPage renders this multi-line).
         const ok = status === "SUCCEEDED";
+        const failures = (extra.result as { failures?: { label?: string; reason?: string }[] } | undefined)?.failures ?? [];
+        const failList =
+            failures.length > 0
+                ? "\n" +
+                  failures.slice(0, 12).map((f) => `• ${f.label || "Item"}: ${f.reason || "Failed"}`).join("\n") +
+                  (failures.length > 12 ? `\n• +${failures.length - 12} more` : "")
+                : "";
         await this.notifications.create(workspaceId, userId, {
             type: "job",
             title: ok ? `Done: ${label}` : status === "PARTIAL" ? `Partly done: ${label}` : `Failed: ${label}`,
-            body: ok ? `${job.completed} completed.` : status === "PARTIAL" ? `${job.completed} done, ${job.failed} failed.` : (extra.error ?? "The task failed."),
+            body: ok
+                ? `${job.completed} completed.`
+                : status === "PARTIAL"
+                  ? `${job.completed} done, ${job.failed} failed:${failList}`
+                  : failList
+                    ? `${job.failed} failed:${failList}`
+                    : (extra.error ?? "The task failed."),
         }).catch(() => undefined);
     }
 

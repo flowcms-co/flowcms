@@ -7,6 +7,7 @@ import { RedisThrottlerStorage } from "./common/redis-throttler.storage";
 import { RedisService } from "./redis/redis.service";
 import { PrismaModule } from "./prisma/prisma.module";
 import { HealthModule } from "./health/health.module";
+import { SystemModule } from "./system/system.module";
 import { AuthModule } from "./auth/auth.module";
 import { SetupModule } from "./setup/setup.module";
 import { AuthGuard } from "./auth/auth.guard";
@@ -76,6 +77,7 @@ try {
         RedisModule,
         CacheModule,
         HealthModule,
+        SystemModule,
         AuthModule,
         SetupModule,
         UsersModule,

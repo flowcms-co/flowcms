@@ -184,6 +184,13 @@ export function buildTypedSchema(types: TypeDef[]): GraphQLSchema {
             let key = gqlIdent(f.name);
             while (seen.has(key)) key += "_";
             seen.add(key);
+            // Components and dynamic zones are nested/structured — expose them as JSON
+            // (typed object/union types are a later follow-up) rather than coercing the
+            // object to a "[object Object]" string.
+            if (f.type === "Component" || f.type === "DynamicZone") {
+                objFields[key] = { type: JSONScalar, resolve: (o) => fieldValue(o, f.name) };
+                continue;
+            }
             objFields[key] = {
                 type: gqlTypeFor(f.type),
                 resolve: (o) => {

@@ -494,7 +494,7 @@ const Row = ({
                     <span className="inline-flex shrink-0 items-center rounded bg-lavender-mist px-1.5 py-0.5 text-[0.625rem] font-bold uppercase text-primary dark:bg-dark-3 dark:text-lilac">
                         {row.locale}
                     </span>
-                    <span className="truncate">{row.typeName}{row.slug ? ` · ${row.slug}` : ""}</span>
+                    <span className="truncate">{row.slug ? `${row.slug} · ${row.typeName}` : row.typeName}</span>
                 </span>
             </div>
 

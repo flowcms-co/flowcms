@@ -30,6 +30,9 @@ FLOWCMS_RAW="${FLOWCMS_RAW:-https://raw.githubusercontent.com/flowcms-co/flowcms
 # Prebuilt images (pull path). Override to your registry once published.
 API_IMAGE="${API_IMAGE:-ghcr.io/flowcms-co/flowcms-api:latest}"
 STUDIO_IMAGE="${STUDIO_IMAGE:-ghcr.io/flowcms-co/flowcms-studio:latest}"
+# The updater sidecar (in-app backups + one-click upgrade). Privileged: it mounts
+# the Docker socket and is reachable only on the internal network (token-gated).
+UPDATER_IMAGE="${UPDATER_IMAGE:-ghcr.io/flowcms-co/flowcms-updater:latest}"
 # Build-from-source path (works today, before images are published).
 BUILD_FROM_SOURCE="${BUILD_FROM_SOURCE:-0}"
 FLOWCMS_REPO="${FLOWCMS_REPO:-https://github.com/flowcms-co/flowcms.git}"
@@ -132,9 +135,35 @@ NEXT_PUBLIC_API_URL=/api
 SEED_ON_BOOT=true
 API_IMAGE=$API_IMAGE
 STUDIO_IMAGE=$STUDIO_IMAGE
+# In-app backups + one-click upgrade (the updater sidecar). The API talks to it
+# with this shared token; FLOWCMS_HOST_DIR is THIS dir, mounted so it can read
+# .env + the compose file and write backups/.
+UPDATER_TOKEN=$(gen)
+FLOWCMS_HOST_DIR=$FLOWCMS_DIR
+UPDATER_IMAGE=$UPDATER_IMAGE
 EOF
   $SUDO chmod 600 .env
   ok ".env created"
+fi
+
+# --- 3a. Backfill the updater keys on existing installs ----------------------
+# Installs created before the updater existed have no UPDATER_TOKEN, but the
+# compose file now requires one. Add the missing keys without touching secrets.
+if ! $SUDO grep -qE '^UPDATER_TOKEN=' .env; then
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to add the updater token."
+  info "Enabling in-app backups + upgrades (adding updater keys to .env)…"
+  $SUDO tee -a .env >/dev/null <<EOF
+
+# In-app backups + one-click upgrade (added on upgrade of this installer).
+UPDATER_TOKEN=$(openssl rand -base64 32)
+FLOWCMS_HOST_DIR=$FLOWCMS_DIR
+UPDATER_IMAGE=$UPDATER_IMAGE
+EOF
+  ok "Updater enabled"
+elif ! $SUDO grep -qE '^FLOWCMS_HOST_DIR=' .env; then
+  $SUDO tee -a .env >/dev/null <<EOF
+FLOWCMS_HOST_DIR=$FLOWCMS_DIR
+EOF
 fi
 
 # --- 3.5 DNS sanity check (warn only) ---------------------------------------
@@ -196,4 +225,6 @@ info "You'll then be guided through the rest of setup."
 printf '\n'
 info "Files + secrets: $APP_DIR/.env  (back this up; keep it private)"
 info "Manage:  cd $APP_DIR && docker compose -f docker-compose.prod.yml [logs -f | restart | down]"
-info "Update:  re-run this installer (pulls newer images + restarts)"
+info "Update:  in the studio under Settings → System (one-click, with backup + rollback),"
+info "         or re-run this installer (pulls newer images + restarts)"
+info "Backups: Settings → System (full snapshot: database + media + secrets)"

@@ -5,10 +5,9 @@ import { ContentEntriesService } from "../../content/content-entries.service";
 import { AiService } from "../../ai/ai.service";
 import { SeoService } from "../seo.service";
 import { SeoAuditService } from "./seo-audit.service";
+import { entryToCanonicalContent } from "../../content/canonical-content";
 
 type BatchPayload = { fix: string; key: string; pages: { id: string; url: string | null }[] };
-
-const stripTags = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 function applyAlts(body: string, alts: { src: string; alt: string }[]): string {
     let b = body;
@@ -120,7 +119,7 @@ export class SeoJobHandlers implements OnModuleInit {
             if (r.description) patch.metaDescription = r.description;
             await this.seo.recordLearning(workspaceId, { kind: "meta", path: url, after: { title: r.title, description: r.description } }).catch(() => undefined);
         } else if (fix === "schema" || fix === "faq") {
-            const r = await this.seo.suggestSchema(workspaceId, userId, { path: url, title, description: String(d.summary ?? d.metaDescription ?? ""), body: stripTags(String(d.body ?? "")).slice(0, 800), kind: fix === "faq" ? "faq" : "auto" });
+            const r = await this.seo.suggestSchema(workspaceId, userId, { path: url, title, description: String(d.summary ?? d.metaDescription ?? ""), body: entryToCanonicalContent({ data: d }).plainText.slice(0, 800), kind: fix === "faq" ? "faq" : "auto" });
             patch.jsonLdType = r.type ?? (fix === "faq" ? "FAQPage" : "Article");
             patch.jsonLd = r.jsonld;
             await this.seo.recordLearning(workspaceId, { kind: "schema", path: url, after: { type: String(patch.jsonLdType) } }).catch(() => undefined);
@@ -136,7 +135,7 @@ export class SeoJobHandlers implements OnModuleInit {
                 : key === "READABILITY_HARD" ? "Rewrite this page to be clearer and easier to read: shorter sentences, simpler words, keep all meaning."
                 : key === "DUPLICATE_CONTENT" ? "Rewrite this page so it no longer overlaps other pages: make the wording original while keeping the meaning."
                 : "Fix the heading structure: a single clear H1 (the title), sequential H2/H3, no skipped levels. Keep the content and voice.";
-            const body = String(d.body ?? "");
+            const body = entryToCanonicalContent({ data: d }).html || String(d.body ?? "");
             const r = await this.ai.generate(workspaceId, userId, { feature: "ai.refresh", system: "You are an expert web editor. Return clean HTML body content only (use <h2>, <h3>, <p>, <ul>). No markdown fences, no commentary.", prompt: `${instruction}\n\nTitle: ${title}\n\nCurrent content (HTML):\n${body.slice(0, 6000)}`, maxTokens: 1600, temperature: 0.5 });
             if (!r.text?.trim()) throw new Error("AI returned nothing");
             patch.body = r.text.trim().replace(/^```html?/i, "").replace(/```$/, "").trim();

@@ -13,8 +13,18 @@ type ImportItem = {
     publishedAt: Date | null;
     data: Record<string, unknown>;
 };
-/** Items grouped by the content type they'll import into. */
-type Group = { apiId: string; name: string; items: ImportItem[] };
+/** A field definition for the Schema Builder, inferred from imported data. */
+type InferredField = {
+    id: string;
+    name: string;
+    type: "Text" | "Number" | "Boolean" | "Date" | "Slug" | "Component";
+    required: boolean;
+    repeatable?: boolean;
+    fields?: InferredField[];
+};
+/** Items grouped by the content type they'll import into, with an optional
+ *  inferred field schema (set by the JSON/CSV importers). */
+type Group = { apiId: string; name: string; items: ImportItem[]; fields?: InferredField[] };
 
 export type ImportSource = {
     kind: "wordpress" | "strapi" | "markdown" | "csv" | "json" | "contentful" | "sanity";
@@ -224,6 +234,63 @@ export class ImportService {
         });
     }
 
+    // ── Schema inference (JSON/CSV) ───────────────────────────────────────────
+    // Walks the imported rows and models a real field schema: nested objects →
+    // Components, arrays-of-objects → repeatable Components, primitives → typed
+    // fields. Without this the importer would collapse every shape to a fixed
+    // Title/Slug/Body type and bury the rest in an invisible data blob.
+
+    /** Cap component nesting so the inferred schema stays renderable in the
+     *  Schema Builder; structure deeper than this is kept in the entry data but
+     *  modeled as a plain Text field. */
+    private static readonly MAX_INFER_DEPTH = 3;
+
+    private inferField(value: unknown, key: string, depth: number, nextId: () => string): InferredField {
+        const id = nextId();
+        const base = { id, name: key, required: false };
+        if (/^(slug|permalink)$/i.test(key.trim())) return { ...base, type: "Slug" };
+        if (typeof value === "number") return { ...base, type: "Number" };
+        if (typeof value === "boolean") return { ...base, type: "Boolean" };
+        if (Array.isArray(value)) {
+            const objs = value.filter((v): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v));
+            if (objs.length && depth < ImportService.MAX_INFER_DEPTH) {
+                return { ...base, type: "Component", repeatable: true, fields: this.inferObjectFields(objs, depth + 1, nextId) };
+            }
+            return { ...base, type: "Text" }; // array of primitives / empty / too deep
+        }
+        if (value && typeof value === "object") {
+            if (depth < ImportService.MAX_INFER_DEPTH) {
+                return { ...base, type: "Component", repeatable: false, fields: this.inferObjectFields([value as Record<string, unknown>], depth + 1, nextId) };
+            }
+            return { ...base, type: "Text" };
+        }
+        return { ...base, type: "Text" }; // string / null / undefined
+    }
+
+    /** Merge keys across sample objects (some array items carry extra keys) and
+     *  infer a field per key, using the first non-empty value seen to pick a type. */
+    private inferObjectFields(objs: Record<string, unknown>[], depth: number, nextId: () => string): InferredField[] {
+        const order: string[] = [];
+        const sample = new Map<string, unknown>();
+        for (const o of objs.slice(0, 50)) {
+            if (!o || typeof o !== "object") continue;
+            for (const k of Object.keys(o)) {
+                if (!sample.has(k)) { order.push(k); sample.set(k, undefined); }
+                const cur = sample.get(k);
+                const v = o[k];
+                if ((cur === undefined || cur === null || cur === "") && v !== undefined && v !== null && v !== "") sample.set(k, v);
+            }
+        }
+        return order.map((k) => this.inferField(sample.get(k), k, depth, nextId));
+    }
+
+    private inferSchema(rows: Record<string, unknown>[]): InferredField[] {
+        let n = 0;
+        const nextId = () => `f${(n += 1)}`;
+        const fields = this.inferObjectFields(rows, 0, nextId);
+        return fields.length ? fields : [{ id: "f1", name: "Title", type: "Text", required: true }];
+    }
+
     private fromTabular(src: ImportSource): Group[] {
         const locale = src.locale || "en";
         let rows: Record<string, unknown>[];
@@ -241,7 +308,7 @@ export class ImportService {
             rows = Array.isArray(parsed) ? (parsed as Record<string, unknown>[]) : Array.isArray(p.data) ? (p.data as Record<string, unknown>[]) : [parsed as Record<string, unknown>];
         }
         if (!rows.length) throw new BadRequestException("No rows found to import.");
-        return [{ apiId: src.typeApiId || "article", name: src.typeName || "Imported", items: this.rowsToItems(rows, locale) }];
+        return [{ apiId: src.typeApiId || "article", name: src.typeName || "Imported", items: this.rowsToItems(rows, locale), fields: this.inferSchema(rows) }];
     }
 
     /** Contentful — Content Delivery API (space + CDA token). Groups by content type. */
@@ -343,14 +410,25 @@ export class ImportService {
                 targetName: g.name,
                 count: g.items.length,
                 sample: g.items.slice(0, 3).map((i) => ({ title: i.title, slug: i.slug, status: i.status })),
+                // Inferred field model (JSON/CSV): name + type, components flagged.
+                fields: g.fields?.map((f) => ({ name: f.name, type: f.type, repeatable: !!f.repeatable, fields: f.fields?.length ?? 0 })),
             })),
             total: groups.reduce((n, g) => n + g.items.length, 0),
         };
     }
 
-    private async ensureType(workspaceId: string, apiId: string, name: string) {
+    private async ensureType(workspaceId: string, apiId: string, name: string, fields?: InferredField[]) {
         const existing = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId, apiId } } });
         if (existing) return existing;
+        // Use the schema inferred from the imported data when available (JSON/CSV);
+        // otherwise fall back to a generic Title/Slug/Body type (WordPress, Strapi…).
+        const schemaFields = fields?.length
+            ? fields
+            : [
+                  { id: "f1", name: "Title", type: "Text", required: true },
+                  { id: "f2", name: "Slug", type: "Slug", required: false },
+                  { id: "f3", name: "Body", type: "Rich text", required: false },
+              ];
         return this.prisma.contentType.create({
             data: {
                 workspaceId,
@@ -362,11 +440,7 @@ export class ImportService {
                     icon: "document",
                     color: "#6C5CE7",
                     jsonLd: "Article",
-                    fields: [
-                        { id: "f1", name: "Title", type: "Text", required: true },
-                        { id: "f2", name: "Slug", type: "Slug", required: false },
-                        { id: "f3", name: "Body", type: "Rich text", required: false },
-                    ],
+                    fields: schemaFields,
                 },
             },
         });
@@ -380,7 +454,7 @@ export class ImportService {
 
         for (const g of groups) {
             const before = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId, apiId: g.apiId } } });
-            const type = await this.ensureType(workspaceId, g.apiId, g.name);
+            const type = await this.ensureType(workspaceId, g.apiId, g.name, g.fields);
             if (!before) typesCreated++;
 
             for (const item of g.items) {

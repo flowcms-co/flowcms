@@ -2,10 +2,11 @@ name: Release images
 
 # Build and publish the Flow CMS container images to GHCR so managed platforms
 # (Railway/Render) and the one-line installer can PULL a prebuilt image instead
-# of building from a user's fork. Publishes three images:
+# of building from a user's fork. Publishes four images:
 #   - flowcms          (all-in-one: studio + API + proxy, one port) — Railway/Render
 #   - flowcms-api      (NestJS API)        — docker-compose self-host
 #   - flowcms-studio   (Next.js studio)    — docker-compose self-host
+#   - flowcms-updater  (in-app backup + one-click upgrade sidecar) — docker-compose
 # Images are pushed to ghcr.io/<owner>/<name>, so this works for whatever org/user
 # owns the repo without hardcoding a name.
 
@@ -32,10 +33,20 @@ jobs:
         include:
           - image: flowcms
             target: all-in-one
+            context: .
+            file: deploy/Dockerfile
           - image: flowcms-api
             target: api-runner
+            context: .
+            file: deploy/Dockerfile
           - image: flowcms-studio
             target: studio-runner
+            context: .
+            file: deploy/Dockerfile
+          - image: flowcms-updater
+            target: ""
+            context: deploy/updater
+            file: deploy/updater/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -67,11 +78,14 @@ jobs:
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: deploy/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           target: ${{ matrix.target }}
+          # FLOWCMS_VERSION is baked in (GET /system/version → drives the in-app updater).
           # The studio bundle bakes a relative API base so one image works on any domain.
-          build-args: ${{ matrix.image == 'flowcms-studio' && 'NEXT_PUBLIC_API_URL=/api' || '' }}
+          build-args: |
+            FLOWCMS_VERSION=${{ steps.meta.outputs.version }}
+            ${{ matrix.image == 'flowcms-studio' && 'NEXT_PUBLIC_API_URL=/api' || '' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

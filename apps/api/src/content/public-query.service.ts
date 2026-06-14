@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { ContentEntry, ContentType, Prisma } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
+import { entryToCanonicalContent, buildJsonLd } from "./canonical-content";
 
 export type QueryOpts = {
     limit?: number;
@@ -32,23 +33,25 @@ export class PublicQueryService {
     constructor(private readonly prisma: PrismaService) {}
 
     async resolveType(workspaceId: string, type: string): Promise<ContentType> {
+        // Reusable components (kind=COMPONENT) are not deliverable collections.
         const ct = await this.prisma.contentType.findFirst({
-            where: { workspaceId, OR: [{ apiId: type }, { pluralApiId: type }] },
+            where: { workspaceId, kind: { not: "COMPONENT" }, OR: [{ apiId: type }, { pluralApiId: type }] },
         });
         if (!ct) throw new NotFoundException(`Unknown content type "${type}".`);
         return ct;
     }
 
-    /** All content types in a workspace (for building the typed GraphQL schema). */
+    /** All deliverable content types in a workspace (for building the typed GraphQL
+     *  schema). Excludes reusable components. */
     async allTypes(workspaceId: string): Promise<ContentType[]> {
-        return this.prisma.contentType.findMany({ where: { workspaceId }, orderBy: { apiId: "asc" } });
+        return this.prisma.contentType.findMany({ where: { workspaceId, kind: { not: "COMPONENT" } }, orderBy: { apiId: "asc" } });
     }
 
     private shape(e: ContentEntry, fields?: string[]) {
         const data = (e.data ?? {}) as Record<string, unknown>;
         const projected =
             fields && fields.length ? Object.fromEntries(fields.filter((f) => f in data).map((f) => [f, data[f]])) : data;
-        return {
+        const base: Record<string, unknown> = {
             id: e.id,
             slug: e.slug,
             locale: e.locale,
@@ -57,6 +60,17 @@ export class PublicQueryService {
             updatedAt: e.updatedAt,
             ...projected,
         };
+        // AEO: attach schema.org JSON-LD derived from component/section structured
+        // data (merged with any manually-set data.jsonLd). Skipped when projecting a
+        // field subset, and short-circuited unless the entry actually has sections.
+        if (!fields || !fields.length) {
+            const hasSections = Object.values(data).some((v) => Array.isArray(v) && v.some((x) => x && typeof x === "object" && "__component" in (x as object)));
+            const manual = Array.isArray(data.jsonLd) ? (data.jsonLd as Record<string, unknown>[]) : data.jsonLd && typeof data.jsonLd === "object" ? [data.jsonLd as Record<string, unknown>] : [];
+            const derived = hasSections ? buildJsonLd(entryToCanonicalContent({ id: e.id, slug: e.slug, data }).structuredDataSpecs) : [];
+            const jsonLd = [...manual, ...derived];
+            if (jsonLd.length) base.jsonLd = jsonLd;
+        }
+        return base;
     }
 
     private where(ct: ContentType, opts: QueryOpts): Prisma.ContentEntryWhereInput {

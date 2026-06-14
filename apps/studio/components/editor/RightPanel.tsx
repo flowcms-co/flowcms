@@ -100,7 +100,16 @@ const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; tit
     const { has } = usePlan();
     // advanced_rbac (Pro): this role can't edit SEO / metadata.
     const locked = !!user?.role.lockSeoMeta && has("advanced_rbac");
-    const [metaTitle, setMetaTitle] = useState(str(data.metaTitle) || title);
+    // The meta title stays "linked" to the page title (mirroring it live) until the
+    // user types a custom one; then `customMeta` holds the override. The backend
+    // applies the same rule on save. Deriving the shown value (rather than syncing it
+    // in an effect) keeps title edits reflected without a cascading re-render.
+    const [customMeta, setCustomMeta] = useState(str(data.metaTitle));
+    const [metaLinked, setMetaLinked] = useState(() => {
+        const m = str(data.metaTitle).trim();
+        return !m || m === title.trim();
+    });
+    const metaTitle = metaLinked ? title : customMeta;
     const [metaDescription, setMetaDescription] = useState(str(data.metaDescription));
     const [focusKeyword, setFocusKeyword] = useState(str(data.focusKeyword));
     const [saving, setSaving] = useState(false);
@@ -146,7 +155,34 @@ const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; tit
                 </div>
             )}
 
-            <Field label="Meta title"><input value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} disabled={locked} className="flow-input disabled:opacity-60" /></Field>
+            <div className="flex flex-col gap-1.5">
+                <Field label="Meta title">
+                    <input
+                        value={metaTitle}
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            setCustomMeta(v);
+                            setMetaLinked(v.trim() === "" || v.trim() === title.trim());
+                        }}
+                        disabled={locked}
+                        className="flow-input disabled:opacity-60"
+                    />
+                </Field>
+                {!locked && (
+                    <p className="text-[0.6875rem] text-grey">
+                        {metaLinked ? (
+                            "Linked to the page title — title edits update this automatically."
+                        ) : (
+                            <>
+                                Custom meta title.{" "}
+                                <button type="button" onClick={() => { setMetaLinked(true); setCustomMeta(""); }} className="text-primary underline">
+                                    Reset to page title
+                                </button>
+                            </>
+                        )}
+                    </p>
+                )}
+            </div>
             <Field label="Meta description"><textarea rows={3} value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} disabled={locked} className="flow-input resize-none disabled:opacity-60" /></Field>
             <Field label="Focus keyword"><input value={focusKeyword} onChange={(e) => setFocusKeyword(e.target.value)} disabled={locked} className="flow-input disabled:opacity-60" /></Field>
 

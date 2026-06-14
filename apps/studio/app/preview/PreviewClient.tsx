@@ -9,6 +9,8 @@ import { api, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
+import type { SchemaField } from "@/mocks/schema";
+import Sections, { findSections } from "./Sections";
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",
@@ -34,8 +36,12 @@ type Entry = {
     status: string;
     locale?: string | null;
     data: Record<string, unknown> | null;
-    contentType: { name: string; apiId?: string } | null;
+    contentType: { id?: string; name: string; apiId?: string } | null;
+    // True when the preview is showing a published entry's not-yet-published draft.
+    hasDraft?: boolean;
 };
+
+type ApiType = { id: string; name: string; apiId?: string; fields: SchemaField[] };
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
@@ -68,6 +74,7 @@ const PreviewClient = () => {
     const { has } = usePlan();
     const canLiveEdit = has("live_editor");
     const [entry, setEntry] = useState<Entry | null>(null);
+    const [fields, setFields] = useState<SchemaField[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [device, setDevice] = useState<Device>("desktop");
     const [userMode, setUserMode] = useState<"site" | "content" | null>(null);
@@ -98,6 +105,25 @@ const PreviewClient = () => {
         };
     }, [id]);
 
+    // Load the entry's content-type fields so the rendered preview can show schema
+    // fields (Headline, Hero image, CTA…), not just the title + body.
+    useEffect(() => {
+        const ctId = entry?.contentType?.id;
+        const ctName = entry?.contentType?.name;
+        if (!ctId && !ctName) return;
+        let off = false;
+        api<ApiType[]>("/content-types")
+            .then((types) => {
+                if (off) return;
+                const t = types.find((x) => x.id === ctId) ?? types.find((x) => x.name === ctName);
+                setFields(t?.fields ?? []);
+            })
+            .catch(() => undefined);
+        return () => {
+            off = true;
+        };
+    }, [entry?.contentType?.id, entry?.contentType?.name]);
+
     const shownError = error ?? (!id ? "No entry to preview." : null);
     const previewUrl = ws?.previewUrl ?? "";
     const hasSite = !!previewUrl.trim();
@@ -107,6 +133,11 @@ const PreviewClient = () => {
     const body = str(entry?.data?.body);
     const summary = str(entry?.data?.summary);
     const client = str(entry?.data?.client);
+    // Schema fields worth surfacing in the content preview: everything except the
+    // rich-text body (shown as prose), the slug, and the title (the H1).
+    const metaFields = fields.filter((f) => f.type !== "Rich text" && f.type !== "Slug" && f.name.toLowerCase() !== "title" && f.type !== "DynamicZone");
+    // Section-based page: render the dynamic-zone sections as the page content.
+    const sections = findSections(entry?.data);
     const target = entry && hasSite ? buildTarget(previewUrl, entry) : "";
 
     // Two edit surfaces: an edit-aware Site iframe (postMessage bridge → edit on the
@@ -221,6 +252,11 @@ const PreviewClient = () => {
                     Preview
                 </span>
                 {entry && <StatusPill status={STATUS_PILL[entry.status] ?? "draft"} />}
+                {entry?.hasDraft && (
+                    <span className="inline-flex items-center rounded-md bg-warning/15 px-1.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-wide text-warning" title="Showing unpublished draft changes; the live page still shows the published version">
+                        Draft changes
+                    </span>
+                )}
 
                 {/* Device-width toggle */}
                 <div className="mx-auto hidden items-center gap-1 rounded-2xl bg-lavender-mist p-1 sm:flex dark:bg-dark-3">
@@ -344,6 +380,11 @@ const PreviewClient = () => {
                         className="mx-auto rounded-3xl bg-white px-6 py-12 shadow-[0_0.5rem_2.5rem_rgba(26,26,46,0.10)] transition-[max-width] duration-300 ease-out sm:px-12 dark:bg-dark-1"
                         style={{ maxWidth: dev.card }}
                     >
+                        {sections ? (
+                            <div className="-mx-6 sm:-mx-12">
+                                <Sections sections={sections} />
+                            </div>
+                        ) : (
                         <article className="mx-auto max-w-[44rem]">
                             {client && <div className="mb-3 text-caption-1 font-semibold uppercase tracking-wide text-primary">{client}</div>}
                             <h1
@@ -373,6 +414,31 @@ const PreviewClient = () => {
                                 <StatusPill status={STATUS_PILL[entry.status] ?? "draft"} />
                                 {entry.contentType?.name && <span>· {entry.contentType.name}</span>}
                             </div>
+                            {/* Schema fields (Headline, Hero image, CTA…) so authored
+                                content shows up in the preview, not just title + body. */}
+                            {metaFields.length > 0 && (
+                                <dl className="mb-10 grid gap-5">
+                                    {metaFields.map((f) => {
+                                        const v = str(entry.data?.[f.name]);
+                                        if (!v) return null;
+                                        return (
+                                            <div key={f.id} className="flex flex-col gap-1.5">
+                                                <dt className="text-caption-2 font-semibold uppercase tracking-wide text-grey">{f.name}</dt>
+                                                <dd>
+                                                    {f.type === "Media" ? (
+                                                        // eslint-disable-next-line @next/next/no-img-element -- arbitrary external/asset URL, not a known-size local asset
+                                                        <img src={v} alt={f.name} className="max-h-96 w-full rounded-2xl object-cover" />
+                                                    ) : f.type === "URL" ? (
+                                                        <a href={v} target="_blank" rel="noopener noreferrer" className="break-all text-primary underline">{v}</a>
+                                                    ) : (
+                                                        <span className="text-[1.0625rem] leading-7 text-black dark:text-white">{v}</span>
+                                                    )}
+                                                </dd>
+                                            </div>
+                                        );
+                                    })}
+                                </dl>
+                            )}
                             {/* Authored content (TipTap output). Editable in place when the
                                 live editor is on (Pro) — edits save back to the entry body. */}
                             <div
@@ -384,6 +450,7 @@ const PreviewClient = () => {
                                 dangerouslySetInnerHTML={{ __html: body || "<p>Nothing here yet — start writing in the editor.</p>" }}
                             />
                         </article>
+                        )}
                     </div>
                 </div>
             )}

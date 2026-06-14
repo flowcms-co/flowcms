@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -10,11 +10,11 @@ import { cn } from "@/lib/cn";
 import { runAi, aiErrorMessage } from "@/lib/useAi";
 
 /**
- * TipTap canvas (free MIT core). Provides:
- *  - StarterKit blocks (headings, lists, quote, code, bold/italic, etc.)
- *  - a placeholder
- *  - a selection bubble toolbar for inline formatting + an "Ask AI" action that
- *    rewrites the selected text via the workspace's AI provider.
+ * TipTap canvas (free MIT core) for the body + Main Content sections. Provides a
+ * persistent (pinned) formatting toolbar — block type, marks, lists, quote, link —
+ * plus a "Clear" action that strips marks/nodes back to plain paragraphs (handy for
+ * pasted, pre-formatted web content), and an "AI" action that rewrites the
+ * selection. StarterKit v3 already bundles bold/italic/strike/code/underline/link.
  */
 const EditorCanvas = ({
     onReady,
@@ -28,15 +28,11 @@ const EditorCanvas = ({
         immediatelyRender: false,
         extensions: [
             StarterKit,
-            Placeholder.configure({
-                placeholder: "Type “/” for blocks, or just start writing…",
-            }),
+            Placeholder.configure({ placeholder: "Write, or paste your content here…" }),
         ],
         content: initialContent ?? "",
         editorProps: {
-            attributes: {
-                class: "flow-prose min-h-[60vh] max-w-[44rem] mx-auto py-10 focus:outline-none",
-            },
+            attributes: { class: "flow-prose min-h-[14rem] max-w-[44rem] mx-auto px-1 py-6 focus:outline-none" },
         },
         onCreate: ({ editor }) => onReady?.(editor),
     });
@@ -44,11 +40,31 @@ const EditorCanvas = ({
     const [aiBusy, setAiBusy] = useState(false);
     const [aiError, setAiError] = useState<string | null>(null);
 
+    // Reactive active-states for the toolbar (re-renders only when these change).
+    const s = useEditorState({
+        editor,
+        selector: ({ editor }) =>
+            editor
+                ? {
+                      bold: editor.isActive("bold"),
+                      italic: editor.isActive("italic"),
+                      underline: editor.isActive("underline"),
+                      strike: editor.isActive("strike"),
+                      code: editor.isActive("code"),
+                      link: editor.isActive("link"),
+                      bullet: editor.isActive("bulletList"),
+                      ordered: editor.isActive("orderedList"),
+                      quote: editor.isActive("blockquote"),
+                      h2: editor.isActive("heading", { level: 2 }),
+                      h3: editor.isActive("heading", { level: 3 }),
+                  }
+                : null,
+    });
+
     if (!editor) {
-        return <div className="min-h-[60vh] max-w-[44rem] mx-auto py-10" />;
+        return <div className="min-h-[14rem]" />;
     }
 
-    /** Briefly show an error toast (auto-dismisses). */
     const flashError = (msg: string) => {
         setAiError(msg);
         window.setTimeout(() => setAiError(null), 4500);
@@ -58,7 +74,11 @@ const EditorCanvas = ({
     const askAi = async () => {
         const { from, to } = editor.state.selection;
         const text = editor.state.doc.textBetween(from, to, "\n");
-        if (!text.trim() || aiBusy) return;
+        if (!text.trim()) {
+            flashError("Select some text first, then click AI to improve it.");
+            return;
+        }
+        if (aiBusy) return;
         setAiBusy(true);
         setAiError(null);
         try {
@@ -76,62 +96,96 @@ const EditorCanvas = ({
         }
     };
 
+    const hasUnderline = !!editor.schema.marks.underline;
+    const hasLink = !!editor.schema.marks.link;
+
+    const toggleLink = () => {
+        const prev = (editor.getAttributes("link").href as string) ?? "";
+        const url = window.prompt("Link URL", prev);
+        if (url === null) return;
+        if (url.trim() === "") editor.chain().focus().extendMarkRange("link").unsetLink().run();
+        else editor.chain().focus().extendMarkRange("link").setLink({ href: url.trim() }).run();
+    };
+
+    /** Strip all marks + reset nodes to plain paragraphs. Works on the selection, or
+     *  the whole document when nothing is selected (paste → reset to plain text). */
+    const clearFormatting = () => {
+        const c = editor.chain().focus();
+        if (editor.state.selection.empty) c.selectAll();
+        c.unsetAllMarks().clearNodes().run();
+    };
+
+    const blockLabel = s?.h2 ? "Heading 2" : s?.h3 ? "Heading 3" : s?.quote ? "Quote" : "Paragraph";
+
     return (
-        <>
+        <div className="flex flex-col">
+            {/* Pinned toolbar */}
+            <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-grey-light bg-white/80 px-1.5 py-1.5 backdrop-blur dark:border-grey-light/10 dark:bg-dark-1/80">
+                <BlockMenu
+                    label={blockLabel}
+                    onParagraph={() => editor.chain().focus().setParagraph().run()}
+                    onHeading={(level) => editor.chain().focus().toggleHeading({ level }).run()}
+                    onQuote={() => editor.chain().focus().toggleBlockquote().run()}
+                />
+                <Sep />
+                <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><span className="font-bold">B</span></TBtn>
+                <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><span className="font-serif italic">i</span></TBtn>
+                {hasUnderline && <TBtn title="Underline" active={!!s?.underline} onClick={() => editor.chain().focus().toggleUnderline().run()}><span className="underline">U</span></TBtn>}
+                <TBtn title="Strikethrough" active={!!s?.strike} onClick={() => editor.chain().focus().toggleStrike().run()}><span className="line-through">S</span></TBtn>
+                <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><span className="font-mono text-[0.78em]">{"</>"}</span></TBtn>
+                {hasLink && <TBtn title="Link" active={!!s?.link} onClick={toggleLink}><Icon className="h-4 w-4 fill-current" name="external" /></TBtn>}
+                <Sep />
+                <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><Icon className="h-4 w-4 fill-current" name="menu-collapse" /></TBtn>
+                <TBtn title="Numbered list" active={!!s?.ordered} onClick={() => editor.chain().focus().toggleOrderedList().run()}><span className="text-[0.72rem] font-bold">1.</span></TBtn>
+                <TBtn title="Quote" active={!!s?.quote} onClick={() => editor.chain().focus().toggleBlockquote().run()}><span className="font-serif text-[1.15em] leading-none">&rdquo;</span></TBtn>
+                <Sep />
+                <button
+                    type="button"
+                    onClick={clearFormatting}
+                    title="Clear formatting — reset selection (or the whole block) to plain text"
+                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-medium text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
+                >
+                    <span className="font-serif">T</span>
+                    <span className="text-[0.65rem]">✕</span>
+                    Clear
+                </button>
+                <div className="ml-auto" />
+                <button
+                    type="button"
+                    onClick={() => void askAi()}
+                    disabled={aiBusy}
+                    title="Improve the selected text with AI"
+                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:text-lilac dark:hover:bg-dark-3"
+                >
+                    <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name="sparkles" />
+                    {aiBusy ? "…" : "AI"}
+                </button>
+            </div>
+
+            {/* Inline selection bubble — quick formatting where the cursor is. */}
             <BubbleMenu
                 editor={editor}
                 options={{ placement: "top" }}
-                className="flex items-center gap-0.5 rounded-xl border border-grey-light bg-white p-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:bg-dark-1 dark:border-grey-light/10"
+                className="flex items-center gap-0.5 rounded-lg border border-grey-light bg-white p-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:border-grey-light/10 dark:bg-dark-1"
             >
-                <BubbleBtn
-                    active={editor.isActive("bold")}
-                    onClick={() => editor.chain().focus().toggleBold().run()}
-                    label="Bold"
-                >
-                    <span className="font-bold">B</span>
-                </BubbleBtn>
-                <BubbleBtn
-                    active={editor.isActive("italic")}
-                    onClick={() => editor.chain().focus().toggleItalic().run()}
-                    label="Italic"
-                >
-                    <span className="italic font-serif">i</span>
-                </BubbleBtn>
-                <BubbleBtn
-                    active={editor.isActive("code")}
-                    onClick={() => editor.chain().focus().toggleCode().run()}
-                    label="Code"
-                >
-                    <span className="font-mono text-[0.8em]">{"</>"}</span>
-                </BubbleBtn>
-                <span className="mx-0.5 h-5 w-px bg-grey-light dark:bg-grey-light/10" />
-                <BubbleBtn
-                    active={editor.isActive("heading", { level: 2 })}
-                    onClick={() =>
-                        editor.chain().focus().toggleHeading({ level: 2 }).run()
-                    }
-                    label="Heading"
-                >
-                    H2
-                </BubbleBtn>
-                <BubbleBtn
-                    active={editor.isActive("bulletList")}
-                    onClick={() =>
-                        editor.chain().focus().toggleBulletList().run()
-                    }
-                    label="Bullet list"
-                >
-                    <Icon className="w-4 h-4 fill-current" name="menu-collapse" />
-                </BubbleBtn>
-                <span className="mx-0.5 h-5 w-px bg-grey-light dark:bg-grey-light/10" />
+                <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><span className="font-bold">B</span></TBtn>
+                <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><span className="font-serif italic">i</span></TBtn>
+                <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><span className="font-mono text-[0.78em]">{"</>"}</span></TBtn>
+                {hasLink && <TBtn title="Link" active={!!s?.link} onClick={toggleLink}><Icon className="h-4 w-4 fill-current" name="external" /></TBtn>}
+                <Sep />
+                <TBtn title="Paragraph" active={blockLabel === "Paragraph"} onClick={() => editor.chain().focus().setParagraph().run()}><span className="font-serif">¶</span></TBtn>
+                <TBtn title="Heading 2" active={!!s?.h2} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>H2</TBtn>
+                <TBtn title="Heading 3" active={!!s?.h3} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>H3</TBtn>
+                <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><Icon className="h-4 w-4 fill-current" name="menu-collapse" /></TBtn>
+                <Sep />
                 <button
                     type="button"
-                    title="Improve with AI"
                     onClick={() => void askAi()}
                     disabled={aiBusy}
-                    className="inline-flex items-center gap-1 px-2 h-8 rounded-lg text-caption-1 text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:hover:bg-dark-3"
+                    title="Improve the selected text with AI"
+                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:text-lilac dark:hover:bg-dark-3"
                 >
-                    <Icon className="w-4 h-4 fill-primary" name="sparkles" />
+                    <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name="sparkles" />
                     {aiBusy ? "…" : "AI"}
                 </button>
             </BubbleMenu>
@@ -139,10 +193,7 @@ const EditorCanvas = ({
             <EditorContent editor={editor} />
 
             {aiError && (
-                <div
-                    role="alert"
-                    className="fixed bottom-6 left-1/2 z-50 flex max-w-[22rem] -translate-x-1/2 items-start gap-2 rounded-xl border border-error/20 bg-error/10 px-4 py-3 text-caption-1 text-error shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] backdrop-blur dark:bg-error/15"
-                >
+                <div role="alert" className="fixed bottom-6 left-1/2 z-50 flex max-w-[22rem] -translate-x-1/2 items-start gap-2 rounded-lg border border-error/20 bg-error/10 px-4 py-3 text-caption-1 text-error shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] backdrop-blur dark:bg-error/15">
                     <svg className="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
                         <line x1="12" y1="9" x2="12" y2="13" />
@@ -151,33 +202,63 @@ const EditorCanvas = ({
                     <span>{aiError}</span>
                 </div>
             )}
-        </>
+        </div>
     );
 };
 
-const BubbleBtn = ({
-    active,
-    onClick,
-    label,
-    children,
-}: {
-    active: boolean;
-    onClick: () => void;
-    label: string;
-    children: React.ReactNode;
-}) => (
+const Sep = () => <span className="mx-0.5 h-5 w-px shrink-0 bg-grey-light dark:bg-grey-light/15" />;
+
+const TBtn = ({ active, onClick, title, children }: { active: boolean; onClick: () => void; title: string; children: React.ReactNode }) => (
     <button
         type="button"
-        title={label}
-        aria-label={label}
+        title={title}
+        aria-label={title}
+        aria-pressed={active}
         onClick={onClick}
         className={cn(
-            "inline-flex items-center justify-center w-8 h-8 rounded-lg text-body text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3",
-            active && "bg-primary/10 text-primary",
+            "inline-flex h-8 w-8 items-center justify-center rounded-lg text-body text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3",
+            active && "bg-primary/10 text-primary dark:text-lilac",
         )}
     >
         {children}
     </button>
 );
+
+const BlockMenu = ({ label, onParagraph, onHeading, onQuote }: { label: string; onParagraph: () => void; onHeading: (level: 2 | 3) => void; onQuote: () => void }) => {
+    const [open, setOpen] = useState(false);
+    const item = (text: string, fn: () => void, active: boolean) => (
+        <button
+            type="button"
+            onClick={() => { fn(); setOpen(false); }}
+            className={cn("flex w-full items-center justify-between px-3 py-1.5 text-left text-caption-1 transition-colors hover:bg-lavender-mist dark:hover:bg-dark-3", active ? "text-primary dark:text-lilac" : "text-black dark:text-white")}
+        >
+            {text}
+            {active && <Icon className="h-3.5 w-3.5 fill-current" name="check" />}
+        </button>
+    );
+    return (
+        <div className="relative">
+            <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-caption-1 font-medium text-black transition-colors hover:bg-lavender-mist dark:text-white dark:hover:bg-dark-3"
+            >
+                {label}
+                <Icon className="h-3.5 w-3.5 fill-current text-grey" name="arrow-down" />
+            </button>
+            {open && (
+                <>
+                    <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
+                    <div className="absolute left-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-grey-light bg-white py-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:border-grey-light/10 dark:bg-dark-1">
+                        {item("Paragraph", onParagraph, label === "Paragraph")}
+                        {item("Heading 2", () => onHeading(2), label === "Heading 2")}
+                        {item("Heading 3", () => onHeading(3), label === "Heading 3")}
+                        {item("Quote", onQuote, label === "Quote")}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
 
 export default EditorCanvas;

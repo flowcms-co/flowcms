@@ -61,9 +61,13 @@ RUN find apps/api/dist packages/*/dist -name '*.map' -delete 2>/dev/null || true
 ###############################################################################
 FROM base AS api-runner
 WORKDIR /app
+# Stamped from the git tag by the release workflow; surfaced via GET /system/version.
+ARG FLOWCMS_VERSION=
 ENV NODE_ENV=production \
     API_PORT=4000 \
-    MEDIA_DIR=/app/storage/media
+    MEDIA_DIR=/app/storage/media \
+    FLOWCMS_VERSION=${FLOWCMS_VERSION} \
+    FLOWCMS_DEPLOYMENT=compose
 # Built app + the full workspace node_modules. We ship the whole node_modules so
 # the entrypoint has the Prisma CLI, `tsx` (to run the TS seed), the generated
 # query engine, and the @flowcms/* workspace symlinks (which resolve into
@@ -108,11 +112,14 @@ CMD ["node", "apps/studio/server.js"]
 ###############################################################################
 FROM base AS all-in-one
 WORKDIR /app
+ARG FLOWCMS_VERSION=
 ENV NODE_ENV=production \
     PORT=8080 \
     API_PORT=4000 \
     STUDIO_PORT=3000 \
-    MEDIA_DIR=/app/storage/media
+    MEDIA_DIR=/app/storage/media \
+    FLOWCMS_VERSION=${FLOWCMS_VERSION} \
+    FLOWCMS_DEPLOYMENT=aio
 # Caddy binary (single static Go binary) for the in-container reverse proxy.
 COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
 # API runtime (full node_modules: Prisma CLI + tsx for the boot migrate/seed).

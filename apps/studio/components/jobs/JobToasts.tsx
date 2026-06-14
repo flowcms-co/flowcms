@@ -40,10 +40,12 @@ const JobToasts = () => {
 
 const JobCard = ({ job, onDismiss }: { job: Job; onDismiss: () => void }) => {
     const active = ACTIVE(job.status);
+    const failures = job.result?.failures ?? [];
 
-    // Terminal jobs auto-dismiss after a few seconds.
+    // Terminal jobs auto-dismiss after a few seconds — but keep ones with item
+    // failures up until the user dismisses them, so the reasons aren't missed.
     useEffect(() => {
-        if (active) return;
+        if (active || failures.length > 0) return;
         const t = setTimeout(onDismiss, 5500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,11 +74,24 @@ const JobCard = ({ job, onDismiss }: { job: Job; onDismiss: () => void }) => {
                         </div>
                     </>
                 ) : (
-                    <p className="mt-0.5 text-caption-2 text-grey">
-                        {ok && `${job.completed} completed.`}
-                        {partial && `${job.completed} done, ${job.failed} failed.`}
-                        {failed && (job.error || "The task failed.")}
-                    </p>
+                    <>
+                        <p className="mt-0.5 text-caption-2 text-grey">
+                            {ok && `${job.completed} completed.`}
+                            {partial && `${job.completed} done, ${job.failed} failed.`}
+                            {failed && (failures.length ? `${job.failed} failed.` : job.error || "The task failed.")}
+                        </p>
+                        {failures.length > 0 && (
+                            <ul className="mt-1.5 flex flex-col gap-1 border-t border-grey-light pt-1.5 dark:border-grey-light/10">
+                                {failures.slice(0, 4).map((f) => (
+                                    <li key={f.id} className="text-caption-2 leading-snug text-grey">
+                                        <span className="font-semibold text-black dark:text-white">{f.label}</span>
+                                        <span className="text-grey"> — {f.reason}</span>
+                                    </li>
+                                ))}
+                                {failures.length > 4 && <li className="text-caption-2 text-grey">+{failures.length - 4} more (see notifications)</li>}
+                            </ul>
+                        )}
+                    </>
                 )}
             </div>
 

@@ -9,7 +9,7 @@ import { PluginsService } from "../plugins/plugins.service";
 import { APPROVAL_PORT, type ApprovalPort } from "./approval.port";
 import { RBAC_PORT, type RbacPort, type RoleRules } from "./rbac.port";
 import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
-import { fieldsOf, validateEntryData } from "./entry-validation";
+import { fieldsOf, validateEntryData, type ComponentMap } from "./entry-validation";
 
 type EntryWithType = ContentEntry & { contentType: { id: string; name: string; apiId: string } };
 type Shaped = ReturnType<ContentEntriesService["shape"]>;
@@ -221,6 +221,39 @@ export class ContentEntriesService {
         return d.title ?? "Untitled";
     }
 
+    /** Reusable-component definitions for the workspace (apiId → field defs), used
+     *  to resolve component references + validate dynamic-zone sections. Reusable
+     *  components are content types of kind COMPONENT. */
+    private async componentMap(workspaceId: string): Promise<ComponentMap> {
+        const comps = await this.prisma.contentType.findMany({
+            where: { workspaceId, kind: "COMPONENT" },
+            select: { apiId: true, schema: true },
+        });
+        const map: ComponentMap = {};
+        for (const c of comps) map[c.apiId] = fieldsOf(c.schema);
+        return map;
+    }
+
+    /** Keep the SEO meta title linked to the entry title unless the user set a custom
+     *  one. `prev` is the entry data before this edit (undefined on create). A meta
+     *  title becomes a deliberate override once it's non-empty and differs from the
+     *  title it was saved alongside; from then on, title edits don't overwrite it. An
+     *  empty meta title always falls back to the title. Mutates `next`. */
+    private syncMetaTitle(next: Record<string, unknown>, prev?: Record<string, unknown>) {
+        const s = (v: unknown) => (typeof v === "string" ? v : "");
+        const newTitle = s(next.title);
+        const nextMeta = s(next.metaTitle).trim();
+        const prevTitle = s(prev?.title);
+        const prevMeta = s(prev?.metaTitle).trim();
+        if (!nextMeta) {
+            next.metaTitle = newTitle; // empty meta title always tracks the page title
+            return;
+        }
+        const customBefore = !!prevMeta && prevMeta !== prevTitle;
+        const customNow = nextMeta !== newTitle && nextMeta !== prevMeta;
+        if (!customBefore && !customNow) next.metaTitle = newTitle;
+    }
+
     private shape(e: EntryWithType, authorName?: string) {
         return {
             id: e.id,
@@ -234,6 +267,9 @@ export class ContentEntriesService {
             scheduledAt: e.scheduledAt,
             updatedAt: e.updatedAt,
             data: e.data,
+            // Draft-over-published overlay state (false/absent for entries edited in place).
+            hasDraft: e.draftData != null,
+            draftApproved: e.draftApproved,
         };
     }
 
@@ -299,6 +335,13 @@ export class ContentEntriesService {
             include: { contentType: { select: { id: true, name: true, apiId: true } } },
         });
         if (!e) throw new NotFoundException("Entry not found.");
+        // The editor edits the draft overlay when one exists (a published entry with
+        // pending changes); otherwise it edits the live data directly. The public
+        // delivery API still reads `data`, so the last-published copy stays live.
+        if (e.draftData != null) {
+            const draft = (e.draftData ?? {}) as { title?: string };
+            return { ...this.shape(e), data: e.draftData, title: draft.title ?? "Untitled" };
+        }
         return this.shape(e);
     }
 
@@ -316,9 +359,10 @@ export class ContentEntriesService {
             if (data.title === undefined) data.title = dto.title ?? "Untitled";
         }
         // New entries are drafts — type-check values but don't require completeness yet.
-        validateEntryData(fieldsOf(type.schema), data, { enforceRequired: false, slug: dto.slug ?? null });
+        validateEntryData(fieldsOf(type.schema), data, { enforceRequired: false, slug: dto.slug ?? null, components: await this.componentMap(workspaceId) });
         // Plugin hooks may augment the data (reading time, word count, excerpt…).
         data = await this.plugins.runBeforeSave(workspaceId, { data, title: String(data.title ?? ""), status: "DRAFT" });
+        this.syncMetaTitle(data);
         const e = await this.prisma.contentEntry.create({
             data: {
                 workspaceId,
@@ -343,10 +387,6 @@ export class ContentEntriesService {
             include: { contentType: { select: { schema: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
-        const data: Prisma.ContentEntryUpdateInput = {};
-        if (dto.slug !== undefined) data.slug = dto.slug;
-        if (dto.status !== undefined) data.status = dto.status;
-        if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
 
         // advanced_rbac (Pro): block editing disallowed types + ignore writes to
         // fields the role can't edit (existing values are preserved).
@@ -356,6 +396,45 @@ export class ContentEntriesService {
             if (allowed && !allowed.includes(existing.contentTypeId)) throw new ForbiddenException("Your role can't edit content of this type.");
             incoming = await this.rbac.stripLockedFields(role, incoming);
         }
+
+        const isContentEdit = dto.data !== undefined || dto.title !== undefined;
+        const isStatusChange = dto.status !== undefined && dto.status !== existing.status;
+
+        // ── Draft-over-published: a content edit to a LIVE entry stages into
+        //    `draftData` instead of mutating the live `data`, so the public API keeps
+        //    serving the last-published copy until Approve → Publish promotes it. Any
+        //    fresh edit resets approval (re-approve before publishing). ──────────────
+        if (existing.status === "PUBLISHED" && isContentEdit && !isStatusChange) {
+            const base = (existing.draftData ?? existing.data ?? {}) as Record<string, unknown>;
+            let draft = { ...base, ...incoming };
+            if (dto.title !== undefined) draft.title = dto.title;
+            // Type-check, but don't enforce completeness on a draft (autosave-friendly).
+            validateEntryData(fieldsOf(existing.contentType.schema), draft, {
+                enforceRequired: false,
+                slug: dto.slug !== undefined ? dto.slug : existing.slug,
+                components: await this.componentMap(workspaceId),
+            });
+            draft = await this.plugins.runBeforeSave(workspaceId, { data: draft, title: String(draft.title ?? ""), status: existing.status });
+            this.syncMetaTitle(draft, (existing.draftData ?? existing.data ?? {}) as Record<string, unknown>);
+            const patch: Prisma.ContentEntryUpdateInput = { draftData: draft as Prisma.InputJsonValue, draftApproved: false };
+            // Slug is a structural column (the live URL); apply it directly.
+            if (dto.slug !== undefined) patch.slug = dto.slug;
+            const updated = await this.prisma.contentEntry.update({
+                where: { id },
+                data: patch,
+                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            });
+            await this.snapshot(updated.id, draft, existing.status, actorId);
+            const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
+            this.fire(workspaceId, "content.updated", shaped);
+            return shaped;
+        }
+
+        const data: Prisma.ContentEntryUpdateInput = {};
+        if (dto.slug !== undefined) data.slug = dto.slug;
+        if (dto.status !== undefined) data.status = dto.status;
+        if (dto.scheduledAt !== undefined) data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
+
         // Merged view of the data after this update (for validation).
         let merged = { ...((existing.data ?? {}) as Record<string, unknown>), ...incoming };
         if (dto.title !== undefined) merged.title = dto.title;
@@ -373,6 +452,7 @@ export class ContentEntriesService {
         validateEntryData(fieldsOf(existing.contentType.schema), merged, {
             enforceRequired: enteringComplete,
             slug: targetSlug,
+            components: await this.componentMap(workspaceId),
         });
         // Approval gate (Pro `approval_workflows`): block publish/schedule until the
         // entry is signed off. No-op unless the EE port is present + licensed.
@@ -382,6 +462,7 @@ export class ContentEntriesService {
         // Re-run plugin hooks when the content body/title changes.
         if (dataChanged) {
             merged = await this.plugins.runBeforeSave(workspaceId, { data: merged, title: String(merged.title ?? ""), status: targetStatus });
+            this.syncMetaTitle(merged, (existing.data ?? {}) as Record<string, unknown>);
             data.data = merged as Prisma.InputJsonValue;
         }
 
@@ -421,6 +502,7 @@ export class ContentEntriesService {
             validateEntryData(fieldsOf(existing.contentType.schema), (existing.data ?? {}) as Record<string, unknown>, {
                 enforceRequired: true,
                 slug: existing.slug,
+                components: await this.componentMap(workspaceId),
             });
         }
         const e = await this.prisma.contentEntry.update({
@@ -438,12 +520,85 @@ export class ContentEntriesService {
         return shaped;
     }
 
-    publish(workspaceId: string, id: string, actorId?: string) {
+    async publish(workspaceId: string, id: string, actorId?: string) {
+        const existing = await this.prisma.contentEntry.findFirst({
+            where: { id, workspaceId },
+            include: { contentType: { select: { schema: true } } },
+        });
+        if (!existing) throw new NotFoundException("Entry not found.");
+        // Promote a pending draft (edits made to an already-live entry): the draft
+        // becomes the new live `data` and the overlay is cleared. Enforce the two-step
+        // Approve → Publish gate on the SERVER (not just the studio UI) so the direct
+        // API, the agent API and bulk publish can't push unapproved changes live.
+        if (existing.draftData != null) {
+            if (!existing.draftApproved) throw new BadRequestException("Approve the draft changes before publishing them.");
+            const promoted = (existing.draftData ?? {}) as Record<string, unknown>;
+            validateEntryData(fieldsOf(existing.contentType.schema), promoted, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId) });
+            const e = await this.prisma.contentEntry.update({
+                where: { id },
+                data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date() },
+                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            });
+            await this.snapshot(e.id, promoted, "PUBLISHED", actorId);
+            const shaped = this.shape(e);
+            this.fire(workspaceId, "content.published", shaped);
+            return shaped;
+        }
         return this.setStatus(workspaceId, id, "PUBLISHED", new Date(), actorId);
     }
 
-    unpublish(workspaceId: string, id: string, actorId?: string) {
+    async unpublish(workspaceId: string, id: string, actorId?: string) {
+        const existing = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId } });
+        if (!existing) throw new NotFoundException("Entry not found.");
+        // Taking a live entry offline: fold any pending draft into the entry's data so
+        // in-progress edits aren't lost, then drop to DRAFT.
+        if (existing.draftData != null) {
+            const e = await this.prisma.contentEntry.update({
+                where: { id },
+                data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "DRAFT", publishedAt: null },
+                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            });
+            await this.snapshot(e.id, e.data, "DRAFT", actorId);
+            const shaped = this.shape(e);
+            this.fire(workspaceId, "content.unpublished", shaped);
+            return shaped;
+        }
         return this.setStatus(workspaceId, id, "DRAFT", null, actorId);
+    }
+
+    /** Approve a published entry's pending draft (step 1 of the two-step Approve →
+     *  Publish promotion). Rejects an incomplete draft so Publish can't 400 later. */
+    async approveDraft(workspaceId: string, id: string, actorId?: string) {
+        const existing = await this.prisma.contentEntry.findFirst({
+            where: { id, workspaceId },
+            include: { contentType: { select: { id: true, name: true, apiId: true, schema: true } } },
+        });
+        if (!existing) throw new NotFoundException("Entry not found.");
+        if (existing.draftData == null) throw new BadRequestException("No draft changes to approve.");
+        validateEntryData(fieldsOf(existing.contentType.schema), (existing.draftData ?? {}) as Record<string, unknown>, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId) });
+        const e = await this.prisma.contentEntry.update({
+            where: { id },
+            data: { draftApproved: true },
+            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+        });
+        const draft = (e.draftData ?? {}) as { title?: string };
+        return { ...this.shape(e), data: e.draftData, title: draft.title ?? "Untitled" };
+    }
+
+    /** Discard a published entry's pending draft and revert to the live version. */
+    async discardDraft(workspaceId: string, id: string) {
+        const existing = await this.prisma.contentEntry.findFirst({
+            where: { id, workspaceId },
+            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+        });
+        if (!existing) throw new NotFoundException("Entry not found.");
+        if (existing.draftData == null) return this.shape(existing);
+        const e = await this.prisma.contentEntry.update({
+            where: { id },
+            data: { draftData: Prisma.DbNull, draftApproved: false },
+            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+        });
+        return this.shape(e);
     }
 
     async duplicate(workspaceId: string, userId: string, id: string) {

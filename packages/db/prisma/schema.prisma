@@ -321,6 +321,13 @@ model ContentEntry {
   contentTypeId String
   contentType   ContentType      @relation(fields: [contentTypeId], references: [id], onDelete: Cascade)
   data          Json
+  // Draft-over-published overlay: while an entry is live (status PUBLISHED), edits
+  // and autosave land in `draftData` instead of the live `data`, so the public API
+  // keeps serving the last-published copy. `draftApproved` gates the two-step
+  // Approve -> Publish promotion. Both stay null/false for never-published entries
+  // (which edit `data` directly). Publishing copies draftData -> data and clears these.
+  draftData     Json?
+  draftApproved Boolean          @default(false)
   status        ContentStatus    @default(DRAFT)
   locale        String           @default("en")
   slug          String?

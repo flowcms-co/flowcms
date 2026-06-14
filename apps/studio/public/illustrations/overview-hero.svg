@@ -1,0 +1,53 @@
+<svg width="340" height="200" viewBox="0 0 340 200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Workspace illustration">
+  <defs>
+    <linearGradient id="blob" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EDE9FB"/>
+      <stop offset="1" stop-color="#FDE7F3"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#F6F4FE"/>
+    </linearGradient>
+    <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6C5CE7" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#6C5CE7" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- soft brand blob -->
+  <path d="M250 18c34 6 78 30 80 74 2 46-38 66-74 80-44 17-92 18-120-12-26-28-18-74 8-104 28-32 70-44 106-38z" fill="url(#blob)"/>
+
+  <!-- dashboard panel -->
+  <g transform="translate(56 44)">
+    <rect x="0" y="0" width="196" height="120" rx="16" fill="url(#panel)" stroke="#E6E2F6"/>
+    <rect x="16" y="16" width="60" height="9" rx="4.5" fill="#C9C2F0"/>
+    <rect x="16" y="32" width="36" height="7" rx="3.5" fill="#E2DEF4"/>
+    <!-- area chart -->
+    <path d="M16 96 L46 80 L74 86 L102 60 L130 66 L160 36 L180 44 L180 104 L16 104 Z" fill="url(#area)"/>
+    <path d="M16 96 L46 80 L74 86 L102 60 L130 66 L160 36 L180 44" fill="none" stroke="#6C5CE7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="160" cy="36" r="4.5" fill="#6C5CE7" stroke="#fff" stroke-width="2"/>
+  </g>
+
+  <!-- floating chips -->
+  <g transform="translate(20 60)">
+    <rect width="58" height="40" rx="12" fill="#fff" stroke="#EFEAFB"/>
+    <circle cx="20" cy="20" r="10" fill="#E7F8F1"/>
+    <path d="M16 20l3 3 6-6" stroke="#00B894" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="36" y="13" width="14" height="6" rx="3" fill="#D9F2E8"/>
+    <rect x="36" y="23" width="10" height="5" rx="2.5" fill="#E9F6F0"/>
+  </g>
+
+  <g transform="translate(258 118)">
+    <rect width="58" height="40" rx="12" fill="#fff" stroke="#FBE4F1"/>
+    <circle cx="20" cy="20" r="10" fill="#FCE4EC"/>
+    <path d="M20 14v12M14 20h12" stroke="#E91E63" stroke-width="2.2" stroke-linecap="round"/>
+    <rect x="36" y="13" width="14" height="6" rx="3" fill="#FAD6E6"/>
+    <rect x="36" y="23" width="10" height="5" rx="2.5" fill="#FDE7F0"/>
+  </g>
+
+  <!-- sparkles -->
+  <path d="M286 44l2.2 5.6 5.6 2.2-5.6 2.2L286 60l-2.2-5.6-5.6-2.2 5.6-2.2z" fill="#F59E0B"/>
+  <path d="M44 150l1.6 4 4 1.6-4 1.6L44 161l-1.6-4-4-1.6 4-1.6z" fill="#A29BFE"/>
+  <circle cx="300" cy="92" r="3" fill="#6C5CE7"/>
+  <circle cx="36" cy="40" r="2.5" fill="#E91E63"/>
+</svg>

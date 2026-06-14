@@ -6,6 +6,8 @@
  */
 export type PluginField = { key: string; label: string; type: "number" | "text" | "boolean"; default: string | number | boolean };
 
+import { entryToCanonicalContent } from "../content/canonical-content";
+
 export type HookCtx = { data: Record<string, unknown>; title: string; status?: string };
 
 export type BuiltinPlugin = {
@@ -18,8 +20,9 @@ export type BuiltinPlugin = {
     beforeSave?: (ctx: HookCtx, config: Record<string, unknown>) => Record<string, unknown> | void;
 };
 
-const stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-const wordCount = (html: unknown) => stripHtml(String(html ?? "")).split(/\s+/).filter(Boolean).length;
+// Canonical content across body + components + dynamic-zone sections, so word
+// count / reading time / excerpt reflect the whole page, not just `data.body`.
+const canonical = (ctx: HookCtx) => entryToCanonicalContent({ data: ctx.data, title: ctx.title });
 
 export const BUILTINS: BuiltinPlugin[] = [
     {
@@ -29,7 +32,7 @@ export const BUILTINS: BuiltinPlugin[] = [
         fields: [{ key: "wpm", label: "Words per minute", type: "number", default: 200 }],
         beforeSave: (ctx, cfg) => {
             const wpm = Number(cfg.wpm) || 200;
-            const words = wordCount(ctx.data.body);
+            const words = canonical(ctx).wordCount;
             return { readingTime: Math.max(1, Math.round(words / wpm)) };
         },
     },
@@ -37,7 +40,7 @@ export const BUILTINS: BuiltinPlugin[] = [
         key: "word-count",
         name: "Word count",
         description: "Stores the body word count on each entry (handy for editorial dashboards & length rules).",
-        beforeSave: (ctx) => ({ wordCount: wordCount(ctx.data.body) }),
+        beforeSave: (ctx) => ({ wordCount: canonical(ctx).wordCount }),
     },
     {
         key: "auto-excerpt",
@@ -47,7 +50,7 @@ export const BUILTINS: BuiltinPlugin[] = [
         beforeSave: (ctx, cfg) => {
             if (ctx.data.excerpt) return;
             const len = Number(cfg.length) || 160;
-            const text = stripHtml(String(ctx.data.body ?? ""));
+            const text = canonical(ctx).plainText;
             if (!text) return;
             return { excerpt: text.length > len ? `${text.slice(0, len).trimEnd()}…` : text };
         },

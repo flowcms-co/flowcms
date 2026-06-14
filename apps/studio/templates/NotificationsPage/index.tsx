@@ -172,7 +172,7 @@ const NotificationsPage = () => {
                                                 </span>
                                                 <div className="grow min-w-0">
                                                     <div className="text-title text-black dark:text-white">{n.title}</div>
-                                                    {n.body && <div className="mt-0.5 truncate text-caption-2 text-grey">{n.body}</div>}
+                                                    {n.body && <div className="mt-0.5 whitespace-pre-line text-caption-2 text-grey">{n.body}</div>}
                                                 </div>
                                                 <div className="flex shrink-0 items-center gap-3">
                                                     <span className="text-caption-2 text-grey">{relTime(n.createdAt)}</span>
