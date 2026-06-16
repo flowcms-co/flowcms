@@ -10,6 +10,7 @@ import { runAi, aiErrorMessage, useAiProviders } from "@/lib/useAi";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type PanelTab = "seo" | "ai" | "review" | "schema" | "versions";
 type EntryData = Record<string, unknown>;
@@ -344,7 +345,7 @@ const VersionsTab = ({ entryId, onReload }: { entryId: string; onReload: () => v
 
     const restore = async (versionId: string) => {
         if (restoring) return;
-        if (!window.confirm("Restore this version? The current content becomes a new version in history.")) return;
+        if (!(await confirm({ title: "Restore this version?", message: "The current content becomes a new version in history.", confirmLabel: "Restore" }))) return;
         setRestoring(versionId);
         try {
             await api(`/entries/${entryId}/versions/${versionId}/restore`, { method: "POST" });

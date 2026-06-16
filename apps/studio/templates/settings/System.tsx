@@ -7,6 +7,7 @@ import WhiteLabelCard from "@/templates/settings/WhiteLabelCard";
 import ApprovalsCard from "@/templates/settings/ApprovalsCard";
 import { api, ApiError } from "@/lib/api";
 import { clearWorkspaceCache, type Workspace } from "@/lib/useWorkspace";
+import { confirm } from "@/components/providers/ConfirmProvider";
 import { cn } from "@/lib/cn";
 
 /**
@@ -244,7 +245,14 @@ const UpdatesCard = () => {
 
     const startUpgrade = async () => {
         if (!info?.latest) return;
-        if (!window.confirm(`Upgrade to v${info.latest}?\n\nA full backup is taken first, and your site will briefly restart. If the new version fails to start, it rolls back automatically.`)) return;
+        if (
+            !(await confirm({
+                title: `Upgrade to v${info.latest}?`,
+                message: "A full backup is taken first, and your site will briefly restart. If the new version fails to start, it rolls back automatically.",
+                confirmLabel: `Upgrade to v${info.latest}`,
+            }))
+        )
+            return;
         setProgress({ status: "running", step: "starting" });
         try {
             await api("/system/upgrade", { method: "POST", body: JSON.stringify({ toVersion: info.latest }) });
@@ -255,7 +263,15 @@ const UpdatesCard = () => {
     };
 
     const restoreBackup = async (backupId: string) => {
-        if (!window.confirm("Restore the pre-upgrade backup?\n\nThis replaces the database and media with the snapshot taken just before the upgrade. Your site will briefly restart.")) return;
+        if (
+            !(await confirm({
+                title: "Restore the pre-upgrade backup?",
+                message: "This replaces the database and media with the snapshot taken just before the upgrade. Your site will briefly restart.",
+                confirmLabel: "Restore",
+                tone: "danger",
+            }))
+        )
+            return;
         setRestoring(true);
         try {
             await api(`/system/restore/${backupId}`, { method: "POST", body: JSON.stringify({ restoreEnv: false }) });
@@ -368,13 +384,21 @@ const BackupsCard = () => {
         }
     };
     const remove = async (id: string) => {
-        if (!window.confirm("Delete this backup? This can't be undone.")) return;
+        if (!(await confirm({ title: "Delete this backup?", message: "This can't be undone.", confirmLabel: "Delete", tone: "danger" }))) return;
         await api(`/system/backups/${id}`, { method: "DELETE" }).catch(() => undefined);
         void refresh();
     };
     const restore = async (b: BackupItem) => {
         const when = new Date(b.createdAt).toLocaleString();
-        if (!window.confirm(`Restore the backup from ${when}?\n\nThis REPLACES your current database and media with that snapshot. Anything created since then will be lost. This can't be undone, so take a fresh backup first if you're unsure.`)) return;
+        if (
+            !(await confirm({
+                title: `Restore the backup from ${when}?`,
+                message: "This REPLACES your current database and media with that snapshot. Anything created since then will be lost. This can't be undone, so take a fresh backup first if you're unsure.",
+                confirmLabel: "Restore",
+                tone: "danger",
+            }))
+        )
+            return;
         setRestoring(b.id);
         setErr(null);
         setNote(null);

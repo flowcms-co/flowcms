@@ -6,6 +6,7 @@ import Icon from "@/components/ui/Icon";
 import StatusPill, { type PillStatus } from "@/components/ui/StatusPill";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Version = { id: string; versionNumber: number; status: string; title: string; author: string | null; createdAt: string };
 
@@ -24,7 +25,7 @@ const VersionsModal = ({ entryId, title, onClose, onRestored }: { entryId: strin
 
     const restore = async (versionId: string) => {
         if (!entryId || restoring) return;
-        if (!window.confirm("Restore this version? The current content becomes a new version in the history.")) return;
+        if (!(await confirm({ title: "Restore this version?", message: "The current content becomes a new version in the history.", confirmLabel: "Restore" }))) return;
         setRestoring(versionId);
         try {
             await api(`/entries/${entryId}/versions/${versionId}/restore`, { method: "POST" });

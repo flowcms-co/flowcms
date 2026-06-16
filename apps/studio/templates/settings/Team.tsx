@@ -9,6 +9,7 @@ import Switch from "@/components/ui/Switch";
 import Select from "@/components/ui/Select";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type RoleOption = { id: string; key: string; name: string };
 type Member = {
@@ -157,7 +158,7 @@ const Team = () => {
     };
 
     const remove = async (m: Member) => {
-        if (!window.confirm(`Remove ${m.name || m.email} from the workspace?`)) return;
+        if (!(await confirm({ title: `Remove ${m.name || m.email} from the workspace?`, confirmLabel: "Remove", tone: "danger" }))) return;
         try {
             await api(`/users/${m.id}`, { method: "DELETE" });
             await load();

@@ -10,6 +10,7 @@ import GuideSteps from "@/components/ui/GuideSteps";
 import { api, ApiError } from "@/lib/api";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { PLAN_LABEL } from "@/lib/plans";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Provider = "slack" | "zapier";
 type Connector = {
@@ -154,7 +155,7 @@ const ConnectorsSection = () => {
     };
 
     const disconnect = async (c: Connector) => {
-        if (!window.confirm(`Disconnect ${META[c.provider].name}? The stored URL will be deleted.`)) return;
+        if (!(await confirm({ title: `Disconnect ${META[c.provider].name}?`, message: "The stored URL will be deleted.", confirmLabel: "Disconnect", tone: "danger" }))) return;
         setBusyId(c.id);
         try {
             await api(`/connectors/${c.id}`, { method: "DELETE" });

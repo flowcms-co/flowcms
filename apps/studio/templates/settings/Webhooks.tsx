@@ -7,6 +7,7 @@ import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { api, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Hook = { id: string; name: string; url: string; events: string[]; enabled: boolean; hasSecret: boolean; createdAt: string; deliveries: number };
 type Delivery = { id: string; event: string; statusCode: number | null; success: boolean; responseBody: string | null; attempt: number; createdAt: string };
@@ -81,7 +82,7 @@ const Webhooks = () => {
     };
 
     const remove = async (h: Hook) => {
-        if (!window.confirm(`Delete "${h.name}"?`)) return;
+        if (!(await confirm({ title: `Delete "${h.name}"?`, confirmLabel: "Delete", tone: "danger" }))) return;
         await api(`/webhooks/${h.id}`, { method: "DELETE" });
         await load();
     };

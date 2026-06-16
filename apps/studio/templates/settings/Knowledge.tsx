@@ -7,6 +7,7 @@ import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type KFile = {
     id: string;
@@ -167,7 +168,7 @@ const Knowledge = () => {
     };
 
     const remove = async (f: KFile) => {
-        if (!window.confirm(`Delete "${f.name}"?`)) return;
+        if (!(await confirm({ title: `Delete "${f.name}"?`, confirmLabel: "Delete", tone: "danger" }))) return;
         try {
             await api(`/knowledge/${f.id}`, { method: "DELETE" });
             await load();

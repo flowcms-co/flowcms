@@ -18,6 +18,7 @@ import {
 } from "@/mocks/schema";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 let idSeq = 0;
 // Globally-unique id. A plain counter ("nf-1") resets to 0 each page load, so a
@@ -156,7 +157,7 @@ const SchemaPage = () => {
     const deleteActive = async () => {
         if (!active) return;
         const noun = tab === "types" ? "content type" : "component";
-        if (!window.confirm(`Delete the "${active.name}" ${noun}?`)) return;
+        if (!(await confirm({ title: `Delete the "${active.name}" ${noun}?`, confirmLabel: "Delete", tone: "danger" }))) return;
         try {
             await api(`/content-types/${active.id}`, { method: "DELETE" });
             const next = collection.filter((t) => t.id !== active.id);

@@ -6,6 +6,7 @@ import { Dialog, Transition } from "@headlessui/react";
 import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Template = {
     id: string;
@@ -61,7 +62,7 @@ const Templates = () => {
     };
 
     const remove = async (t: Template) => {
-        if (!window.confirm(`Delete the “${t.name}” template?`)) return;
+        if (!(await confirm({ title: `Delete the “${t.name}” template?`, confirmLabel: "Delete", tone: "danger" }))) return;
         setBusyId(t.id);
         try {
             await api(`/page-templates/${t.id}`, { method: "DELETE" });

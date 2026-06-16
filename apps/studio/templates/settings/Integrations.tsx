@@ -8,6 +8,7 @@ import BrandIcon from "@/components/ui/BrandIcon";
 import GuideSteps from "@/components/ui/GuideSteps";
 import { api, ApiError } from "@/lib/api";
 import { aiProviderGuide } from "@/lib/integrationGuides";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Provider = {
     id: string;
@@ -153,7 +154,7 @@ const Integrations = () => {
     };
 
     const disconnect = async (i: Integration) => {
-        if (!window.confirm(`Disconnect ${i.providerName}? The stored key will be deleted.`)) return;
+        if (!(await confirm({ title: `Disconnect ${i.providerName}?`, message: "The stored key will be deleted.", confirmLabel: "Disconnect", tone: "danger" }))) return;
         setBusyId(i.id);
         try {
             await api(`/integrations/${i.id}`, { method: "DELETE" });

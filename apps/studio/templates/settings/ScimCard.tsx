@@ -5,6 +5,7 @@ import Card from "@/components/ui/Card";
 import UpgradeLock from "@/components/ui/UpgradeLock";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { api, ApiError, API_ORIGIN } from "@/lib/api";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type ScimToken = { id: string; name: string; prefix: string; lastUsedAt: string | null; createdAt: string };
 type Minted = { token: string; id: string; name: string; prefix: string };
@@ -53,7 +54,7 @@ const ScimCard = () => {
     };
 
     const revoke = async (id: string) => {
-        if (!window.confirm("Revoke this SCIM token? The IdP using it will stop being able to provision users.")) return;
+        if (!(await confirm({ title: "Revoke this SCIM token?", message: "The IdP using it will stop being able to provision users.", confirmLabel: "Revoke", tone: "danger" }))) return;
         try {
             await api(`/ee/scim/tokens/${id}`, { method: "DELETE" });
             load();

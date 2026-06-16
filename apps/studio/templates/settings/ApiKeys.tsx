@@ -8,6 +8,7 @@ import Select from "@/components/ui/Select";
 import { api, ApiError } from "@/lib/api";
 import { useDisplayBase } from "@/lib/useDisplayBase";
 import { formatDate } from "@/lib/format";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Token = {
     id: string;
@@ -76,7 +77,7 @@ const ApiKeys = () => {
     };
 
     const revoke = async (t: Token) => {
-        if (!window.confirm(`Revoke "${t.name}"? Any site using it will stop working.`)) return;
+        if (!(await confirm({ title: `Revoke "${t.name}"?`, message: "Any site using it will stop working.", confirmLabel: "Revoke", tone: "danger" }))) return;
         await api(`/api-tokens/${t.id}`, { method: "DELETE" });
         await load();
     };

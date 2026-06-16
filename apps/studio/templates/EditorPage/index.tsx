@@ -16,6 +16,7 @@ import { api, ApiError } from "@/lib/api";
 import { useRevealBatch } from "@/lib/useReveal";
 import { cn } from "@/lib/cn";
 import type { SchemaField } from "@/mocks/schema";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type ApiEntry = {
     id: string;
@@ -345,7 +346,7 @@ const EditorPage = () => {
     /** Throw away staged edits and revert the editor to the live version. */
     const discardDraft = async () => {
         if (!entryId) return;
-        if (!window.confirm("Discard your unpublished changes and revert to the live version?")) return;
+        if (!(await confirm({ title: "Discard your unpublished changes?", message: "This reverts to the live version.", confirmLabel: "Discard", tone: "danger" }))) return;
         try {
             await api(`/entries/${entryId}/discard-draft`, { method: "POST" });
             setHasDraft(false);

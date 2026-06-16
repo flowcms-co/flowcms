@@ -6,6 +6,7 @@ import UpgradeLock from "@/components/ui/UpgradeLock";
 import Icon from "@/components/ui/Icon";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { api, ApiError } from "@/lib/api";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Policy = { ipAllowlist: string[]; sessionMaxHours: number | null; sessionIdleMinutes: number | null };
 
@@ -59,7 +60,7 @@ const IpPolicyCard = () => {
     };
 
     const revoke = async () => {
-        if (!window.confirm("Sign out every member from all devices? Everyone (including you) will need to sign in again.")) return;
+        if (!(await confirm({ title: "Sign out every member from all devices?", message: "Everyone (including you) will need to sign in again.", confirmLabel: "Sign out", tone: "danger" }))) return;
         setRevoking(true);
         try {
             const r = await api<{ revoked: number }>("/ee/ip-policies/revoke-sessions", { method: "POST" });

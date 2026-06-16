@@ -7,6 +7,7 @@ import Icon from "@/components/ui/Icon";
 import Select from "@/components/ui/Select";
 import { api, ApiError } from "@/lib/api";
 import { helpUrl, GUIDES } from "@/lib/help";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Status = {
     pagespeed: { connected: boolean };
@@ -62,7 +63,7 @@ const SeoConnectors = () => {
     };
 
     const disconnect = async (p: ConnectorKey, name: string) => {
-        if (!window.confirm(`Disconnect ${name}?`)) return;
+        if (!(await confirm({ title: `Disconnect ${name}?`, confirmLabel: "Disconnect", tone: "danger" }))) return;
         await api(`/seo/connect/${p}`, { method: "DELETE" });
         await load();
     };

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Status = { connected: boolean; host?: string; port?: number; user?: string; from?: string };
 type Template = { key: string; name: string; subject: string; html: string; enabled: boolean; customized: boolean };
@@ -59,7 +60,7 @@ const EmailSettings = () => {
     };
 
     const disconnect = async () => {
-        if (!window.confirm("Disconnect SMTP? Outgoing email will stop.")) return;
+        if (!(await confirm({ title: "Disconnect SMTP?", message: "Outgoing email will stop.", confirmLabel: "Disconnect", tone: "danger" }))) return;
         await api("/mail", { method: "DELETE" });
         await load();
     };

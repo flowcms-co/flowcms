@@ -21,6 +21,7 @@ import CountUp from "@/components/motion/CountUp";
 import { useWorkspace, localeName } from "@/lib/useWorkspace";
 import { cn } from "@/lib/cn";
 import { useScrollResetOnChange } from "@/lib/useScroll";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 const PAGE_SIZE = 15;
 
@@ -184,7 +185,7 @@ const ContentTable = () => {
         await load();
     };
     const remove = async (id: string) => {
-        if (!window.confirm("Delete this content? This can't be undone.")) return;
+        if (!(await confirm({ title: "Delete this content?", message: "This can't be undone.", confirmLabel: "Delete", tone: "danger" }))) return;
         await api(`/entries/${id}`, { method: "DELETE" });
         setSelected((prev) => {
             const next = new Set(prev);
@@ -196,7 +197,7 @@ const ContentTable = () => {
     const bulkAction = async (action: BulkAction) => {
         const ids = [...selected];
         if (!ids.length) return;
-        if (action === "delete" && !window.confirm(`Delete ${ids.length} item${ids.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+        if (action === "delete" && !(await confirm({ title: `Delete ${ids.length} item${ids.length === 1 ? "" : "s"}?`, message: "This can't be undone.", confirmLabel: "Delete", tone: "danger" }))) return;
         setBulkBusy(true);
         try {
             await enqueue(`/entries/bulk/${action}`, { ids });

@@ -11,6 +11,7 @@ import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
 import Sections, { findSections } from "./Sections";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",
@@ -247,8 +248,8 @@ const PreviewClient = () => {
         setSaveErr(null);
         setEditing(false);
     };
-    const stopEdit = () => {
-        if (dirty && !window.confirm("Discard your unsaved changes?")) return;
+    const stopEdit = async () => {
+        if (dirty && !(await confirm({ title: "Discard your unsaved changes?", confirmLabel: "Discard", tone: "danger" }))) return;
         if (siteEditing) {
             if (dirty) postToSite({ type: "revert" });
             postToSite({ type: "edit", editing: false });

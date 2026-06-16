@@ -9,6 +9,7 @@ import GuideSteps from "@/components/ui/GuideSteps";
 import { api, ApiError } from "@/lib/api";
 import { ANALYTICS_GUIDES } from "@/lib/integrationGuides";
 import { helpUrl, GUIDES } from "@/lib/help";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Source = { connected: boolean; status: string; lastSync: string | null; config: { siteUrl?: string; propertyId?: string; lastError?: string } | null };
 type Status = { gsc: Source; ga4: Source };
@@ -107,7 +108,7 @@ const AnalyticsConnect = () => {
     };
 
     const disconnect = async (key: "gsc" | "ga4", name: string) => {
-        if (!window.confirm(`Disconnect ${name}?`)) return;
+        if (!(await confirm({ title: `Disconnect ${name}?`, confirmLabel: "Disconnect", tone: "danger" }))) return;
         await api(`/analytics/${key}`, { method: "DELETE" });
         await load();
     };

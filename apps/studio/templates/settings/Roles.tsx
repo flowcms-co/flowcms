@@ -10,6 +10,7 @@ import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import UpgradeLock from "@/components/ui/UpgradeLock";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 type RoleRow = {
     id: string;
@@ -168,7 +169,7 @@ const Roles = () => {
     };
 
     const remove = async (r: RoleRow) => {
-        if (!window.confirm(`Delete the "${r.name}" role?`)) return;
+        if (!(await confirm({ title: `Delete the "${r.name}" role?`, confirmLabel: "Delete", tone: "danger" }))) return;
         try {
             await api(`/roles/${r.id}`, { method: "DELETE" });
             await load();
