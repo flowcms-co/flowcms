@@ -119,27 +119,18 @@ const Sidebar = ({
                     "flex h-24 shrink-0 items-center",
                     showSwitcher
                         ? collapsed
-                            ? "flex-col justify-center gap-3 px-3"
-                            : "gap-2 px-4"
+                            ? "justify-center px-3"
+                            : "px-2.5"
                         : collapsed
                           ? "justify-center px-3"
                           : "px-5",
                 )}
             >
                 {showSwitcher ? (
-                    <>
-                        <button
-                            type="button"
-                            onClick={onToggleCollapse}
-                            aria-label="Toggle sidebar"
-                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
-                        >
-                            <Icon className="h-5 w-5 fill-current" name="menu" />
-                        </button>
-                        <div className={cn(collapsed ? "" : "min-w-0 flex-1")}>
-                            <WorkspaceSwitcher collapsed={collapsed} />
-                        </div>
-                    </>
+                    // The brand icon doubles as the collapse toggle (no separate hamburger).
+                    <div className={cn(collapsed ? "" : "min-w-0 flex-1")}>
+                        <WorkspaceSwitcher collapsed={collapsed} onToggleCollapse={onToggleCollapse} />
+                    </div>
                 ) : (
                     <Logo iconOnly={collapsed} compact onIconClick={onToggleCollapse} onNavigate={onNavigate} />
                 )}
