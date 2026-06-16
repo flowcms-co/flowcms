@@ -172,6 +172,195 @@
         post({ type: "mapped", count: targets().length });
     }
 
+    // ── Visual mapper: value-match suggestions + point-and-click pick ──────────
+    // The studio sends the entry's field values; we find each on the page and
+    // return a resilient selector + confidence, so a human only confirms/fixes.
+
+    function depth(el) {
+        var d = 0;
+        while ((el = el.parentElement)) d++;
+        return d;
+    }
+    function cssEsc(s) {
+        return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+    }
+    function fileName(u) {
+        return String(u).split("?")[0].split("#")[0].split("/").pop();
+    }
+
+    /** A short, id-anchored CSS selector for an element, plus its index among
+     *  matches (0 when unique) so a list item still resolves precisely. */
+    function selectorFor(el) {
+        if (el.id) return { selector: "#" + cssEsc(el.id), nth: 0 };
+        var parts = [];
+        var node = el;
+        while (node && node.nodeType === 1 && node !== document.body) {
+            if (node.id) {
+                parts.unshift("#" + cssEsc(node.id));
+                break;
+            }
+            var tag = node.tagName.toLowerCase();
+            var idx = 1,
+                sib = node;
+            while ((sib = sib.previousElementSibling)) if (sib.tagName === node.tagName) idx++;
+            parts.unshift(tag + ":nth-of-type(" + idx + ")");
+            node = node.parentElement;
+        }
+        var selector = parts.join(" > ");
+        var nth = 0;
+        try {
+            var ms = document.querySelectorAll(selector);
+            for (var i = 0; i < ms.length; i++)
+                if (ms[i] === el) {
+                    nth = i;
+                    break;
+                }
+        } catch (e) {
+            /* unparseable selector: leave nth 0 */
+        }
+        return { selector: selector, nth: nth };
+    }
+
+    function suggestOne(f, els) {
+        var val = f.value == null ? "" : String(f.value).trim();
+        if (!val) return { fieldPath: f.path, confidence: 0 };
+        // URL fields: match a link's href (never an image / background).
+        if (f.kind === "url") {
+            var ufn = fileName(val);
+            for (var u = 0; u < els.length; u++) {
+                var href = els[u].getAttribute && els[u].getAttribute("href");
+                if (href && (href === val || (ufn && fileName(href) === ufn))) {
+                    var su = selectorFor(els[u]);
+                    return { fieldPath: f.path, selector: su.selector, nth: su.nth, mode: "attr:href", value: val, confidence: 0.85 };
+                }
+            }
+            return { fieldPath: f.path, confidence: 0 };
+        }
+        // Media fields: match an image src or a CSS background image. Guard the
+        // empty file name (a trailing-slash URL) so it can't match everything.
+        if (f.kind === "media") {
+            var mfn = fileName(val);
+            for (var i = 0; i < els.length; i++) {
+                var el = els[i];
+                var src = el.getAttribute && (el.getAttribute("src") || el.getAttribute("data-src"));
+                if (src && (src === val || (mfn && fileName(src) === mfn))) {
+                    var s = selectorFor(el);
+                    return { fieldPath: f.path, selector: s.selector, nth: s.nth, mode: "attr:src", value: val, confidence: 0.9 };
+                }
+                var bg = el.style && el.style.backgroundImage;
+                if (bg && bg !== "none" && (bg.indexOf(val) >= 0 || (mfn && bg.indexOf(mfn) >= 0))) {
+                    var s3 = selectorFor(el);
+                    return { fieldPath: f.path, selector: s3.selector, nth: s3.nth, mode: "style:bg", value: val, confidence: 0.85 };
+                }
+            }
+            return { fieldPath: f.path, confidence: 0 };
+        }
+        // Text: the deepest element whose text equals the value (exact), else a
+        // long-value "contains" fallback (rich text rendered with extra markup).
+        var exact = [],
+            contains = [];
+        for (var j = 0; j < els.length; j++) {
+            var t = (els[j].textContent || "").trim();
+            if (!t) continue;
+            if (t === val) exact.push(els[j]);
+            else if (val.length >= 40 && t.indexOf(val) >= 0) contains.push(els[j]);
+        }
+        function deepest(list) {
+            var best = null,
+                bd = -1;
+            for (var k = 0; k < list.length; k++) {
+                var dd = depth(list[k]);
+                if (dd > bd) {
+                    bd = dd;
+                    best = list[k];
+                }
+            }
+            return best;
+        }
+        if (exact.length) {
+            // Drop ancestors that only match because a descendant does (e.g. a <li>
+            // wrapping the <h3> that holds the text), so nesting isn't false ambiguity.
+            var leaf = exact.filter(function (e) {
+                return !exact.some(function (o) {
+                    return o !== e && e.contains(o);
+                });
+            });
+            var se = selectorFor(deepest(leaf));
+            return { fieldPath: f.path, selector: se.selector, nth: se.nth, mode: f.kind === "rich" ? "rich" : "text", value: val, confidence: leaf.length === 1 ? 0.95 : 0.6, ambiguous: leaf.length > 1 };
+        }
+        if (contains.length) {
+            var sc = selectorFor(deepest(contains));
+            return { fieldPath: f.path, selector: sc.selector, nth: sc.nth, mode: "rich", value: val, confidence: 0.4 };
+        }
+        return { fieldPath: f.path, confidence: 0 };
+    }
+    function suggestAll(fields) {
+        var els = Array.prototype.slice.call(document.body.querySelectorAll("*"));
+        return (fields || []).map(function (f) {
+            return suggestOne(f, els);
+        });
+    }
+
+    // Point-and-click: studio asks to bind one field; we highlight on hover and
+    // capture the next click, returning its selector.
+    var picking = null;
+    var hoverEl = null;
+    function clearHover() {
+        if (hoverEl && hoverEl.classList) hoverEl.classList.remove("flowcms-hover");
+        hoverEl = null;
+    }
+    function pickModeFor(el) {
+        var tag = el.tagName ? el.tagName.toLowerCase() : "";
+        if (tag === "img") return "attr:src";
+        if (tag === "a") return "attr:href";
+        if (el.style && el.style.backgroundImage && el.style.backgroundImage !== "none") return "style:bg";
+        return "text";
+    }
+    function onHover(e) {
+        if (!picking) return;
+        clearHover();
+        hoverEl = e.target;
+        if (hoverEl && hoverEl.classList) hoverEl.classList.add("flowcms-hover");
+    }
+    function onPick(e) {
+        if (!picking) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var el = e.target;
+        var mode = pickModeFor(el);
+        var sel = selectorFor(el);
+        post({ type: "picked", fieldPath: picking, selector: sel.selector, nth: sel.nth, mode: mode, value: readValue(el, mode) });
+        stopPick();
+    }
+    function startPick(fieldPath) {
+        picking = fieldPath;
+        document.body.classList.add("flowcms-picking");
+    }
+    function stopPick() {
+        picking = null;
+        clearHover();
+        document.body.classList.remove("flowcms-picking");
+    }
+    document.addEventListener("mouseover", onHover, true);
+    document.addEventListener("click", onPick, true);
+
+    /** Report which current bindings no longer resolve (markup changed) so the
+     *  studio can flag them for a quick re-map. */
+    function probe() {
+        var unresolved = [];
+        for (var i = 0; i < mapBindings.length; i++) {
+            var b = mapBindings[i];
+            var ok = false;
+            try {
+                ok = !!document.querySelectorAll(b.selector)[b.nth || 0];
+            } catch (e) {
+                ok = false;
+            }
+            if (!ok) unresolved.push(b.fieldPath);
+        }
+        post({ type: "probe-result", unresolved: unresolved });
+    }
+
     window.addEventListener("message", function (e) {
         if (parentOrigin !== "*" && e.origin !== parentOrigin) return;
         var d = e.data;
@@ -182,6 +371,22 @@
         }
         if (d.type === "map") {
             applyMap(d.bindings);
+            return;
+        }
+        if (d.type === "suggest") {
+            post({ type: "suggestions", items: suggestAll(d.fields) });
+            return;
+        }
+        if (d.type === "pick") {
+            startPick(d.fieldPath);
+            return;
+        }
+        if (d.type === "pickCancel") {
+            stopPick();
+            return;
+        }
+        if (d.type === "probe") {
+            probe();
             return;
         }
         if (d.type === "baseline") {
@@ -220,7 +425,9 @@
     // Minimal edit-mode outline; override `.flowcms-edit-on` in your own CSS to taste.
     var style = document.createElement("style");
     style.textContent =
-        ".flowcms-edit-on{outline:2px dashed rgba(108,92,231,.5);outline-offset:4px;border-radius:4px;cursor:text}.flowcms-edit-on:focus{outline-color:rgba(108,92,231,1)}";
+        ".flowcms-edit-on{outline:2px dashed rgba(108,92,231,.5);outline-offset:4px;border-radius:4px;cursor:text}.flowcms-edit-on:focus{outline-color:rgba(108,92,231,1)}" +
+        ".flowcms-picking,.flowcms-picking *{cursor:crosshair !important}" +
+        ".flowcms-hover{outline:2px solid rgba(108,92,231,.95) !important;outline-offset:2px;background:rgba(108,92,231,.10) !important}";
     document.head.appendChild(style);
 
     baseline = snapshot();

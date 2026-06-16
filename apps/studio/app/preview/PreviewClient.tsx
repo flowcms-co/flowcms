@@ -11,6 +11,7 @@ import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
 import Sections, { findSections } from "./Sections";
+import Mapper from "./Mapper";
 import { confirm } from "@/components/providers/ConfirmProvider";
 
 const STATUS_PILL: Record<string, PillStatus> = {
@@ -143,6 +144,8 @@ const PreviewClient = () => {
     // CMS-stored field→DOM map for this entry's type + URL. Sent to the bridge so
     // the customer site needs no per-field attributes (M1 of assisted mapping).
     const [bindings, setBindings] = useState<Binding[]>([]);
+    // Visual mapper drawer (M2): build the selector map by auto-suggest + clicks.
+    const [mapping, setMapping] = useState(false);
 
     useEffect(() => {
         if (!id) return;
@@ -357,7 +360,7 @@ const PreviewClient = () => {
     };
 
     return (
-        <div className="flex h-dvh flex-col overflow-hidden bg-lavender-mist/40 dark:bg-dark-2">
+        <div className="relative flex h-dvh flex-col overflow-hidden bg-lavender-mist/40 dark:bg-dark-2">
             {/* Preview toolbar */}
             <header className="z-10 flex h-14 shrink-0 items-center gap-3 border-b border-grey-light bg-surface/90 px-4 backdrop-blur-md dark:border-grey-light/10 dark:bg-dark-1/90">
                 <span className="inline-flex items-center gap-2 text-title font-semibold text-black dark:text-white">
@@ -412,8 +415,21 @@ const PreviewClient = () => {
                             <Icon className="h-4 w-4 fill-current" name="external" />
                         </a>
                     )}
+                    {/* Field mapper (Pro): set up which CMS field edits which element. */}
+                    {entry && canLiveEdit && mode === "site" && !editing && (
+                        <button
+                            type="button"
+                            onClick={() => setMapping((m) => !m)}
+                            className={cn("btn-md", mapping ? "btn-primary" : "btn-secondary")}
+                            title="Map fields to your page"
+                        >
+                            <Icon className={cn("h-4 w-4", mapping ? "fill-white" : "fill-current")} name="grid" />
+                            <span className="hidden sm:inline">{mapping ? "Close mapper" : "Map fields"}</span>
+                        </button>
+                    )}
                     {/* Visual / live editor (Pro). Edits the content render in place. */}
                     {entry &&
+                        !mapping &&
                         (canLiveEdit ? (
                             editing ? (
                                 <button type="button" onClick={stopEdit} className="btn-secondary btn-md">
@@ -421,7 +437,7 @@ const PreviewClient = () => {
                                     <span className="hidden sm:inline">Done</span>
                                 </button>
                             ) : (
-                                <button type="button" onClick={startEdit} className="btn-primary btn-md">
+                                <button type="button" onClick={() => { setMapping(false); startEdit(); }} className="btn-primary btn-md">
                                     <Icon className="h-4 w-4 fill-white" name="edit" />
                                     <span className="hidden sm:inline">Edit page</span>
                                 </button>
@@ -593,6 +609,19 @@ const PreviewClient = () => {
                     </div>
                 </div>
             )}
+
+            {/* Visual field mapper drawer (Pro). Auto-suggests + point-and-click to
+                build the selector map; saving refreshes the bindings the bridge uses. */}
+            <Mapper
+                open={mapping && mode === "site"}
+                onClose={() => setMapping(false)}
+                ready={siteEditable}
+                post={postToSite}
+                contentTypeId={type?.id}
+                entryData={entry?.data ?? null}
+                initialBindings={bindings}
+                onSaved={(b) => setBindings(b)}
+            />
         </div>
     );
 };
