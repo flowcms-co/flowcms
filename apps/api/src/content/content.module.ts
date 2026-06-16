@@ -15,6 +15,8 @@ import { ContentSchedulerService } from "./content-scheduler.service";
 import { GraphqlController } from "./graphql/graphql.controller";
 import { AgentController } from "./agent.controller";
 import { StrapiController } from "./strapi.controller";
+import { SelectorMapsController } from "./selector-maps.controller";
+import { SelectorMapsService } from "./selector-maps.service";
 import { ApiTokenGuard } from "./api-token.guard";
 import { AgentTokenGuard } from "./agent-token.guard";
 import { ContentJobHandlers } from "./content-job.handlers";
@@ -29,6 +31,7 @@ import { ContentJobHandlers } from "./content-job.handlers";
         GraphqlController,
         AgentController,
         StrapiController,
+        SelectorMapsController,
     ],
     providers: [
         ContentTypesService,
@@ -36,6 +39,7 @@ import { ContentJobHandlers } from "./content-job.handlers";
         ApiTokensService,
         PublicQueryService,
         ContentSchedulerService,
+        SelectorMapsService,
         ApiTokenGuard,
         AgentTokenGuard,
         ContentJobHandlers,

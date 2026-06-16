@@ -55,6 +55,25 @@ type ApiType = {
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
+/** One field→DOM binding from a CMS selector map. */
+type Binding = { fieldPath: string; selector: string; mode: string; nth?: number };
+
+/** Set a dot/array path on an object, creating intermediate objects/arrays.
+ *  e.g. setPath(o, "mainContent.contentList.0.title", "x"). Numeric segments
+ *  become array indices so the saved shape matches the source JSON. */
+const setPath = (obj: Record<string, unknown>, path: string, value: unknown) => {
+    const parts = path.split(".");
+    let cur: Record<string, unknown> = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const key = parts[i];
+        const nextIsIndex = /^\d+$/.test(parts[i + 1]);
+        const here = cur[key];
+        if (here == null || typeof here !== "object") cur[key] = nextIsIndex ? [] : {};
+        cur = cur[key] as Record<string, unknown>;
+    }
+    cur[parts[parts.length - 1]] = value;
+};
+
 /** The site path segments for an entry, honouring the content type's route prefix
  *  (e.g. ["services", "water-damage"]); empty for a homepage type. */
 const pathSegments = (e: Entry, type?: ApiType | null): string[] => {
@@ -121,6 +140,9 @@ const PreviewClient = () => {
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const siteFieldsRef = useRef<Record<string, string>>({});
     const [siteEditable, setSiteEditable] = useState(false);
+    // CMS-stored field→DOM map for this entry's type + URL. Sent to the bridge so
+    // the customer site needs no per-field attributes (M1 of assisted mapping).
+    const [bindings, setBindings] = useState<Binding[]>([]);
 
     useEffect(() => {
         if (!id) return;
@@ -152,6 +174,21 @@ const PreviewClient = () => {
             off = true;
         };
     }, [entry?.contentType?.id, entry?.contentType?.name]);
+
+    // Load the selector map for this entry's type + site path (exact > pattern >
+    // type default). Sent to the bridge once the site signals it's ready.
+    useEffect(() => {
+        const ctId = type?.id;
+        if (!ctId || !entry) return;
+        let off = false;
+        const url = "/" + pathSegments(entry, type).join("/");
+        api<{ bindings?: Binding[] }>(`/selector-maps/resolve?contentTypeId=${encodeURIComponent(ctId)}&url=${encodeURIComponent(url)}`)
+            .then((r) => !off && setBindings(Array.isArray(r.bindings) ? r.bindings : []))
+            .catch(() => !off && setBindings([]));
+        return () => {
+            off = true;
+        };
+    }, [type, entry]);
 
     const shownError = error ?? (!id ? "No entry to preview." : null);
     const previewUrl = ws?.previewUrl ?? "";
@@ -185,6 +222,13 @@ const PreviewClient = () => {
         }
         win.postMessage({ source: "flowcms-studio", ...msg }, origin);
     };
+
+    // Push the selector map to the bridge once the site is ready (and again if the
+    // map or target changes). The bridge applies it idempotently.
+    useEffect(() => {
+        if (siteEditable && mode === "site" && bindings.length) postToSite({ type: "map", bindings });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [siteEditable, bindings, target, mode]);
 
     // Listen to the edit-aware site iframe: `ready` unlocks in-place editing;
     // `dirty`/`fields` stream the edited fields back so Save persists them. Fields
@@ -272,29 +316,34 @@ const PreviewClient = () => {
                   ...(summaryRef.current ? { summary: summaryRef.current.textContent ?? "" } : {}),
                   ...(articleRef.current ? { body: articleRef.current.innerHTML ?? "" } : {}),
               };
-        // `title` maps to the entry title; everything else is entry data. `slug` is
-        // a structural column (the live URL) — never rewrite it from an in-place edit.
-        const data: Record<string, unknown> = {};
+        // `title` maps to the entry title; everything else writes into entry data by
+        // its field path (nested keys like "heroBanner.title" deep-set into data).
+        // `slug` is a structural column (the live URL) — never rewrite it in place.
+        // The API shallow-merges `data` at the top level, so we send the FULL
+        // reconstructed object (a clone of the current data with edits applied),
+        // which is the only safe way to change a nested field without dropping its
+        // siblings.
+        const nextData: Record<string, unknown> = JSON.parse(JSON.stringify(entry?.data ?? {}));
         const patch: Record<string, unknown> = {};
         let newTitle = "";
+        let changedData = false;
         for (const [k, v] of Object.entries(src)) {
             if (typeof v !== "string") continue;
+            if (k === "slug") continue;
             if (k === "title") {
                 newTitle = v.trim();
                 if (newTitle) patch.title = newTitle; // never blank out the title
-            } else if (k === "slug") {
-                continue;
-            } else {
-                data[k] = v;
             }
+            setPath(nextData, k, v);
+            changedData = true;
         }
-        if (Object.keys(data).length) patch.data = data;
+        if (changedData) patch.data = nextData;
         if (!Object.keys(patch).length) return;
         setSaving(true);
         setSaveErr(null);
         try {
             await api(`/entries/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
-            setEntry((e) => (e ? { ...e, title: (patch.title as string) ?? e.title, data: { ...(e.data ?? {}), ...data } } : e));
+            setEntry((e) => (e ? { ...e, title: (patch.title as string) ?? e.title, data: nextData } : e));
             // Reset the iframe's revert-baseline to the saved copy.
             if (siteEditing) postToSite({ type: "baseline", fields: { ...src, ...(newTitle ? { title: newTitle } : {}) } });
             setDirty(false);

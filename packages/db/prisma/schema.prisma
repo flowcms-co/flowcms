@@ -74,6 +74,7 @@ model Workspace {
   pageAudits      PageAudit[]
   aiQuotaDaily    AiQuotaDaily[]
   jobs            Job[]
+  selectorMaps    SelectorMap[]
 }
 
 model User {
@@ -301,8 +302,30 @@ model ContentType {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
   entries         ContentEntry[]
+  selectorMaps    SelectorMap[]
 
   @@unique([workspaceId, apiId])
+}
+
+// Live-edit field→DOM mapping for a content type, stored CMS-side so the
+// customer's frontend needs only the universal bridge script (no per-field
+// attributes). `bindings` is a JSON array of { fieldPath, selector, mode, nth? }
+// where fieldPath is the dot/array path that doubles as the content-model field
+// key (e.g. "heroBanner.title", "mainContent.contentList.0.title"). One map per
+// (contentType, urlPattern); urlPattern "" is the type-wide default.
+model SelectorMap {
+  id            String      @id @default(cuid())
+  workspaceId   String
+  workspace     Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentTypeId String
+  contentType   ContentType @relation(fields: [contentTypeId], references: [id], onDelete: Cascade)
+  urlPattern    String      @default("")
+  bindings      Json        @default("[]")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([contentTypeId, urlPattern])
+  @@index([workspaceId])
 }
 
 enum ContentStatus {

@@ -10,20 +10,17 @@
  * "Preview URL" in Flow CMS → Settings → System) to enable in-place editing
  * inside the Flow CMS live preview, the same way the bundled Northbound demo works.
  *
- * 1. Add the script:           <script src="/flowcms-live-edit.js" defer></script>
- * 2. Mark editable regions with the matching content-model field name:
+ * Two ways to mark what's editable, used together:
  *
+ * 1. A selector map pushed by the studio (recommended; no markup changes). Flow CMS
+ *    stores a field→element map and sends it to this script, so you only add the
+ *    one <script> line, like an analytics tag. Nested fields use dot/array paths
+ *    (e.g. "heroBanner.title", "mainContent.contentList.0.title").
+ *
+ * 2. data-flowcms-field attributes in your own markup (explicit, backward compatible):
  *      <h1 data-flowcms-field="title">{{ title }}</h1>
- *      <p  data-flowcms-field="summary">{{ summary }}</p>
  *      <div data-flowcms-field="body" data-flowcms-rich>{{ body }}</div>
  *
- *    - data-flowcms-field="<name>"  the content-model field name. Use "title" for the
- *                                entry title; any other name writes to entry data.
- *    - data-flowcms-rich            keep rich HTML for this field (e.g. a body). Omit
- *                                it for single-line text (edited plaintext-only).
- *
- * When an editor clicks "Edit page" in the studio, the marked elements become
- * editable; edits stream back and "Save changes" persists them to the entry.
  * The script is inert unless the page is embedded in the Flow CMS preview, so it
  * is safe to ship to production.
  */
@@ -40,26 +37,89 @@
         /* keep * */
     }
 
-    function nodes() {
-        return Array.prototype.slice.call(document.querySelectorAll("[data-flowcms-field]"));
+    // ── Target model ──────────────────────────────────────────────────────────
+    // A target is one editable binding: { key, el, mode }.
+    //   key  = field path (e.g. "heroBanner.title"); doubles as the content key.
+    //   mode = "text" | "rich" | "attr:src" | "attr:alt" | "attr:href" | "style:bg".
+    // Targets come from two sources, merged: the studio's selector map (priority)
+    // and any data-flowcms-field attributes already on the page.
+
+    var mapBindings = []; // last selector map received from the studio
+
+    function attrTargets() {
+        return Array.prototype.slice
+            .call(document.querySelectorAll("[data-flowcms-field]"))
+            .map(function (el) {
+                return { key: el.getAttribute("data-flowcms-field") || "", el: el, mode: el.hasAttribute("data-flowcms-rich") ? "rich" : "text" };
+            })
+            .filter(function (t) {
+                return t.key;
+            });
     }
-    function fieldName(el) {
-        return el.getAttribute("data-flowcms-field") || "";
+
+    function mapTargets() {
+        var out = [];
+        for (var i = 0; i < mapBindings.length; i++) {
+            var b = mapBindings[i];
+            if (!b || !b.selector || !b.fieldPath) continue;
+            var list;
+            try {
+                list = document.querySelectorAll(b.selector);
+            } catch (e) {
+                continue; // a bad selector never breaks the rest of the map
+            }
+            var el = list[b.nth || 0];
+            if (!el) continue;
+            out.push({ key: b.fieldPath, el: el, mode: b.mode || "text" });
+        }
+        return out;
     }
-    function isRich(el) {
-        return el.hasAttribute("data-flowcms-rich");
+
+    function targets() {
+        // Map bindings win; attribute targets fill in keys the map doesn't cover.
+        var ts = mapTargets();
+        var seen = {};
+        ts.forEach(function (t) {
+            seen[t.key] = true;
+        });
+        attrTargets().forEach(function (t) {
+            if (!seen[t.key]) {
+                seen[t.key] = true;
+                ts.push(t);
+            }
+        });
+        return ts;
     }
-    function readValue(el) {
-        return isRich(el) ? el.innerHTML : el.textContent || "";
+
+    function isInline(mode) {
+        return mode === "text" || mode === "rich";
     }
-    function writeValue(el, v) {
-        if (isRich(el)) el.innerHTML = v;
-        else el.textContent = v;
+
+    function readValue(el, mode) {
+        if (mode === "rich") return el.innerHTML;
+        if (mode === "attr:src") return el.getAttribute("src") || "";
+        if (mode === "attr:alt") return el.getAttribute("alt") || "";
+        if (mode === "attr:href") return el.getAttribute("href") || "";
+        if (mode === "style:bg") {
+            var m = (el.style.backgroundImage || "").match(/url\((['"]?)(.*?)\1\)/);
+            return m ? m[2] : "";
+        }
+        return el.textContent || "";
     }
+
+    function writeValue(el, mode, v) {
+        if (mode === "rich") { el.innerHTML = v; return; }
+        if (mode === "attr:src") { el.setAttribute("src", v); return; }
+        if (mode === "attr:alt") { el.setAttribute("alt", v); return; }
+        if (mode === "attr:href") { el.setAttribute("href", v); return; }
+        if (mode === "style:bg") { el.style.backgroundImage = v ? 'url("' + v + '")' : ""; return; }
+        el.textContent = v;
+    }
+
     function snapshot() {
         var m = {};
-        nodes().forEach(function (el) {
-            m[fieldName(el)] = readValue(el);
+        targets().forEach(function (t) {
+            m[t.key] = readValue(t.el, t.mode);
         });
         return m;
     }
@@ -84,18 +144,32 @@
         }, 200);
     }
 
+    var editing = false;
     function toggle(on) {
-        nodes().forEach(function (el) {
+        editing = on;
+        targets().forEach(function (t) {
+            if (!isInline(t.mode)) return; // images/links are edited from the studio panel
             if (on) {
-                el.setAttribute("contenteditable", isRich(el) ? "true" : "plaintext-only");
-                el.classList.add("flowcms-edit-on");
-                el.addEventListener("input", onInput);
+                t.el.setAttribute("contenteditable", t.mode === "rich" ? "true" : "plaintext-only");
+                t.el.classList.add("flowcms-edit-on");
+                t.el.addEventListener("input", onInput);
             } else {
-                el.removeAttribute("contenteditable");
-                el.classList.remove("flowcms-edit-on");
-                el.removeEventListener("input", onInput);
+                t.el.removeAttribute("contenteditable");
+                t.el.classList.remove("flowcms-edit-on");
+                t.el.removeEventListener("input", onInput);
             }
         });
+    }
+
+    function applyMap(bindings) {
+        mapBindings = Array.isArray(bindings) ? bindings : [];
+        baseline = snapshot();
+        if (editing) {
+            toggle(false);
+            toggle(true);
+        }
+        post({ type: "fields", fields: snapshot() });
+        post({ type: "mapped", count: targets().length });
     }
 
     window.addEventListener("message", function (e) {
@@ -106,6 +180,10 @@
             post({ type: "ready", editable: true });
             return;
         }
+        if (d.type === "map") {
+            applyMap(d.bindings);
+            return;
+        }
         if (d.type === "baseline") {
             var f = d.fields && typeof d.fields === "object" ? d.fields : d;
             Object.keys(f).forEach(function (k) {
@@ -114,17 +192,26 @@
             return;
         }
         if (d.type === "revert") {
-            nodes().forEach(function (el) {
-                var n = fieldName(el);
-                if (n in baseline) writeValue(el, baseline[n]);
+            targets().forEach(function (t) {
+                if (t.key in baseline) writeValue(t.el, t.mode, baseline[t.key]);
+            });
+            return;
+        }
+        if (d.type === "set") {
+            // Studio pushes updated values (e.g. media picked in the panel).
+            var fields = d.fields && typeof d.fields === "object" ? d.fields : {};
+            targets().forEach(function (t) {
+                if (t.key in fields) writeValue(t.el, t.mode, fields[t.key]);
             });
             return;
         }
         if (d.type === "edit") {
             toggle(!!d.editing);
             if (d.editing) {
-                var first = nodes()[0];
-                if (first) first.focus();
+                var first = targets().filter(function (t) {
+                    return isInline(t.mode);
+                })[0];
+                if (first) first.el.focus();
             }
             return;
         }

@@ -17,11 +17,15 @@ type ImportItem = {
 type InferredField = {
     id: string;
     name: string;
-    type: "Text" | "Number" | "Boolean" | "Date" | "Slug" | "Component";
+    type: "Text" | "Rich text" | "Number" | "Boolean" | "Date" | "Media" | "URL" | "Slug" | "Component";
     required: boolean;
     repeatable?: boolean;
     fields?: InferredField[];
 };
+
+// A string that points at an uploaded asset / image / file, so the field is
+// modeled as Media (e.g. "/assets/images/hero.webp", "https://cdn/x.jpg").
+const MEDIA_RE = /(\.(png|jpe?g|webp|gif|svg|avif|ico|bmp|mp4|webm|mov|mp3|wav|pdf|docx?|zip)(\?.*)?$)|^\/?(assets|images|img|uploads|media)\//i;
 /** Items grouped by the content type they'll import into, with an optional
  *  inferred field schema (set by the JSON/CSV importers). */
 type Group = { apiId: string; name: string; items: ImportItem[]; fields?: InferredField[] };
@@ -229,7 +233,9 @@ export class ImportService {
                 status: status as ContentStatus,
                 locale,
                 publishedAt: status === "PUBLISHED" && dateStr && !Number.isNaN(Date.parse(dateStr)) ? new Date(dateStr) : null,
-                data: { ...o, body },
+                // Keep the source object's exact shape (no injected `body` key) so the
+                // public API can round-trip the same JSON the site already consumes.
+                data: { ...o },
             };
         });
     }
@@ -248,7 +254,8 @@ export class ImportService {
     private inferField(value: unknown, key: string, depth: number, nextId: () => string): InferredField {
         const id = nextId();
         const base = { id, name: key, required: false };
-        if (/^(slug|permalink)$/i.test(key.trim())) return { ...base, type: "Slug" };
+        const k = key.trim();
+        if (/^(slug|permalink)$/i.test(k)) return { ...base, type: "Slug" };
         if (typeof value === "number") return { ...base, type: "Number" };
         if (typeof value === "boolean") return { ...base, type: "Boolean" };
         if (Array.isArray(value)) {
@@ -264,7 +271,14 @@ export class ImportService {
             }
             return { ...base, type: "Text" };
         }
-        return { ...base, type: "Text" }; // string / null / undefined
+        // Strings: type by key + value shape so the model is editable (image picker
+        // for media, rich editor for prose, date picker for dates) instead of all Text.
+        const s = typeof value === "string" ? value.trim() : "";
+        if (MEDIA_RE.test(s) || /(image|photo|avatar|logo|icon|cover|thumbnail|banner)$/i.test(k)) return { ...base, type: "Media" };
+        if (/(^|_)(url|link|href)$/i.test(k) || /^https?:\/\//i.test(s)) return { ...base, type: "URL" };
+        if (/^\d{4}-\d{2}-\d{2}([T ]|$)/.test(s) && !Number.isNaN(Date.parse(s))) return { ...base, type: "Date" };
+        if (/<[a-z][\s\S]*>/i.test(s) || s.length > 160) return { ...base, type: "Rich text" };
+        return { ...base, type: "Text" }; // short scalar string / null / undefined
     }
 
     /** Merge keys across sample objects (some array items carry extra keys) and
