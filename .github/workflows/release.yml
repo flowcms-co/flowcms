@@ -91,3 +91,25 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Publish a GitHub Release for the tag. The in-app updater (GET /system/updates)
+  # compares the running version against the repo's latest published Release, so a
+  # tag + built images alone are invisible to it; this makes a tag push light up the
+  # in-app "update available" prompt. Runs only for real version tags (vX.Y.Z) and
+  # only after every image has published, so the updater never offers a version
+  # whose image isn't ready yet.
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create or update the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: FlowCMS ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: "true"
