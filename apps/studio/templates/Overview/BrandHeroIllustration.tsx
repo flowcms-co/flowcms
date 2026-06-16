@@ -9,7 +9,9 @@
 const BrandHeroIllustration = ({ className }: { className?: string }) => (
     <svg
         viewBox="0 0 340 220"
-        className={className}
+        // brand-static: the hero scene keeps the FlowCMS palette even when the
+        // workspace sets a white-label accent (illustrations shouldn't recolor).
+        className={`brand-static ${className ?? ""}`.trim()}
         role="img"
         aria-hidden="true"
         xmlns="http://www.w3.org/2000/svg"

@@ -7,46 +7,46 @@ import { api, ApiError } from "@/lib/api";
 import { useDisplayBase } from "@/lib/useDisplayBase";
 import { cn } from "@/lib/cn";
 
-type Fw = "sdk" | "next" | "curl";
+type Fw = "fetch" | "next" | "curl";
 const TABS: { id: Fw; label: string }[] = [
-    { id: "sdk", label: "JS SDK" },
+    { id: "fetch", label: "JavaScript" },
     { id: "next", label: "Next.js" },
     { id: "curl", label: "cURL" },
 ];
 
-// One-line "where does this go?" guidance per stack.
+// One-line "where does this go?" guidance per stack. Everything here uses the
+// plain REST API + your token, so there's nothing to install.
 const HINTS: Record<Fw, string> = {
-    sdk: "Works in any JavaScript / TypeScript project. Run the install in your site, then drop the client into a server-side file.",
-    next: "Create the client in a lib file, then call it from any Server Component or Route Handler.",
+    fetch: "Works in any JavaScript / TypeScript project. No install: fetch the REST API with your token.",
+    next: "Drop this into a Server Component or Route Handler. No package to install.",
     curl: "A quick terminal test: confirms your token and URL work before you wire up any code.",
 };
 
 const snippet = (fw: Fw, token: string, displayBase: string) => {
     const t = token || "YOUR_TOKEN";
-    const url = `"${displayBase}", // 👈 your Flow CMS URL`;
     if (fw === "curl")
-        return `# Paste this into your terminal to test the connection\ncurl "${displayBase}/public/articles?limit=10" \\\n  -H "Authorization: Bearer ${t}"`;
+        return `# Test the connection from your terminal\ncurl "${displayBase}/public/articles?limit=10" \\\n  -H "Authorization: Bearer ${t}"`;
     if (fw === "next")
-        return `// 1. lib/flow.ts: create the client once\nimport { createClient } from "@flowcms/client";\nexport const flow = createClient({\n  url: ${url}\n  token: process.env.FLOWCMS_TOKEN!, // add FLOWCMS_TOKEN to .env.local\n});\n\n// 2. app/blog/page.tsx: use it in a Server Component\nimport { flow } from "@/lib/flow";\nexport default async function Blog() {\n  const { data } = await flow.list("articles", { limit: 10 });\n  return <ul>{data.map((p) => <li key={p.id}>{String(p.title)}</li>)}</ul>;\n}`;
-    return `# 1. Install the client in your website project\nnpm install @flowcms/client\n\n# 2. Create a client: put this in any server-side file (e.g. lib/flow.js)\nimport { createClient } from "@flowcms/client";\nconst flow = createClient({\n  url: ${url}\n  token: "${t}", // keep this secret: store it in an env var\n});\n\n# 3. Fetch your content anywhere\nconst { data } = await flow.list("articles", { limit: 10 });`;
+        return `// app/blog/page.tsx — a Server Component (nothing to install)\nexport default async function Blog() {\n  const res = await fetch("${displayBase}/public/articles?limit=10", {\n    headers: { Authorization: "Bearer ${t}" }, // keep the token in FLOWCMS_TOKEN\n    next: { revalidate: 60 }, // ISR; pair with a webhook for instant updates\n  });\n  const { data } = await res.json();\n  return <ul>{data.map((p) => <li key={p.id}>{String(p.title)}</li>)}</ul>;\n}`;
+    return `// Any JS/TS project — no install, just fetch the REST API.\nconst res = await fetch("${displayBase}/public/articles?limit=10", {\n  headers: { Authorization: "Bearer ${t}" }, // store the token in an env var\n});\nconst { data } = await res.json();\nconsole.log(data);`;
 };
 
-// Optional live-editor setup: enables clicking-to-edit on the real page inside the
-// Flow CMS preview. No token needed (it talks to the studio over postMessage); just
-// mark editable regions with data-flowcms-field="<your field name>".
+// Live-editor setup: enables clicking-to-edit on the real page inside the FlowCMS
+// preview. No token, no npm — load the bridge script and tag editable regions with
+// data-flowcms-field="<your field name>" (talks to the studio over postMessage).
 const liveSnippet = (fw: Fw, displayBase: string) => {
-    let origin = displayBase;
+    let origin = "";
     try {
         origin = new URL(displayBase).origin;
     } catch {
-        /* relative base (e.g. "/api"): fall back to the page origin at runtime */
+        /* relative base (e.g. "/api"): leave empty so the path is site-relative */
         origin = "";
     }
-    if (fw === "curl")
-        return `<!-- No build step? Copy flowcms-live-edit.js into your site (or load it from your CMS) -->\n<script src="${origin}/flowcms-live-edit.js" defer></script>\n\n<!-- Tag editable regions with the field name from your content model -->\n<h1 data-flowcms-field="title">Your title</h1>\n<p  data-flowcms-field="summary">Your summary</p>\n<div data-flowcms-field="body" data-flowcms-rich>…your rich content…</div>`;
     if (fw === "next")
-        return `// 1. app/FlowVisualEditing.tsx — a tiny client component\n"use client";\nimport { useEffect } from "react";\nimport { enableVisualEditing } from "@flowcms/client/visual-editing";\nexport function FlowVisualEditing() {\n  useEffect(() => enableVisualEditing(), []);\n  return null;\n}\n\n// 2. Render it once in app/layout.tsx, then tag fields in your pages:\n//   <h1 data-flowcms-field="title">{title}</h1>\n//   <div data-flowcms-field="body" data-flowcms-rich dangerouslySetInnerHTML={{ __html: body }} />`;
-    return `// Run once on the client (e.g. in your app entry / root effect)\nimport { enableVisualEditing } from "@flowcms/client/visual-editing";\nenableVisualEditing();\n\n// Tag editable regions with the field name from your content model:\n//   <h1 data-flowcms-field="title">…</h1>          (entry title)\n//   <p  data-flowcms-field="summary">…</p>         (plain text)\n//   <div data-flowcms-field="body" data-flowcms-rich>…</div>  (rich HTML)`;
+        return `// 1. app/layout.tsx — load the bridge once, inside <body>\nimport Script from "next/script";\n//   <Script src="${origin}/flowcms-live-edit.js" strategy="afterInteractive" />\n\n// 2. Tag the editable parts of your pages with the content-model field name:\n//   <h1 data-flowcms-field="title">{title}</h1>\n//   <p  data-flowcms-field="summary">{summary}</p>\n//   <div data-flowcms-field="body" data-flowcms-rich dangerouslySetInnerHTML={{ __html: body }} />`;
+    if (fw === "fetch")
+        return `<!-- 1. Add the bridge once to your site (any framework) -->\n<script src="${origin}/flowcms-live-edit.js" defer></script>\n\n<!-- 2. Tag the editable parts of your pages -->\n<h1 data-flowcms-field="title">Your title</h1>\n<p  data-flowcms-field="summary">Your summary</p>\n<div data-flowcms-field="body" data-flowcms-rich>…rich content…</div>`;
+    return `<!-- Add once to your site's HTML -->\n<script src="${origin}/flowcms-live-edit.js" defer></script>\n\n<!-- Then tag editable fields by their content-model name -->\n<h1 data-flowcms-field="title">Your title</h1>\n<div data-flowcms-field="body" data-flowcms-rich>…rich content…</div>`;
 };
 
 /**
@@ -56,7 +56,7 @@ const liveSnippet = (fw: Fw, displayBase: string) => {
  */
 const ConnectQuickstart = () => {
     const displayBase = useDisplayBase();
-    const [fw, setFw] = useState<Fw>("sdk");
+    const [fw, setFw] = useState<Fw>("fetch");
     const [token, setToken] = useState("");
     const [creating, setCreating] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -128,7 +128,7 @@ const ConnectQuickstart = () => {
                     <h3 className="text-title font-semibold text-black dark:text-white">Enable live editing on your pages <span className="text-caption-2 font-normal text-grey">(optional)</span></h3>
                 </div>
                 <p className="mb-3 text-caption-2 text-grey">
-                    Lets editors click and edit the real page inside the live preview. Add this alongside the snippet above (no extra token needed), then tag each editable element with <code className="font-mono">data-flowcms-field</code>. Uses the <b>{fw === "curl" ? "no-build" : fw === "next" ? "Next.js" : "JS SDK"}</b> tab selected above.
+                    Lets editors click and edit the real page inside the live preview. No npm package or token needed: load the bridge script and tag each editable element with <code className="font-mono">data-flowcms-field</code> (matching your content-model field name; use <code className="font-mono">title</code> for the entry title). Inert in production unless opened through the studio preview.
                 </p>
                 <div className="relative">
                     <pre className="overflow-x-auto rounded-2xl bg-ink px-4 py-3 text-caption-1 leading-relaxed text-white/90 dark:bg-dark-2">{liveSnippet(fw, displayBase)}</pre>

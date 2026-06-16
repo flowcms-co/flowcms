@@ -359,6 +359,10 @@ const FieldList = ({
 };
 
 const INLINE = "__inline__";
+// How deep inline components may nest in the builder UI before we steer the user
+// toward a reusable component. Deep enough for realistic imported models (page ->
+// section -> component), bounded so the editor stays usable.
+const MAX_INLINE_DEPTH = 5;
 
 const FieldRow = ({
     field,
@@ -499,8 +503,11 @@ const FieldRow = ({
             {/* Inline component → nested fields */}
             {isComp && !isRef && (
                 <div className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25">
-                    {depth >= 2 ? (
-                        <p className="py-2 text-caption-2 text-grey">Max nesting depth reached.</p>
+                    {depth >= MAX_INLINE_DEPTH ? (
+                        <p className="py-2 text-caption-2 text-grey">
+                            This is nested very deep. For structures deeper than this, define a reusable component on the{" "}
+                            <strong className="font-semibold text-black dark:text-white">Components</strong> tab and reference it here instead of inlining it.
+                        </p>
                     ) : (
                         <FieldList fields={field.fields ?? []} onChange={onUpdateChildren} components={components} allowZones={false} depth={depth + 1} />
                     )}

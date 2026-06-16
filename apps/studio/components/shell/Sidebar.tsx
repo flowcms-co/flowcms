@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import PoweredBy from "@/components/shell/PoweredBy";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/AuthProvider";
@@ -188,25 +188,7 @@ const Sidebar = ({
                     collapsed ? "items-center px-2" : "px-6",
                 )}
             >
-                {showSwitcher && (
-                    <a
-                        href="https://flowcms.co"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Powered by Flow CMS"
-                        className={cn(
-                            "group inline-flex items-center rounded-xl text-grey transition-colors hover:text-primary",
-                            collapsed ? "h-9 w-9 justify-center" : "gap-2 px-2 py-1",
-                        )}
-                    >
-                        <Image src="/brand/icon.svg" alt="" width={16} height={16} unoptimized className="h-4 w-4 opacity-70 transition-opacity group-hover:opacity-100" />
-                        {!collapsed && (
-                            <span className="text-caption-2 text-grey">
-                                Powered by <span className="font-semibold text-ink/80 dark:text-white/80">Flow CMS</span>
-                            </span>
-                        )}
-                    </a>
-                )}
+                {showSwitcher && <PoweredBy collapsed={collapsed} />}
             </div>
         </aside>
     );

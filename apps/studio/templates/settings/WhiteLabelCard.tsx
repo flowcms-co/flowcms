@@ -5,6 +5,7 @@ import Card from "@/components/ui/Card";
 import UpgradeLock from "@/components/ui/UpgradeLock";
 import { api, ApiError } from "@/lib/api";
 import { clearWorkspaceCache, type Workspace } from "@/lib/useWorkspace";
+import { confirm } from "@/components/providers/ConfirmProvider";
 
 const HEX = /^#?[0-9a-fA-F]{6}$/;
 
@@ -55,6 +56,33 @@ const WhiteLabelCard = () => {
         }
     };
 
+    const reset = async () => {
+        if (
+            !(await confirm({
+                title: "Reset branding to default?",
+                message: "This clears your product name, logo and accent color and restores the FlowCMS defaults across the studio.",
+                confirmLabel: "Reset to default",
+                tone: "danger",
+            }))
+        )
+            return;
+        setSaving(true);
+        setMsg(null);
+        try {
+            await api("/ee/white-label", { method: "PUT", body: JSON.stringify({ brandName: "", brandLogoUrl: "", brandAccent: "" }) });
+            setName("");
+            setLogo("");
+            setAccent("");
+            clearWorkspaceCache();
+            setMsg({ ok: true, text: "Reset, applying…" });
+            setTimeout(() => window.location.reload(), 600);
+        } catch (e) {
+            setMsg({ ok: false, text: e instanceof ApiError ? e.message : "Could not reset." });
+            setSaving(false);
+        }
+    };
+
+    const hasBrand = !!(name.trim() || logo.trim() || accent.trim());
     const swatch = accent && HEX.test(accent) ? (accent.startsWith("#") ? accent : `#${accent}`) : "#6c5ce7";
 
     return (
@@ -112,6 +140,9 @@ const WhiteLabelCard = () => {
                 </div>
                 <div className="mt-5 flex items-center justify-end gap-3">
                     {msg && <span className={`text-body-sm ${msg.ok ? "text-success" : "text-error"}`}>{msg.text}</span>}
+                    <button type="button" onClick={reset} disabled={saving || !hasBrand} className="btn-secondary disabled:opacity-50" title="Restore the FlowCMS defaults">
+                        Reset to default
+                    </button>
                     <button type="button" onClick={save} disabled={saving} className="btn-primary disabled:opacity-60">
                         {saving ? "Saving…" : "Save branding"}
                     </button>

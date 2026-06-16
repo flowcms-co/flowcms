@@ -217,7 +217,9 @@ const UpdatesCard = () => {
                 const s = await api<UpgradeStatus>("/system/upgrade/status");
                 setProgress(s);
                 if (["success", "rolled_back", "failed"].includes(s.status)) {
-                    if (s.status === "success") load(true);
+                    // Hard-refresh on success so the browser loads the new version's
+                    // studio bundle + API (a soft re-fetch would keep the old assets).
+                    if (s.status === "success") setTimeout(() => window.location.reload(), 2500);
                     return;
                 }
             } catch {
@@ -298,9 +300,7 @@ const UpdatesCard = () => {
                 )}
             </div>
 
-            {progress ? (
-                <UpgradeProgress p={progress} onRestore={restoreBackup} restoring={restoring} />
-            ) : info?.updateAvailable ? (
+            {info?.updateAvailable ? (
                 <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-primary/10 px-4 py-3">
                     <Icon className="h-5 w-5 shrink-0 fill-primary dark:fill-lilac" name="download" />
                     <div className="min-w-0 grow">
@@ -339,6 +339,24 @@ const UpdatesCard = () => {
                         {checking ? "Checking…" : "Check for updates"}
                     </button>
                     {info && <span className="text-caption-2 text-grey">Checked {new Date(info.checkedAt).toLocaleTimeString()}</span>}
+                </div>
+            )}
+
+            {/* Blocking upgrade modal — freezes the app so nobody navigates away
+                mid-upgrade; hard-reloads the page on success to serve the new build. */}
+            {progress && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-ink/50 backdrop-blur-sm" />
+                    <div className="relative w-full max-w-md rounded-3xl bg-white p-6 shadow-[0_1.25rem_3rem_rgba(26,26,46,0.18)] dark:bg-dark-1">
+                        <h3 className="text-title font-semibold text-black dark:text-white">Upgrading FlowCMS</h3>
+                        <UpgradeProgress p={progress} onRestore={restoreBackup} restoring={restoring} />
+                        {progress.status === "success" && <p className="mt-3 text-caption-2 text-grey">Reloading to the new version…</p>}
+                        {(progress.status === "failed" || progress.status === "rolled_back") && (
+                            <button type="button" onClick={() => setProgress(null)} className="btn-secondary btn-md mt-4 w-full">
+                                Close
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
         </Card>

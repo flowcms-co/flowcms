@@ -103,6 +103,25 @@ html.dark {
     --color-grey: #9a9ab8;
 }
 
+/* Decorative illustrations keep the FlowCMS purple palette regardless of a
+   workspace's white-label accent. BrandStyle retints the brand vars on :root;
+   re-declaring the defaults on the illustration wrapper means its subtree resolves
+   them by proximity, so scenes don't shift to the brand color. */
+.brand-static {
+    --color-primary: #6c5ce7;
+    --color-purple-400: #8674f0;
+    --color-purple-500: #6c5ce7;
+    --color-purple-600: #5a4bd4;
+    --color-purple-700: #4a3dae;
+    --color-lilac: #a29bfe;
+    --color-purple-300: #a29bfe;
+    --color-purple-200: #c9befb;
+    --color-purple-100: #e4defd;
+    --color-lavender-mist: #f5f3ff;
+    --color-purple-50: #f5f3ff;
+    --shadow-glow: 0 0.5rem 1.25rem rgba(108, 92, 231, 0.35);
+}
+
 @layer base {
     body {
         @apply bg-bg font-sans text-[0.875rem] leading-[1.5rem] text-black antialiased dark:bg-dark-2 dark:text-dark-text;
