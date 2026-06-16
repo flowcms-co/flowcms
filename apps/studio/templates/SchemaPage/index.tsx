@@ -18,6 +18,11 @@ import {
 } from "@/mocks/schema";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+
+// A content type's icon color. The default purple follows the workspace brand
+// accent (so white-label types aren't stuck on Flow CMS purple); a color the user
+// explicitly customized is kept as-is.
+const typeColor = (c?: string) => (!c || c.toLowerCase() === "#6c5ce7" ? "var(--color-primary)" : c);
 import { confirm } from "@/components/providers/ConfirmProvider";
 
 let idSeq = 0;
@@ -208,8 +213,8 @@ const SchemaPage = () => {
                                         isActive ? "bg-primary text-white shadow-glow" : "hover:bg-lavender-mist dark:hover:bg-dark-3",
                                     )}
                                 >
-                                    <span className="flex items-center justify-center w-9 h-9 rounded-[0.625rem] shrink-0" style={{ backgroundColor: isActive ? "rgba(255,255,255,0.18)" : `${t.color}22` }}>
-                                        <Icon className="w-4 h-4" name={t.icon} fill={isActive ? "#fff" : t.color} />
+                                    <span className="flex items-center justify-center w-9 h-9 rounded-[0.625rem] shrink-0" style={{ backgroundColor: isActive ? "rgba(255,255,255,0.18)" : `color-mix(in srgb, ${typeColor(t.color)} 13%, transparent)` }}>
+                                        <Icon className="w-4 h-4" name={t.icon} fill={isActive ? "#fff" : typeColor(t.color)} />
                                     </span>
                                     <span className="min-w-0">
                                         <span className={cn("block truncate text-title", isActive ? "text-white" : "text-black dark:text-white")}>{t.name}</span>
@@ -245,8 +250,8 @@ const SchemaPage = () => {
                         <>
                             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                                 <div className="flex items-center gap-3 min-w-0">
-                                    <span className="flex items-center justify-center w-11 h-11 rounded-2xl shrink-0" style={{ backgroundColor: `${active.color}22` }}>
-                                        <Icon className="w-5 h-5" name={active.icon} fill={active.color} />
+                                    <span className="flex items-center justify-center w-11 h-11 rounded-2xl shrink-0" style={{ backgroundColor: `color-mix(in srgb, ${typeColor(active.color)} 13%, transparent)` }}>
+                                        <Icon className="w-5 h-5" name={active.icon} fill={typeColor(active.color)} />
                                     </span>
                                     <div className="min-w-0">
                                         <input

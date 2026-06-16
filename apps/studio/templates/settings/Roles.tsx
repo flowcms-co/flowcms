@@ -36,12 +36,12 @@ const DASHBOARD_LABELS: Record<string, string> = {
 };
 
 const ROLE_COLORS: Record<string, string> = {
-    super_admin: "#6C5CE7",
+    super_admin: "var(--color-primary)", // follows the workspace brand accent
     admin: "#3B82F6",
     search_strategist: "#00B894",
     editor: "#F5A623",
 };
-const roleColor = (key: string) => ROLE_COLORS[key] ?? "#6C5CE7";
+const roleColor = (key: string) => ROLE_COLORS[key] ?? "var(--color-primary)";
 
 type FormState = { name: string; description: string; dashboard: string; permissions: string[]; lockSeoMeta: boolean; allowedTypeIds: string[] };
 
@@ -208,7 +208,7 @@ const Roles = () => {
                                 <div className="flex items-center gap-3 min-w-0">
                                     <span
                                         className="flex items-center justify-center w-10 h-10 rounded-[0.75rem] shrink-0"
-                                        style={{ backgroundColor: `${c}1f` }}
+                                        style={{ backgroundColor: `color-mix(in srgb, ${c} 12%, transparent)` }}
                                     >
                                         <Icon className="w-5 h-5" name="lock" fill={c} />
                                     </span>

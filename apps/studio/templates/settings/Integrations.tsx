@@ -43,7 +43,7 @@ const PROVIDER_COLORS: Record<string, string> = {
     kimi: "#1F1F1F",
     litellm: "#00B894",
 };
-const color = (id: string) => PROVIDER_COLORS[id] ?? "#6C5CE7";
+const color = (id: string) => PROVIDER_COLORS[id] ?? "var(--color-primary)"; // unknown/custom provider follows the brand
 
 const SECTIONS: { type: string; title: string; blurb: string }[] = [
     { type: "AI_PROVIDER", title: "AI providers", blurb: "Connect a provider key to power the AI tools. Bring your own: keys are encrypted at rest." },

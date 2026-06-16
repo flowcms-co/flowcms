@@ -298,7 +298,7 @@ const ContentTable = () => {
             {/* Stat bar */}
             <Card className="!p-5">
                 <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
-                    <StatTile icon={STAT_PATHS.all} color="#6C5CE7" value={all.length} label="All content" />
+                    <StatTile icon={STAT_PATHS.all} color="var(--color-primary)" value={all.length} label="All content" />
                     <StatTile icon={STAT_PATHS.live} color="#00B894" value={statLive} label="Live" />
                     <StatTile icon={STAT_PATHS.calendar} color="#3B82F6" value={statScheduled} label="Publishing this week" />
                     <StatTile icon={STAT_PATHS.clock} color="#F5A623" value={statDraftReview} label="Draft and review" />
@@ -403,7 +403,7 @@ const ContentTable = () => {
 
 const StatTile = ({ icon, color, value, label }: { icon: string; color: string; value: number; label: string }) => (
     <div className="flex items-center gap-3">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ backgroundColor: `${color}1a` }}>
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)` }}>
             <Stroke d={icon} color={color} className="h-5 w-5" />
         </span>
         <div className="min-w-0">

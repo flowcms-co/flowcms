@@ -26,7 +26,7 @@ const Billing = () => {
                 className={
                     plan === "community"
                         ? ""
-                        : "relative overflow-hidden bg-[linear-gradient(135deg,#6C5CE7,#8674F0)] text-white"
+                        : "relative overflow-hidden bg-[linear-gradient(135deg,var(--color-primary),var(--color-purple-400))] text-white"
                 }
             >
                 {plan !== "community" && (
