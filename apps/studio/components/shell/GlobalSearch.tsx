@@ -13,6 +13,7 @@ import {
     TransitionChild,
 } from "@headlessui/react";
 import Icon from "@/components/ui/Icon";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
 type SearchItem = {
@@ -20,41 +21,38 @@ type SearchItem = {
     label: string;
     sub?: string;
     icon: string;
-    kind: "link" | "recent";
-    href?: string;
+    href: string;
 };
 
-/** Quick destinations (real routes). */
+type ApiEntry = { id: string; title: string; status: string; contentType?: { name?: string } | null };
+type ApiAsset = { id: string; name: string; type: string };
+
+/** Quick destinations (real routes), shown when the box is empty + matched while typing. */
 const QUICK_LINKS: SearchItem[] = [
-    { id: "overview", label: "Overview", sub: "Dashboard", icon: "overview", kind: "link", href: "/" },
-    { id: "content", label: "All content", sub: "Entries", icon: "document", kind: "link", href: "/content" },
-    { id: "calendar", label: "Content calendar", sub: "Schedule", icon: "calendar", kind: "link", href: "/content/calendar" },
-    { id: "seo", label: "SEO dashboard", sub: "FlowCMS SEO Score", icon: "chart", kind: "link", href: "/seo" },
-    { id: "ai", label: "AI suite", sub: "Generate & proofread", icon: "sparkles", kind: "link", href: "/ai" },
-    { id: "assets", label: "Media library", sub: "Assets", icon: "folder", kind: "link", href: "/assets" },
-    { id: "settings", label: "Settings", sub: "Workspace", icon: "settings", kind: "link", href: "/settings" },
+    { id: "overview", label: "Overview", sub: "Dashboard", icon: "overview", href: "/" },
+    { id: "content", label: "All content", sub: "Entries", icon: "document", href: "/content" },
+    { id: "calendar", label: "Content calendar", sub: "Schedule", icon: "calendar", href: "/content/calendar" },
+    { id: "seo", label: "SEO dashboard", sub: "FlowCMS SEO Score", icon: "chart", href: "/seo" },
+    { id: "ai", label: "AI suite", sub: "Generate & proofread", icon: "sparkles", href: "/ai" },
+    { id: "assets", label: "Media library", sub: "Assets", icon: "folder", href: "/assets" },
+    { id: "settings", label: "Settings", sub: "Workspace", icon: "settings", href: "/settings" },
 ];
 
-/** Recent searches (sample — would persist per user). */
-const RECENTS: SearchItem[] = [
-    { id: "r1", label: "Q3 launch checklist", icon: "clock", kind: "recent" },
-    { id: "r2", label: "pricing page", icon: "clock", kind: "recent" },
-    { id: "r3", label: "homepage meta description", icon: "clock", kind: "recent" },
-];
-
-const match = (item: SearchItem, q: string) =>
-    `${item.label} ${item.sub ?? ""}`.toLowerCase().includes(q);
+const matchLink = (item: SearchItem, q: string) => `${item.label} ${item.sub ?? ""}`.toLowerCase().includes(q);
 
 /**
- * Global search — a command palette. The top-bar field is a trigger; activating
- * it (click or ⌘/Ctrl+K) opens a centered modal that blurs + darkens the page
- * and surfaces recent searches and quick destinations. Arrow keys + Enter
- * navigate (Headless UI Combobox); Esc or a backdrop click closes.
+ * Global search — a command palette. The top-bar field is a trigger; ⌘/Ctrl+K or
+ * a click opens a centered modal. Typing queries the workspace's real content
+ * entries and media (debounced) and surfaces matching quick destinations; arrow
+ * keys + Enter navigate (Headless UI Combobox), Esc closes.
  */
 const GlobalSearch = () => {
     const router = useRouter();
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
+    const [content, setContent] = useState<SearchItem[]>([]);
+    const [media, setMedia] = useState<SearchItem[]>([]);
+    const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -67,19 +65,60 @@ const GlobalSearch = () => {
         return () => window.removeEventListener("keydown", onKey);
     }, []);
 
-    const q = query.trim().toLowerCase();
-    const recents = q ? RECENTS.filter((r) => match(r, q)) : RECENTS;
-    const links = q ? QUICK_LINKS.filter((l) => match(l, q)) : QUICK_LINKS;
-    const empty = recents.length === 0 && links.length === 0;
+    const q = query.trim();
+
+    // Live search: query content + media as you type (debounced). Needs 2+ chars.
+    useEffect(() => {
+        if (!open || q.length < 2) {
+            /* eslint-disable react-hooks/set-state-in-effect */
+            setContent([]);
+            setMedia([]);
+            setLoading(false);
+            /* eslint-enable react-hooks/set-state-in-effect */
+            return;
+        }
+        let cancel = false;
+        setLoading(true);
+        const t = setTimeout(async () => {
+            const [entries, assets] = await Promise.all([
+                api<ApiEntry[]>(`/entries?q=${encodeURIComponent(q)}`).catch(() => [] as ApiEntry[]),
+                api<ApiAsset[]>(`/assets?q=${encodeURIComponent(q)}&limit=8`).catch(() => [] as ApiAsset[]),
+            ]);
+            if (cancel) return;
+            setContent(
+                entries.slice(0, 8).map((e) => ({
+                    id: `e-${e.id}`,
+                    label: e.title || "Untitled",
+                    sub: [e.contentType?.name, (e.status ?? "").toLowerCase()].filter(Boolean).join(" · "),
+                    icon: "document",
+                    href: `/content/editor?id=${e.id}`,
+                })),
+            );
+            setMedia(
+                assets.slice(0, 6).map((a) => ({
+                    id: `a-${a.id}`,
+                    label: a.name,
+                    sub: a.type,
+                    icon: a.type === "image" ? "image" : "folder",
+                    href: `/assets?q=${encodeURIComponent(a.name)}`,
+                })),
+            );
+            setLoading(false);
+        }, 250);
+        return () => {
+            cancel = true;
+            clearTimeout(t);
+        };
+    }, [q, open]);
+
+    const lcq = q.toLowerCase();
+    const links = lcq ? QUICK_LINKS.filter((l) => matchLink(l, lcq)) : QUICK_LINKS;
+    const empty = !loading && lcq.length >= 2 && content.length === 0 && media.length === 0 && links.length === 0;
 
     const act = (item: SearchItem | null) => {
         if (!item) return;
-        if (item.kind === "recent") {
-            setQuery(item.label);
-            return;
-        }
         setOpen(false);
-        if (item.href) router.push(item.href);
+        router.push(item.href);
     };
 
     return (
@@ -125,12 +164,12 @@ const GlobalSearch = () => {
                             <DialogPanel className="mx-auto w-full max-w-xl origin-top overflow-hidden rounded-2xl bg-white shadow-[0_1.5rem_3.5rem_rgba(26,26,46,0.28)] ring-1 ring-grey-light dark:bg-dark-1 dark:ring-grey-light/10">
                                 <Combobox onChange={act}>
                                     <div className="flex items-center gap-3 border-b border-grey-light px-4 dark:border-grey-light/10">
-                                        <Icon className="h-5 w-5 shrink-0 fill-grey" name="search" />
+                                        <Icon className={cn("h-5 w-5 shrink-0", loading ? "animate-spin fill-primary" : "fill-grey")} name={loading ? "refresh" : "search"} />
                                         <ComboboxInput
                                             autoFocus
                                             value={query}
                                             onChange={(e) => setQuery(e.target.value)}
-                                            placeholder="Search everything…"
+                                            placeholder="Search content, media, pages…"
                                             className="h-14 w-full bg-transparent text-body text-black placeholder:text-grey outline-none dark:text-white"
                                         />
                                         <kbd className="hidden rounded-md border border-grey-light px-1.5 py-0.5 text-[0.6875rem] font-semibold text-grey sm:inline dark:border-grey-light/15">
@@ -145,16 +184,24 @@ const GlobalSearch = () => {
                                             </p>
                                         )}
 
-                                        {recents.length > 0 && (
-                                            <Section title={q ? "Recent matches" : "Recent searches"}>
-                                                {recents.map((item) => (
+                                        {content.length > 0 && (
+                                            <Section title="Content">
+                                                {content.map((item) => (
+                                                    <Row key={item.id} item={item} />
+                                                ))}
+                                            </Section>
+                                        )}
+
+                                        {media.length > 0 && (
+                                            <Section title="Media">
+                                                {media.map((item) => (
                                                     <Row key={item.id} item={item} />
                                                 ))}
                                             </Section>
                                         )}
 
                                         {links.length > 0 && (
-                                            <Section title="Jump to">
+                                            <Section title={lcq ? "Jump to" : "Quick links"}>
                                                 {links.map((item) => (
                                                     <Row key={item.id} item={item} />
                                                 ))}
@@ -190,15 +237,9 @@ const Row = ({ item }: { item: SearchItem }) => (
         </span>
         <span className="min-w-0 grow">
             <span className="block truncate text-body-sm font-medium text-black dark:text-white">{item.label}</span>
-            {item.sub && <span className="block truncate text-caption-2 text-grey">{item.sub}</span>}
+            {item.sub && <span className="block truncate text-caption-2 capitalize text-grey">{item.sub}</span>}
         </span>
-        <Icon
-            className={cn(
-                "ml-auto h-4 w-4 shrink-0 opacity-0 transition-opacity group-data-[focus]:opacity-100",
-                item.kind === "recent" ? "fill-grey" : "fill-primary dark:fill-lilac",
-            )}
-            name={item.kind === "recent" ? "arrow-left" : "arrow-right"}
-        />
+        <Icon className="ml-auto h-4 w-4 shrink-0 fill-primary opacity-0 transition-opacity group-data-[focus]:opacity-100 dark:fill-lilac" name="arrow-right" />
     </ComboboxOption>
 );
 

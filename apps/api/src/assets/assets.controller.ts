@@ -44,10 +44,11 @@ export class AssetsController {
         @Query("folder") folder?: string,
         @Query("limit") limit?: string,
         @Query("offset") offset?: string,
+        @Query("q") q?: string,
     ) {
         const lim = limit != null && limit !== "" && Number.isFinite(Number(limit)) ? Number(limit) : undefined;
         const off = offset != null && offset !== "" && Number.isFinite(Number(offset)) ? Number(offset) : undefined;
-        return this.assets.list(user.workspaceId, folder, lim, off);
+        return this.assets.list(user.workspaceId, folder, lim, off, q);
     }
 
     @Post()

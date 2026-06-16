@@ -91,13 +91,18 @@ export class AssetsService {
         };
     }
 
-    async list(workspaceId: string, folder?: string, limit?: number, offset?: number) {
+    async list(workspaceId: string, folder?: string, limit?: number, offset?: number, q?: string) {
         // Bounded by default so the media library never loads an unbounded set into
         // memory; callers may page with limit/offset (clamped to [1, 500]).
         const take = limit != null ? Math.min(Math.max(1, Math.floor(limit)), 500) : 500;
         const skip = offset != null ? Math.max(0, Math.floor(offset)) : 0;
+        const search = q?.trim();
         const rows = await this.prisma.media.findMany({
-            where: { workspaceId, ...(folder && folder !== "all" ? { folder } : {}) },
+            where: {
+                workspaceId,
+                ...(folder && folder !== "all" ? { folder } : {}),
+                ...(search ? { OR: [{ filename: { contains: search, mode: "insensitive" } }, { alt: { contains: search, mode: "insensitive" } }] } : {}),
+            },
             orderBy: { createdAt: "desc" },
             take,
             skip,
