@@ -40,6 +40,30 @@ describe("import schema inference (JSON)", () => {
         expect(items?.fields).toBe(1); // name
     });
 
+    it("imports prose as Rich text but keeps labels / meta as plain Text", async () => {
+        const text = JSON.stringify({
+            slug: "restoration",
+            title: "Restoration Services",
+            description: "A medium-length SEO meta description that comfortably exceeds eighty characters in total.",
+            introContent: "Short intro.",
+            ctaContent: "Call now.",
+            desktopcontentImage: "/assets/images/content/x.webp",
+            desktopcontentImagealttext: "Water Damage Restoration",
+            callToActionText: "Call Now For Quick Estimates",
+        });
+        const res = await svc.preview("ws", { kind: "json", text, typeApiId: "svc", typeName: "Service" });
+        const fields = res.groups[0].fields ?? [];
+        const t = (n: string) => fields.find((f) => f.name === n)?.type;
+
+        expect(t("title")).toBe("Text"); // SEO title stays plain
+        expect(t("description")).toBe("Text"); // SEO meta stays plain even when long
+        expect(t("introContent")).toBe("Rich text"); // prose by name
+        expect(t("ctaContent")).toBe("Rich text"); // prose by name
+        expect(t("desktopcontentImage")).toBe("Media");
+        expect(t("desktopcontentImagealttext")).toBe("Text"); // alt text stays plain
+        expect(t("callToActionText")).toBe("Text"); // button label stays plain
+    });
+
     it("infers a real model for a single nested object (one entry)", async () => {
         const text = JSON.stringify({ heroBanner: { title: "Hi", backgroundImage: "/assets/x.png" } });
         const res = await svc.preview("ws", { kind: "json", text, typeApiId: "svc", typeName: "Service" });

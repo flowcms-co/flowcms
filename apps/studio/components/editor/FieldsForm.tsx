@@ -11,6 +11,8 @@
 
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
+import { MediaField } from "@/components/ui/MediaPicker";
+import RichTextField from "./RichTextField";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
 
 type Json = Record<string, unknown>;
@@ -49,23 +51,24 @@ export const FieldControl = ({
             );
         case "Rich text":
             return (
-                <textarea
-                    rows={4}
-                    className={`${INPUT} h-auto py-2`}
+                <RichTextField
                     value={typeof value === "string" ? value : ""}
-                    onChange={(e) => onChange(e.target.value)}
+                    onChange={onChange}
+                    minH="8rem"
                 />
             );
+        case "Media":
+            return <MediaField value={value} alt={fieldLabel(field)} onChange={onChange} />;
         case "Component":
             return <ComponentControl field={field} value={value} onChange={onChange} />;
         default:
-            // Text / URL / Media / Reference / Slug (when nested)
+            // Text / URL / Reference / Slug (when nested)
             return (
                 <input
                     className={INPUT}
                     value={typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)}
                     onChange={(e) => onChange(e.target.value)}
-                    placeholder={field.type === "Media" ? "/path or https://…" : undefined}
+                    placeholder={field.type === "URL" ? "/path or https://…" : undefined}
                 />
             );
     }
@@ -84,21 +87,27 @@ const FieldGroup = ({
     const set = (name: string, v: unknown) => onChange({ ...data, [name]: v });
     return (
         <div className="flex flex-col gap-4">
-            {fields.map((f) => (
-                <label key={f.id} className="flex flex-col gap-1.5">
-                    <span className="flex items-center gap-1.5 text-caption-1 text-grey">
-                        {fieldLabel(f)}
-                        {f.required && <span className="text-error">*</span>}
-                        {f.type === "Component" && (
-                            <span className="text-caption-2 text-grey/70">
-                                {f.repeatable ? "repeatable component" : "component"}
-                            </span>
-                        )}
-                    </span>
-                    {f.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{f.description}</span>}
-                    <FieldControl field={f} value={data[f.name]} onChange={(v) => set(f.name, v)} />
-                </label>
-            ))}
+            {fields.map((f) => {
+                // Media, Rich text and Component render interactive content (picker
+                // buttons, the TipTap editor, nested labelled fields); wrapping those
+                // in a <label> nests labels / steals focus, so use a plain <div>.
+                const Wrap = f.type === "Media" || f.type === "Rich text" || f.type === "Component" ? "div" : "label";
+                return (
+                    <Wrap key={f.id} className="flex flex-col gap-1.5">
+                        <span className="flex items-center gap-1.5 text-caption-1 text-grey">
+                            {fieldLabel(f)}
+                            {f.required && <span className="text-error">*</span>}
+                            {f.type === "Component" && (
+                                <span className="text-caption-2 text-grey/70">
+                                    {f.repeatable ? "repeatable component" : "component"}
+                                </span>
+                            )}
+                        </span>
+                        {f.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{f.description}</span>}
+                        <FieldControl field={f} value={data[f.name]} onChange={(v) => set(f.name, v)} />
+                    </Wrap>
+                );
+            })}
         </div>
     );
 };

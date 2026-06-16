@@ -15,6 +15,66 @@ type Asset = { id: string; name: string; type: string; url: string; thumbUrl: st
 
 const isImg = (s: string) => /^(https?:\/\/|\/)/.test(s);
 
+/* ── image preview with graceful broken-image fallback (remount via key resets) ── */
+export const MediaPreview = ({ url, alt, onReplace, onRemove }: { url: string; alt: string; onReplace: () => void; onRemove: () => void }) => {
+    const [broken, setBroken] = useState(false);
+    const overlay = (
+        <div className="absolute right-2 top-2 flex gap-1.5">
+            <button type="button" onClick={onReplace} className="inline-flex items-center gap-1 rounded-lg bg-ink/70 px-2.5 py-1.5 text-caption-2 font-medium text-white backdrop-blur transition-colors hover:bg-ink/85">
+                <Icon className="h-3.5 w-3.5 fill-current" name="refresh" />
+                Replace
+            </button>
+            <button type="button" onClick={onRemove} aria-label="Remove image" className="inline-flex items-center justify-center rounded-lg bg-ink/70 px-2 py-1.5 text-white backdrop-blur transition-colors hover:bg-error/80">
+                <Icon className="h-3.5 w-3.5 fill-current" name="trash" />
+            </button>
+        </div>
+    );
+    if (broken) {
+        return (
+            <div className="relative flex h-28 items-center justify-center gap-2 rounded-none border border-grey-light bg-lavender-mist/40 text-caption-2 text-grey dark:border-grey-light/10 dark:bg-dark-3/40">
+                <Icon className="h-4 w-4 fill-grey" name="image" />
+                Couldn’t load image
+                {overlay}
+            </div>
+        );
+    }
+    return (
+        <div className="group relative overflow-hidden rounded-none border border-grey-light dark:border-grey-light/10">
+            {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary asset/external URL */}
+            <img src={url} alt={alt} onError={() => setBroken(true)} className="max-h-64 w-full object-cover" />
+            {overlay}
+        </div>
+    );
+};
+
+/**
+ * A complete Media field control: shows the chosen image (with Replace/Remove) or a
+ * "Choose image" dropzone, and opens the asset picker. Shared by the section page
+ * builder and the schema-driven (nested component) field editor so every Media field
+ * gets the asset library picker, not a bare URL text box.
+ */
+export const MediaField = ({ value, alt, onChange }: { value: unknown; alt: string; onChange: (url: string) => void }) => {
+    const [picker, setPicker] = useState(false);
+    const url = typeof value === "string" ? value : "";
+    return (
+        <>
+            {url ? (
+                <MediaPreview key={url} url={url} alt={alt} onReplace={() => setPicker(true)} onRemove={() => onChange("")} />
+            ) : (
+                <button
+                    type="button"
+                    onClick={() => setPicker(true)}
+                    className="flex h-28 items-center justify-center gap-2 rounded-none border border-dashed border-grey-light text-caption-1 text-grey transition-colors hover:border-primary hover:text-primary dark:border-grey-light/15"
+                >
+                    <Icon className="h-4 w-4 fill-current" name="image" />
+                    Choose image
+                </button>
+            )}
+            {picker && <MediaPicker value={url} onSelect={(v) => onChange(v)} onClose={() => setPicker(false)} />}
+        </>
+    );
+};
+
 const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (url: string) => void; onClose: () => void }) => {
     const [tab, setTab] = useState<"library" | "url">("library");
     const [assets, setAssets] = useState<Asset[]>([]);

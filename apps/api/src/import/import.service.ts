@@ -27,6 +27,14 @@ type InferredField = {
 // A string that points at an uploaded asset / image / file, so the field is
 // modeled as Media (e.g. "/assets/images/hero.webp", "https://cdn/x.jpg").
 const MEDIA_RE = /(\.(png|jpe?g|webp|gif|svg|avif|ico|bmp|mp4|webm|mov|mp3|wav|pdf|docx?|zip)(\?.*)?$)|^\/?(assets|images|img|uploads|media)\//i;
+// Short, single-line label / identifier / meta fields. These stay plain Text even
+// when the value is long, so titles, alt text, CTA labels and SEO meta never turn
+// into a rich-text (HTML) blob the frontend would render with stray <p> tags.
+const PLAIN_NAME_RE = /(title|name|label|heading|headline|subtitle|tagline|slug|alt|caption|author|category|keyword|tag|sku|code|status|type|meta|seo|email|phone|placeholder|currency|price|color|locale|language|description)/i;
+// Prose fields → rich-text editor regardless of length (intro, body copy, FAQ
+// answers, testimonials, etc.). "text" is deliberately excluded so altText /
+// callToActionText style labels are not swept up.
+const RICH_NAME_RE = /(content|body|intro|summary|excerpt|paragraph|about|bio|answer|story|message|quote|overview|prose|richtext|details?)/i;
 /** Items grouped by the content type they'll import into, with an optional
  *  inferred field schema (set by the JSON/CSV importers). */
 type Group = { apiId: string; name: string; items: ImportItem[]; fields?: InferredField[] };
@@ -276,11 +284,15 @@ export class ImportService {
         }
         // Strings: type by key + value shape so the model is editable (image picker
         // for media, rich editor for prose, date picker for dates) instead of all Text.
+        // Most textual content imports as Rich text; only labels / identifiers / meta
+        // (PLAIN_NAME_RE) stay single-line Text.
         const s = typeof value === "string" ? value.trim() : "";
         if (MEDIA_RE.test(s) || /(image|photo|avatar|logo|icon|cover|thumbnail|banner)$/i.test(k)) return { ...base, type: "Media" };
         if (/(^|_)(url|link|href)$/i.test(k) || /^https?:\/\//i.test(s)) return { ...base, type: "URL" };
         if (/^\d{4}-\d{2}-\d{2}([T ]|$)/.test(s) && !Number.isNaN(Date.parse(s))) return { ...base, type: "Date" };
-        if (/<[a-z][\s\S]*>/i.test(s) || s.length > 160) return { ...base, type: "Rich text" };
+        if (/<[a-z][\s\S]*>/i.test(s)) return { ...base, type: "Rich text" }; // value already carries markup
+        if (PLAIN_NAME_RE.test(k)) return { ...base, type: "Text" }; // label / identifier / SEO meta
+        if (RICH_NAME_RE.test(k) || s.length > 80) return { ...base, type: "Rich text" }; // prose by name or length
         return { ...base, type: "Text" }; // short scalar string / null / undefined
     }
 

@@ -15,7 +15,7 @@ import type { Editor } from "@tiptap/react";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import EditorCanvas from "./EditorCanvas";
-import MediaPicker from "@/components/ui/MediaPicker";
+import { MediaField } from "@/components/ui/MediaPicker";
 import { runAi, extractJson, aiErrorMessage } from "@/lib/useAi";
 import { FieldControl } from "./FieldsForm";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
@@ -41,42 +41,9 @@ const blankSection = (def: ComponentDef): Section => ({ __component: def.apiId, 
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
-/* ── image preview with graceful broken-image fallback (remount via key resets) ── */
-const MediaPreview = ({ url, alt, onReplace, onRemove }: { url: string; alt: string; onReplace: () => void; onRemove: () => void }) => {
-    const [broken, setBroken] = useState(false);
-    const overlay = (
-        <div className="absolute right-2 top-2 flex gap-1.5">
-            <button type="button" onClick={onReplace} className="inline-flex items-center gap-1 rounded-lg bg-ink/70 px-2.5 py-1.5 text-caption-2 font-medium text-white backdrop-blur transition-colors hover:bg-ink/85">
-                <Icon className="h-3.5 w-3.5 fill-current" name="refresh" />
-                Replace
-            </button>
-            <button type="button" onClick={onRemove} aria-label="Remove image" className="inline-flex items-center justify-center rounded-lg bg-ink/70 px-2 py-1.5 text-white backdrop-blur transition-colors hover:bg-error/80">
-                <Icon className="h-3.5 w-3.5 fill-current" name="trash" />
-            </button>
-        </div>
-    );
-    if (broken) {
-        return (
-            <div className="relative flex h-28 items-center justify-center gap-2 rounded-none border border-grey-light bg-lavender-mist/40 text-caption-2 text-grey dark:border-grey-light/10 dark:bg-dark-3/40">
-                <Icon className="h-4 w-4 fill-grey" name="image" />
-                Couldn’t load image
-                {overlay}
-            </div>
-        );
-    }
-    return (
-        <div className="group relative overflow-hidden rounded-none border border-grey-light dark:border-grey-light/10">
-            {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary asset/external URL */}
-            <img src={url} alt={alt} onError={() => setBroken(true)} className="max-h-64 w-full object-cover" />
-            {overlay}
-        </div>
-    );
-};
-
 /* ── single field control with label + char counter / media preview ── */
 const SectionField = ({ field, value, onChange }: { field: SchemaField; value: unknown; onChange: (v: unknown) => void }) => {
     const limit = limitFor(field.name);
-    const [picker, setPicker] = useState(false);
 
     if (field.type === "Boolean") {
         return (
@@ -88,24 +55,11 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
     }
 
     if (field.type === "Media") {
-        const url = str(value);
         return (
             <div className="flex flex-col gap-1.5">
                 <span className="text-caption-1 text-grey">{fieldLabel(field)}</span>
                 {field.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{field.description}</span>}
-                {url ? (
-                    <MediaPreview key={url} url={url} alt={fieldLabel(field)} onReplace={() => setPicker(true)} onRemove={() => onChange("")} />
-                ) : (
-                    <button
-                        type="button"
-                        onClick={() => setPicker(true)}
-                        className="flex h-28 items-center justify-center gap-2 rounded-none border border-dashed border-grey-light text-caption-1 text-grey transition-colors hover:border-primary hover:text-primary dark:border-grey-light/15"
-                    >
-                        <Icon className="h-4 w-4 fill-current" name="image" />
-                        Choose image
-                    </button>
-                )}
-                {picker && <MediaPicker value={url} onSelect={(v) => onChange(v)} onClose={() => setPicker(false)} />}
+                <MediaField value={value} alt={fieldLabel(field)} onChange={onChange} />
             </div>
         );
     }
