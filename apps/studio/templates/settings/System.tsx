@@ -8,7 +8,7 @@ import ApprovalsCard from "@/templates/settings/ApprovalsCard";
 import { api, ApiError } from "@/lib/api";
 import { clearWorkspaceCache, type Workspace } from "@/lib/useWorkspace";
 import { confirm } from "@/components/providers/ConfirmProvider";
-import { cn } from "@/lib/cn";
+import { useUpgrade } from "@/components/providers/UpgradeProvider";
 
 /**
  * System — workspace identity, the frontend preview URL, data export, and the
@@ -133,74 +133,14 @@ type UpdatesInfo = {
     error?: string;
 };
 
-type UpgradeStatus = { status: string; step?: string; error?: string | null; toVersion?: string | null; finishedAt?: string | null; reconnecting?: boolean; backupId?: string | null };
-
-const UPGRADE_STEPS: { key: string; label: string }[] = [
-    { key: "backup", label: "Backing up" },
-    { key: "download", label: "Downloading" },
-    { key: "migrate", label: "Updating database" },
-    { key: "verify", label: "Starting & verifying" },
-];
-
-const UpgradeProgress = ({ p, onRestore, restoring }: { p: UpgradeStatus; onRestore?: (id: string) => void; restoring?: boolean }) => {
-    const idx = UPGRADE_STEPS.findIndex((s) => s.key === p.step);
-    const done = p.status === "success";
-    const rolledBack = p.status === "rolled_back";
-    const failed = p.status === "failed";
-    const active = p.status === "running" || p.status === "rolling_back";
-    return (
-        <div className="mt-3 rounded-lg bg-lavender-mist/60 px-4 py-4 dark:bg-dark-3/50">
-            {active ? (
-                <>
-                    <div className="mb-3 flex items-center gap-2 text-body-sm font-semibold text-black dark:text-white">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-grey/30 border-t-primary" />
-                        {p.status === "rolling_back" ? "Upgrade failed — rolling back…" : "Upgrading…"}
-                        {p.reconnecting && <span className="text-caption-2 font-normal text-grey">reconnecting…</span>}
-                    </div>
-                    <ol className="flex flex-col gap-1.5">
-                        {UPGRADE_STEPS.map((s, i) => {
-                            const state = idx < 0 ? "pending" : i < idx ? "done" : i === idx ? "active" : "pending";
-                            return (
-                                <li key={s.key} className="flex items-center gap-2 text-caption-1">
-                                    <span className={cn("flex h-4 w-4 items-center justify-center rounded-full text-[0.6rem]", state === "done" ? "bg-success/20 text-success" : state === "active" ? "bg-primary/20 text-primary dark:text-lilac" : "bg-grey-light text-grey dark:bg-dark-1")}>
-                                        {state === "done" ? "✓" : i + 1}
-                                    </span>
-                                    <span className={state === "pending" ? "text-grey" : "text-black dark:text-white"}>{s.label}</span>
-                                </li>
-                            );
-                        })}
-                    </ol>
-                    <p className="mt-3 text-caption-2 text-grey">Your site briefly restarts during this step. Keep this tab open.</p>
-                </>
-            ) : (
-                <div className="flex items-start gap-2.5">
-                    <Icon className={cn("h-5 w-5 shrink-0", done ? "fill-success" : failed ? "fill-error" : "fill-warning")} name={done ? "check" : "info"} />
-                    <div>
-                        <p className={cn("text-body-sm font-semibold", done ? "text-success" : failed ? "text-error" : "text-black dark:text-white")}>
-                            {done ? `Upgraded to v${p.toVersion} ✓` : rolledBack ? "Upgrade failed — rolled back, your site is safe" : "Upgrade failed"}
-                        </p>
-                        {p.error && <p className="mt-0.5 text-caption-2 text-grey">{p.error}</p>}
-                        {failed && p.backupId && onRestore && (
-                            <button type="button" onClick={() => onRestore(p.backupId!)} disabled={restoring} className="btn-secondary btn-md mt-2.5 disabled:opacity-60">
-                                <Icon className={`h-4 w-4 fill-current ${restoring ? "animate-spin" : ""}`} name="refresh" />
-                                {restoring ? "Restoring…" : "Restore the pre-upgrade backup"}
-                            </button>
-                        )}
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
 /** Self-host version, update availability, and the one-click upgrade (Super-Admin,
- *  compose self-host). The API restarts mid-upgrade, so progress is polled and
- *  tolerant of the gap. */
+ *  compose self-host). The upgrade flow + its app-wide lock live in UpgradeProvider. */
 const UpdatesCard = () => {
     const [info, setInfo] = useState<(UpdatesInfo & { updaterAvailable?: boolean }) | null>(null);
     const [checking, setChecking] = useState(false);
-    const [progress, setProgress] = useState<UpgradeStatus | null>(null);
-    const [restoring, setRestoring] = useState(false);
+    // The upgrade itself is owned by the app-wide UpgradeProvider, so its progress
+    // overlay locks the whole studio (not just this card) until it finishes.
+    const { progress, startUpgrade } = useUpgrade();
 
     const load = (force?: boolean) => {
         setChecking(true);
@@ -210,79 +150,22 @@ const UpdatesCard = () => {
             .finally(() => setChecking(false));
     };
 
-    const poll = () => {
-        let tries = 0;
-        const tick = async () => {
-            try {
-                const s = await api<UpgradeStatus>("/system/upgrade/status");
-                setProgress(s);
-                if (["success", "rolled_back", "failed"].includes(s.status)) {
-                    // Hard-refresh on success so the browser loads the new version's
-                    // studio bundle + API (a soft re-fetch would keep the old assets).
-                    if (s.status === "success") setTimeout(() => window.location.reload(), 2500);
-                    return;
-                }
-            } catch {
-                setProgress((prev) => ({ ...(prev ?? { status: "running" }), reconnecting: true }));
-            }
-            if (++tries < 200) setTimeout(tick, 3000);
-        };
-        setTimeout(tick, 2000);
-    };
-
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         load();
-        // Resume showing an upgrade that's already running (e.g. a page reload).
-        api<UpgradeStatus>("/system/upgrade/status")
-            .then((s) => {
-                if (s && ["running", "rolling_back"].includes(s.status)) {
-                    setProgress(s);
-                    poll();
-                }
-            })
-            .catch(() => undefined);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const startUpgrade = async () => {
+    const doUpgrade = async () => {
         if (!info?.latest) return;
         if (
             !(await confirm({
                 title: `Upgrade to v${info.latest}?`,
-                message: "A full backup is taken first, and your site will briefly restart. If the new version fails to start, it rolls back automatically.",
+                message: "A full backup is taken first and your site briefly restarts. The whole app locks until it finishes; if the new version fails to start, it rolls back automatically.",
                 confirmLabel: `Upgrade to v${info.latest}`,
             }))
         )
             return;
-        setProgress({ status: "running", step: "starting" });
-        try {
-            await api("/system/upgrade", { method: "POST", body: JSON.stringify({ toVersion: info.latest }) });
-        } catch {
-            /* the api may already be restarting — poll anyway */
-        }
-        poll();
-    };
-
-    const restoreBackup = async (backupId: string) => {
-        if (
-            !(await confirm({
-                title: "Restore the pre-upgrade backup?",
-                message: "This replaces the database and media with the snapshot taken just before the upgrade. Your site will briefly restart.",
-                confirmLabel: "Restore",
-                tone: "danger",
-            }))
-        )
-            return;
-        setRestoring(true);
-        try {
-            await api(`/system/restore/${backupId}`, { method: "POST", body: JSON.stringify({ restoreEnv: false }) });
-            setProgress((prev) => (prev ? { ...prev, error: "Restored the pre-upgrade backup. Reload to continue." } : prev));
-        } catch {
-            /* surfaced via the existing error line */
-        } finally {
-            setRestoring(false);
-        }
+        await startUpgrade(info.latest);
     };
 
     const canUpgrade = !!info?.updaterAvailable && info?.deployment === "compose" && !!info?.updateAvailable;
@@ -312,7 +195,7 @@ const UpdatesCard = () => {
                         )}
                     </div>
                     {canUpgrade ? (
-                        <button type="button" onClick={startUpgrade} className="btn-primary btn-md">
+                        <button type="button" onClick={doUpgrade} className="btn-primary btn-md">
                             <Icon className="h-4 w-4 fill-white" name="download" />
                             Upgrade to v{info.latest}
                         </button>
@@ -339,24 +222,6 @@ const UpdatesCard = () => {
                         {checking ? "Checking…" : "Check for updates"}
                     </button>
                     {info && <span className="text-caption-2 text-grey">Checked {new Date(info.checkedAt).toLocaleTimeString()}</span>}
-                </div>
-            )}
-
-            {/* Blocking upgrade modal — freezes the app so nobody navigates away
-                mid-upgrade; hard-reloads the page on success to serve the new build. */}
-            {progress && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-ink/50 backdrop-blur-sm" />
-                    <div className="relative w-full max-w-md rounded-3xl bg-white p-6 shadow-[0_1.25rem_3rem_rgba(26,26,46,0.18)] dark:bg-dark-1">
-                        <h3 className="text-title font-semibold text-black dark:text-white">Upgrading FlowCMS</h3>
-                        <UpgradeProgress p={progress} onRestore={restoreBackup} restoring={restoring} />
-                        {progress.status === "success" && <p className="mt-3 text-caption-2 text-grey">Reloading to the new version…</p>}
-                        {(progress.status === "failed" || progress.status === "rolled_back") && (
-                            <button type="button" onClick={() => setProgress(null)} className="btn-secondary btn-md mt-4 w-full">
-                                Close
-                            </button>
-                        )}
-                    </div>
                 </div>
             )}
         </Card>
