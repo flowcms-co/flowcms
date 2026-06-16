@@ -57,8 +57,8 @@ const PoweredBy = ({ collapsed = false }: { collapsed?: boolean }) => {
             {/* The real wordmark lockup (icon + flowcms), swapped per theme so the
                 text stays legible on the light card vs. the dark card. */}
             <span className="mt-1.5 block">
-                <Image src="/brand/primary-light.svg" alt="FlowCMS" width={120} height={31} unoptimized className="block h-auto w-[7.25rem] dark:hidden" />
-                <Image src="/brand/primary-dark.svg" alt="FlowCMS" width={120} height={31} unoptimized className="hidden h-auto w-[7.25rem] dark:block" />
+                <Image src="/brand/primary-light.svg" alt="FlowCMS" width={140} height={36} unoptimized className="block h-auto w-[8.75rem] dark:hidden" />
+                <Image src="/brand/primary-dark.svg" alt="FlowCMS" width={140} height={36} unoptimized className="hidden h-auto w-[8.75rem] dark:block" />
             </span>
             <span className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-caption-2 text-grey">
                 <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", healthy === false ? "bg-error" : "bg-success")} />

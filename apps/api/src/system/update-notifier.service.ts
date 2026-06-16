@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { PERMISSIONS } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { SystemService } from "./system.service";
@@ -52,9 +53,19 @@ export class UpdateNotifierService implements OnModuleInit, OnModuleDestroy {
             });
             if (already) return;
 
-            // Super-admins are the ones who can run the upgrade (SECURITY_MANAGE).
+            // Target whoever can actually run the upgrade, not just the literal
+            // "super_admin" key: installs rename roles or use custom ones. A role
+            // qualifies if it grants workspace/security management or "*".
+            const roles = await this.prisma.role.findMany({ select: { id: true, permissions: true } });
+            const adminRoleIds = roles
+                .filter((r) => {
+                    const perms = Array.isArray(r.permissions) ? (r.permissions as string[]) : [];
+                    return perms.includes("*") || perms.includes(PERMISSIONS.WORKSPACE_MANAGE) || perms.includes(PERMISSIONS.SECURITY_MANAGE);
+                })
+                .map((r) => r.id);
+            if (!adminRoleIds.length) return;
             const admins = await this.prisma.membership.findMany({
-                where: { role: { key: "super_admin" } },
+                where: { roleId: { in: adminRoleIds } },
                 select: { workspaceId: true, userId: true },
             });
             if (!admins.length) return;

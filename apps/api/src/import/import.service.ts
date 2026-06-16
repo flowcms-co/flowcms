@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { ContentStatus } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { safeFetch } from "../common/ssrf";
+import { pluralize } from "../content/pluralize";
 
 /** A normalized item ready to become a ContentEntry. */
 type ImportItem = {
@@ -469,7 +470,7 @@ export class ImportService {
                 workspaceId,
                 name,
                 apiId,
-                pluralApiId: `${apiId}s`,
+                pluralApiId: pluralize(apiId),
                 kind: "COLLECTION",
                 schema: {
                     icon: "document",

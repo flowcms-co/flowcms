@@ -69,7 +69,9 @@ const ConnectQuickstart = () => {
     const [copied, setCopied] = useState(false);
     const [copiedLive, setCopiedLive] = useState(false);
     const [types, setTypes] = useState<ContentType[]>([]);
-    const [resource, setResource] = useState("articles");
+    // A clear placeholder until the workspace's real content types load (and for
+    // an empty workspace), so the snippet never shows a fictitious "articles".
+    const [resource, setResource] = useState("your-content-type");
 
     // Load this workspace's real content types so the snippet fetches something
     // that actually exists. Default to the first collection (a single type often

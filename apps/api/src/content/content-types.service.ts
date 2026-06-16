@@ -3,6 +3,7 @@ import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
 import { isHomeType, routePrefixForType } from "./route-path";
+import { pluralize } from "./pluralize";
 
 @Injectable()
 export class ContentTypesService {
@@ -112,7 +113,7 @@ export class ContentTypesService {
                 workspaceId,
                 name: c.name,
                 apiId: c.apiId,
-                pluralApiId: `${c.apiId}s`,
+                pluralApiId: pluralize(c.apiId),
                 kind: "COMPONENT" as const,
                 schema: { icon: c.icon, color: "#6C5CE7", jsonLd: "WebPage", fields: c.fields.map((f, i) => ({ id: `${c.apiId}_${i}`, name: f.name, type: f.type, required: !!f.required })) },
             })),
@@ -151,7 +152,7 @@ export class ContentTypesService {
                 workspaceId,
                 name: dto.name,
                 apiId,
-                pluralApiId: `${apiId}s`,
+                pluralApiId: pluralize(apiId),
                 kind: dto.kind ?? "COLLECTION",
                 schema: dto.schema as object,
             },
@@ -184,7 +185,7 @@ export class ContentTypesService {
                     if (refs.length) throw new BadRequestException(`This component's API ID can't be changed while it's used by: ${refs.join(", ")}.`);
                 }
                 data.apiId = await this.uniqueApiId(workspaceId, next);
-                data.pluralApiId = `${data.apiId as string}s`;
+                data.pluralApiId = pluralize(data.apiId as string);
             }
         }
 
