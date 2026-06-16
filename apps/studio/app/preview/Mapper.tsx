@@ -67,6 +67,8 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
     const [stale, setStale] = useState<Set<string>>(new Set());
     const [saving, setSaving] = useState(false);
     const [saveMsg, setSaveMsg] = useState<string | null>(null);
+    const [query, setQuery] = useState("");
+    const [filter, setFilter] = useState<"all" | "unmapped" | "mapped" | "stale">("all");
 
     // Seed the working map from the saved map.
     useEffect(() => {
@@ -163,6 +165,22 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
 
     const boundCount = Object.keys(bindings).length;
     const confidentCount = fields.filter((f) => !bindings[f.path] && (sugg[f.path]?.confidence ?? 0) >= 0.85).length;
+    const staleCount = fields.filter((f) => bindings[f.path] && stale.has(f.path)).length;
+    const q = query.trim().toLowerCase();
+    const visible = fields.filter((f) => {
+        if (q && !f.path.toLowerCase().includes(q) && !f.value.toLowerCase().includes(q)) return false;
+        const bound = !!bindings[f.path];
+        if (filter === "mapped") return bound;
+        if (filter === "unmapped") return !bound;
+        if (filter === "stale") return bound && stale.has(f.path);
+        return true;
+    });
+    const FILTERS: { id: typeof filter; label: string }[] = [
+        { id: "all", label: `All ${fields.length}` },
+        { id: "unmapped", label: `Unmapped ${fields.length - boundCount}` },
+        { id: "mapped", label: `Mapped ${boundCount}` },
+        ...(staleCount ? ([{ id: "stale" as const, label: `Stale ${staleCount}` }]) : []),
+    ];
 
     return (
         <aside className="absolute right-0 top-14 bottom-0 z-20 flex w-[22rem] max-w-[90vw] flex-col border-l border-grey-light bg-surface shadow-[-0.5rem_0_1.5rem_rgba(26,26,46,0.08)] dark:border-grey-light/10 dark:bg-dark-1">
@@ -200,9 +218,36 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
                             )}
                         </div>
                     )}
+                    {staleCount > 0 && (
+                        <button type="button" onClick={() => setFilter("stale")} className="flex items-center gap-1.5 bg-error/10 px-4 py-2 text-left text-caption-2 text-error">
+                            <Icon className="h-3.5 w-3.5 shrink-0 fill-error" name="info" />
+                            {staleCount} mapped field{staleCount === 1 ? "" : "s"} no longer match the page. Re-pick them.
+                        </button>
+                    )}
+
+                    <div className="border-b border-grey-light px-3 py-2 dark:border-grey-light/10">
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder="Filter fields…"
+                            className="h-8 w-full rounded-lg border border-grey-light bg-surface px-2.5 text-caption-2 text-black focus:border-primary focus:outline-none dark:border-grey-light/15 dark:bg-dark-3 dark:text-white"
+                        />
+                        <div className="mt-2 flex flex-wrap gap-1">
+                            {FILTERS.map((ff) => (
+                                <button
+                                    key={ff.id}
+                                    type="button"
+                                    onClick={() => setFilter(ff.id)}
+                                    className={cn("rounded-md px-2 py-1 text-[0.625rem] font-semibold transition-colors", filter === ff.id ? "bg-primary text-white" : "bg-lavender-mist text-grey hover:text-primary dark:bg-dark-3")}
+                                >
+                                    {ff.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
 
                     <ul className="min-h-0 flex-1 divide-y divide-grey-light overflow-y-auto dark:divide-grey-light/10">
-                        {fields.map((f) => {
+                        {visible.map((f) => {
                             const bound = bindings[f.path];
                             const isStale = bound && stale.has(f.path);
                             const s = sugg[f.path];
@@ -239,7 +284,7 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
                                 </li>
                             );
                         })}
-                        {!fields.length && <li className="px-4 py-6 text-caption-1 text-grey">No editable text fields found on this entry.</li>}
+                        {!visible.length && <li className="px-4 py-6 text-caption-1 text-grey">{fields.length ? "No fields match this filter." : "No editable text fields found on this entry."}</li>}
                     </ul>
                 </>
             )}

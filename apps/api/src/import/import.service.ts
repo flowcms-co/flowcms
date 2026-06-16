@@ -152,7 +152,9 @@ export class ImportService {
                     status: a.publishedAt ? "PUBLISHED" : "DRAFT",
                     locale: (a.locale as string) || locale,
                     publishedAt: a.publishedAt ? new Date(a.publishedAt as string) : null,
-                    data: { ...a, body },
+                    // Keep Strapi's real attributes (components, nested fields) so the
+                    // inferred model mirrors the source, not a flat Title/Slug/Body.
+                    data: { ...a },
                 };
             });
             const apiId = type.replace(/s$/, "");
@@ -352,7 +354,9 @@ export class ImportService {
                 status: ContentStatus.PUBLISHED,
                 locale,
                 publishedAt: it.sys?.createdAt ? new Date(it.sys.createdAt) : new Date(),
-                data: { contentfulId: it.sys?.id, contentType: ctId },
+                // Preserve the entry's actual fields (not just its id) so the model
+                // and delivery API reflect the real Contentful content type.
+                data: { ...(f as Record<string, unknown>) },
             };
             if (!byType.has(ctId)) byType.set(ctId, { apiId: slugify(ctId) || "article", name: ctId, items: [] });
             byType.get(ctId)!.items.push(item);
@@ -394,7 +398,12 @@ export class ImportService {
                 status: ContentStatus.PUBLISHED,
                 locale,
                 publishedAt: d._createdAt ? new Date(d._createdAt) : new Date(),
-                data: { sanityId: d._id, _type: type },
+                // Preserve the document's real fields (minus Sanity's revision noise)
+                // so the inferred model mirrors the source schema.
+                data: (() => {
+                    const { _rev, _updatedAt, ...rest } = d as Record<string, unknown>;
+                    return rest;
+                })(),
             };
             if (!byType.has(type)) byType.set(type, { apiId: slugify(type) || "article", name: type, items: [] });
             byType.get(type)!.items.push(item);
@@ -402,7 +411,7 @@ export class ImportService {
         return [...byType.values()];
     }
 
-    private async collect(src: ImportSource): Promise<Group[]> {
+    private async adapt(src: ImportSource): Promise<Group[]> {
         switch (src.kind) {
             case "wordpress": return this.fromWordPress(src);
             case "strapi": return this.fromStrapi(src);
@@ -413,6 +422,18 @@ export class ImportService {
             case "sanity": return this.fromSanity(src);
             default: throw new BadRequestException("Unknown import source.");
         }
+    }
+
+    private async collect(src: ImportSource): Promise<Group[]> {
+        const groups = await this.adapt(src);
+        // Backfill an inferred field schema for any adapter that didn't set one
+        // (everything except JSON/CSV), so a WordPress / Strapi / Contentful /
+        // Sanity import also produces a real nested model instead of a fixed
+        // Title/Slug/Body type with the rest hidden in the data blob.
+        for (const g of groups) {
+            if (!g.fields?.length) g.fields = this.inferSchema(g.items.map((i) => i.data));
+        }
+        return groups;
     }
 
     /** Dry run — show what would be imported, no DB writes. */
