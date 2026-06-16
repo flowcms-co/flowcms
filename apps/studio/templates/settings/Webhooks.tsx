@@ -6,7 +6,7 @@ import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { api, ApiError } from "@/lib/api";
-import { formatDate } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Hook = { id: string; name: string; url: string; events: string[]; enabled: boolean; hasSecret: boolean; createdAt: string; deliveries: number };
@@ -184,7 +184,7 @@ const Webhooks = () => {
                                                         {d.success ? "OK" : "FAIL"} {d.statusCode ?? "—"}
                                                     </span>
                                                     <span className="font-mono text-caption-2 text-black dark:text-white">{d.event}</span>
-                                                    <span className="text-caption-2 text-grey" suppressHydrationWarning>{formatDate(d.createdAt)}{d.attempt > 1 ? ` · retry #${d.attempt}` : ""}</span>
+                                                    <span className="text-caption-2 text-grey" suppressHydrationWarning>{formatDateTime(d.createdAt)}{d.attempt > 1 ? ` · retry #${d.attempt}` : ""}</span>
                                                     {d.responseBody && <span className="min-w-0 grow truncate text-caption-2 text-grey">{d.responseBody}</span>}
                                                     <button type="button" onClick={() => resend(h.id, d.id)} className="btn-secondary h-8 px-3 text-caption-2 ml-auto">Resend</button>
                                                 </div>

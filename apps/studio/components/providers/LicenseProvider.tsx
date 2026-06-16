@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { FEATURE_TIER, PLAN_RANK, type FeatureKey, type Plan } from "@/lib/plans";
+import { LICENSE_COOKIE, type LicenseCookie } from "@/lib/brand";
 
 export type LicenseInfo = {
     valid: boolean;
@@ -44,19 +45,31 @@ type PlanContextValue = {
 
 const PlanContext = createContext<PlanContextValue | null>(null);
 
-export function LicenseProvider({ children }: { children: ReactNode }) {
+/** Mirror the resolved license into a cookie so the server layout can seed the
+ *  next load's first paint (no flash of default Flow CMS chrome). */
+function writeLicenseCookie(info: LicenseInfo) {
+    if (typeof document === "undefined") return;
+    const payload: LicenseCookie = { valid: info.valid, plan: info.plan, features: info.features };
+    document.cookie = `${LICENSE_COOKIE}=${encodeURIComponent(JSON.stringify(payload))}; path=/; max-age=2592000; samesite=lax`;
+}
+
+export function LicenseProvider({ children, initial }: { children: ReactNode; initial?: LicenseCookie }) {
     const { status } = useAuth();
-    const [info, setInfo] = useState<LicenseInfo>(COMMUNITY);
+    // Seed from the server-read cookie so white-label chrome is right on first paint.
+    const [info, setInfo] = useState<LicenseInfo>(initial ? { ...COMMUNITY, valid: initial.valid, plan: initial.plan as Plan, features: initial.features } : COMMUNITY);
     const [ready, setReady] = useState(false);
 
     const sync = useCallback(async () => {
         if (status !== "authenticated") {
             setInfo(COMMUNITY);
+            writeLicenseCookie(COMMUNITY);
             setReady(true);
             return;
         }
         try {
-            setInfo(await api<LicenseInfo>("/license"));
+            const fetched = await api<LicenseInfo>("/license");
+            setInfo(fetched);
+            writeLicenseCookie(fetched);
         } catch {
             setInfo(COMMUNITY);
         } finally {

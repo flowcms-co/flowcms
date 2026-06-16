@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Inter, Poppins } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import { LICENSE_COOKIE, parseLicenseCookie } from "@/lib/brand";
 
 const inter = Inter({
     weight: ["400", "500", "600", "700"],
@@ -42,11 +44,14 @@ const BRAND_BOOT = `(function(){try{
   if(b.logo){var l=document.querySelector("link[rel~='icon']");if(!l){l=document.createElement("link");l.rel="icon";(document.head||document.documentElement).appendChild(l);}l.href=b.logo;}
 }catch(e){}})();`;
 
-export default function RootLayout({
+export default async function RootLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
+    // Seed the license from the cookie (mirrored by LicenseProvider) so white-label
+    // chrome renders correctly on the very first paint instead of flashing default.
+    const initialLicense = parseLicenseCookie((await cookies()).get(LICENSE_COOKIE)?.value);
     return (
         <html
             lang="en"
@@ -55,7 +60,7 @@ export default function RootLayout({
         >
             <body>
                 <script dangerouslySetInnerHTML={{ __html: BRAND_BOOT }} />
-                <Providers>{children}</Providers>
+                <Providers initialLicense={initialLicense}>{children}</Providers>
             </body>
         </html>
     );

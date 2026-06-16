@@ -4,6 +4,12 @@ export function formatDate(iso: string): string {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** Date + time label, e.g. "Jun 16, 11:04 PM" (for logs where the time matters). */
+export function formatDateTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 /** Compact number, e.g. 12840 -> "12.8K". */
 export function formatCount(n: number): string {
     if (n === 0) return "—";

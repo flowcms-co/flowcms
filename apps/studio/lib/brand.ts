@@ -27,3 +27,28 @@ export function brandAccentCss(a: string): string {
 
 /** Cookie payload mirrored from the active workspace's brand, read pre-paint. */
 export type BrandCookie = { accent: string | null; name: string | null; logo: string | null };
+
+// The license is fetched client-side, so the studio's chrome (white-label sidebar
+// vs. the default Flow CMS logo) flips after first paint -> a flash. Mirroring the
+// resolved license into this cookie lets the server layout seed it into the first
+// render, so the branded chrome is correct from the very first paint.
+export const LICENSE_COOKIE = "fc_license";
+
+export type LicenseCookie = { valid: boolean; plan: string; features: string[] };
+
+export function parseLicenseCookie(raw?: string): LicenseCookie | undefined {
+    if (!raw) return undefined;
+    try {
+        const p = JSON.parse(decodeURIComponent(raw)) as Record<string, unknown>;
+        if (p && typeof p === "object" && Array.isArray(p.features)) {
+            return {
+                valid: !!p.valid,
+                plan: typeof p.plan === "string" ? p.plan : "community",
+                features: (p.features as unknown[]).filter((x): x is string => typeof x === "string"),
+            };
+        }
+    } catch {
+        /* malformed cookie: ignore */
+    }
+    return undefined;
+}

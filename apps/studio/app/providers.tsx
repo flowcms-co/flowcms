@@ -10,8 +10,9 @@ import { ConfirmProvider } from "@/components/providers/ConfirmProvider";
 import { UpgradeProvider } from "@/components/providers/UpgradeProvider";
 import FirstRunGate from "@/components/providers/FirstRunGate";
 import SilenceChartWarning from "@/components/providers/SilenceChartWarning";
+import type { LicenseCookie } from "@/lib/brand";
 
-export function Providers({ children }: { children: ReactNode }) {
+export function Providers({ children, initialLicense }: { children: ReactNode; initialLicense?: LicenseCookie }) {
     return (
         <ThemeProvider
             attribute="class"
@@ -21,7 +22,7 @@ export function Providers({ children }: { children: ReactNode }) {
         >
             <SilenceChartWarning />
             <AuthProvider>
-                <LicenseProvider>
+                <LicenseProvider initial={initialLicense}>
                     <RoleProvider>
                         <JobsProvider>
                             <ConfirmProvider>

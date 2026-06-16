@@ -16,9 +16,11 @@ const TABS: { id: Fw; label: string }[] = [
 
 type ContentType = { id: string; name: string; apiId: string; pluralApiId: string; kind?: string };
 
-// The path segment to fetch is one of this workspace's real content types (its
-// pluralApiId, e.g. "services"), not a hardcoded "articles" that may not exist.
-const resourceOf = (t: ContentType) => t.pluralApiId || t.apiId;
+// Always use the type's exact apiId as the path segment (the public route resolves
+// the apiId, so no auto-pluralized "s" is added, the snippet matches the API ID you
+// set). A single type returns one object; a collection returns a list.
+const isSingle = (t: ContentType) => t.kind === "SINGLE";
+const resourceOf = (t: ContentType) => t.apiId;
 
 // One-line "where does this go?" guidance per stack. Everything here uses the
 // plain REST API + your token, so there's nothing to install.
@@ -28,13 +30,17 @@ const HINTS: Record<Fw, string> = {
     curl: "A quick terminal test: confirms your token and URL work before you wire up any code.",
 };
 
-const snippet = (fw: Fw, token: string, displayBase: string, resource: string) => {
+const snippet = (fw: Fw, token: string, displayBase: string, resource: string, single: boolean) => {
     const t = token || "YOUR_TOKEN";
+    // A single type returns one object; a collection returns a list (data array).
+    const query = single ? "" : "?limit=10";
     if (fw === "curl")
-        return `# Test the connection from your terminal\ncurl "${displayBase}/public/${resource}?limit=10" \\\n  -H "Authorization: Bearer ${t}"`;
+        return `# Test the connection from your terminal\ncurl "${displayBase}/public/${resource}${query}" \\\n  -H "Authorization: Bearer ${t}"`;
     if (fw === "next")
-        return `// app/${resource}/page.tsx in YOUR website (example path — use any page)\nexport default async function Page() {\n  const res = await fetch("${displayBase}/public/${resource}?limit=10", {\n    headers: { Authorization: "Bearer ${t}" }, // keep the token in FLOWCMS_TOKEN\n    next: { revalidate: 60 }, // ISR; pair with a webhook for instant updates\n  });\n  const { data } = await res.json();\n  return <ul>{data.map((p) => <li key={p.id}>{String(p.title)}</li>)}</ul>;\n}`;
-    return `// In YOUR website's code — no install, just fetch the REST API.\nconst res = await fetch("${displayBase}/public/${resource}?limit=10", {\n  headers: { Authorization: "Bearer ${t}" }, // store the token in an env var\n});\nconst { data } = await res.json();\nconsole.log(data);`;
+        return single
+            ? `// app/${resource}/page.tsx in YOUR website (example path — use any page)\nexport default async function Page() {\n  const res = await fetch("${displayBase}/public/${resource}", {\n    headers: { Authorization: "Bearer ${t}" }, // keep the token in FLOWCMS_TOKEN\n    next: { revalidate: 60 }, // ISR; pair with a webhook for instant updates\n  });\n  const { data } = await res.json(); // a single object\n  return <h1>{String(data.title)}</h1>;\n}`
+            : `// app/${resource}/page.tsx in YOUR website (example path — use any page)\nexport default async function Page() {\n  const res = await fetch("${displayBase}/public/${resource}?limit=10", {\n    headers: { Authorization: "Bearer ${t}" }, // keep the token in FLOWCMS_TOKEN\n    next: { revalidate: 60 }, // ISR; pair with a webhook for instant updates\n  });\n  const { data } = await res.json();\n  return <ul>{data.map((p) => <li key={p.id}>{String(p.title)}</li>)}</ul>;\n}`;
+    return `// In YOUR website's code — no install, just fetch the REST API.\nconst res = await fetch("${displayBase}/public/${resource}${query}", {\n  headers: { Authorization: "Bearer ${t}" }, // store the token in an env var\n});\nconst { data } = await res.json();\nconsole.log(data);`;
 };
 
 // Live-editor setup: enables clicking-to-edit on the real page inside the FlowCMS
@@ -104,8 +110,11 @@ const ConnectQuickstart = () => {
         }
     };
 
+    // Is the selected content type a single type? (drives /public/<id> vs list.)
+    const single = types.some((t) => resourceOf(t) === resource && isSingle(t));
+
     const copy = async () => {
-        await navigator.clipboard.writeText(snippet(fw, token, displayBase, resource));
+        await navigator.clipboard.writeText(snippet(fw, token, displayBase, resource, single));
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
     };
@@ -165,7 +174,7 @@ const ConnectQuickstart = () => {
             <p className="mb-3 flex items-start gap-1.5 text-caption-2 text-grey"><Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-grey" name="info" />{HINTS[fw]}</p>
 
             <div className="relative">
-                <pre className="overflow-x-auto rounded-2xl bg-ink px-4 py-3 text-caption-1 leading-relaxed text-white/90 dark:bg-dark-2">{snippet(fw, token, displayBase, resource)}</pre>
+                <pre className="overflow-x-auto rounded-2xl bg-ink px-4 py-3 text-caption-1 leading-relaxed text-white/90 dark:bg-dark-2">{snippet(fw, token, displayBase, resource, single)}</pre>
                 <button type="button" onClick={copy} className="absolute right-3 top-3 rounded-lg bg-white/10 px-2.5 py-1 text-caption-2 font-semibold text-white transition-colors hover:bg-white/20">{copied ? "Copied!" : "Copy"}</button>
             </div>
 
