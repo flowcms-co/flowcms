@@ -26,9 +26,16 @@ function setFavicon(href: string) {
  * workspace has no brand (or the install isn't licensed).
  */
 const BrandStyle = () => {
-    const { accent, name, logoUrl, active } = useBrand();
+    const { accent, name, logoUrl, active, ready } = useBrand();
 
     useEffect(() => {
+        // Don't touch anything until the brand is actually known. The license and
+        // workspace load after first paint, so acting early would mistake "still
+        // loading" for "no brand" — wiping the fc_brand cookie and tearing down the
+        // pre-paint boot <style>, which drops a branded install to default purple
+        // (and, with the cookie gone, can't pre-paint correctly next load either).
+        // Until then the pre-paint boot accent stays in place, so there's no flash.
+        if (!ready) return;
         // Mirror the active brand into a cookie for the next load's boot script.
         const payload: BrandCookie | null = active ? { accent, name, logo: logoUrl } : null;
         document.cookie = payload
@@ -40,7 +47,7 @@ const BrandStyle = () => {
         // Apply identity live (so switching workspaces updates without a reload).
         document.title = active && name ? name : DEFAULT_TITLE;
         setFavicon(active && logoUrl ? logoUrl : DEFAULT_ICON);
-    }, [active, accent, name, logoUrl]);
+    }, [ready, active, accent, name, logoUrl]);
 
     if (!accent) return null;
     return <style id="flow-brand-accent" dangerouslySetInnerHTML={{ __html: brandAccentCss(accent) }} />;

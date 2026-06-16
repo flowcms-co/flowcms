@@ -82,6 +82,11 @@ const Sidebar = ({
     // The workspace switcher is the multi-workspace (Enterprise) console. Without
     // it, the brand spot shows the Flow CMS logo (its icon doubles as the toggle).
     const showSwitcher = has("multi_workspace");
+    // White-label installs have paid to drop Flow CMS attribution, so the
+    // "Powered by" badge is suppressed for them. Gated on the license (seeded
+    // server-side at first paint) rather than the async-loaded brand, so the badge
+    // never flashes in before branding resolves.
+    const whiteLabel = has("white_label");
     const items = navForRole(role);
 
     async function handleLogout() {
@@ -172,8 +177,9 @@ const Sidebar = ({
 
                 {/* Powered-by badge — sits just below Log out (a small gap), so it
                     stays in view next to the nav rather than pinned to the page
-                    bottom. White-label (Enterprise) only. */}
-                {showSwitcher && (
+                    bottom. Multi-workspace (Enterprise) only, and hidden on
+                    white-label installs (no Flow CMS attribution). */}
+                {showSwitcher && !whiteLabel && (
                     <div className={cn("mt-4 shrink-0", collapsed && "flex justify-center")}>
                         <PoweredBy collapsed={collapsed} />
                     </div>

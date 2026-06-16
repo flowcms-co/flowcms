@@ -71,7 +71,10 @@ export function LicenseProvider({ children, initial }: { children: ReactNode; in
             setInfo(fetched);
             writeLicenseCookie(fetched);
         } catch {
-            setInfo(COMMUNITY);
+            // Keep the last-known license (seeded from the cookie) on a transient
+            // fetch failure. Downgrading to Community here would strip white-label
+            // mid-session on a momentary network blip, wiping the branded chrome
+            // and accent for an enterprise install.
         } finally {
             setReady(true);
         }
