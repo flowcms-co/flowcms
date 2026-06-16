@@ -495,10 +495,53 @@ export class ImportService {
     }
 
     /** Import for real. Idempotent: skips entries whose (type, slug, locale) already exists. */
+    /** Index the workspace's media by file name so imported references like
+     *  "/assets/images/avatar/angela3.webp" can be rewritten to the library asset's
+     *  real URL when a same-named file already exists. Keyed by lowercased name with
+     *  and without extension (optimization may turn e.g. .png into .webp). */
+    private async buildAssetIndex(workspaceId: string): Promise<Map<string, string>> {
+        const map = new Map<string, string>();
+        try {
+            const rows = await this.prisma.media.findMany({ where: { workspaceId }, select: { filename: true, url: true } });
+            for (const r of rows) {
+                const base = r.filename.toLowerCase();
+                const noExt = base.replace(/\.[^.]+$/, "");
+                if (!map.has(base)) map.set(base, r.url);
+                if (!map.has(noExt)) map.set(noExt, r.url); // exact-name match set above wins
+            }
+        } catch {
+            /* best-effort: leave references as-is if the lookup fails */
+        }
+        return map;
+    }
+
+    /** Deep-walk imported data and rewrite local asset-path strings to the matching
+     *  library asset URL (by file name). Leaves external http(s) URLs and unmatched
+     *  paths untouched. */
+    private resolveAssetRefs(value: unknown, index: Map<string, string>): unknown {
+        if (typeof value === "string") {
+            const s = value.trim();
+            if (!s || s.startsWith("/media/") || /^https?:\/\//i.test(s) || !MEDIA_RE.test(s)) return value;
+            const file = (s.split(/[?#]/)[0].split("/").pop() ?? "").toLowerCase();
+            if (!file) return value;
+            return index.get(file) ?? index.get(file.replace(/\.[^.]+$/, "")) ?? value;
+        }
+        if (Array.isArray(value)) return value.map((v) => this.resolveAssetRefs(v, index));
+        if (value && typeof value === "object") {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = this.resolveAssetRefs(v, index);
+            return out;
+        }
+        return value;
+    }
+
     async run(workspaceId: string, userId: string, src: ImportSource) {
         const groups = await this.collect(src);
         let typesCreated = 0, imported = 0, skipped = 0;
         const errors: string[] = [];
+
+        // Map same-named media so imported "/assets/..." paths point at the library.
+        const assetIndex = await this.buildAssetIndex(workspaceId);
 
         for (const g of groups) {
             const before = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId, apiId: g.apiId } } });
@@ -514,6 +557,9 @@ export class ImportService {
                         });
                         if (dup) { skipped++; continue; }
                     }
+                    const data = assetIndex.size
+                        ? (this.resolveAssetRefs(item.data, assetIndex) as Record<string, unknown>)
+                        : item.data;
                     await this.prisma.contentEntry.create({
                         data: {
                             workspaceId,
@@ -523,7 +569,7 @@ export class ImportService {
                             locale: item.locale,
                             status: item.status,
                             publishedAt: item.status === "PUBLISHED" ? item.publishedAt ?? new Date() : null,
-                            data: { ...item.data, title: item.title },
+                            data: { ...data, title: item.title },
                         },
                     });
                     imported++;

@@ -30,6 +30,49 @@ const ALLOWED = new Set([
 
 type UploadedFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
 
+// ── Bound image processing so it can't take the whole API down ──────────────────
+// A single sharp decode can hold many times the file's size in RAM, so an unbounded
+// burst of uploads (or a bulk alt-text job) on a small box exhausts memory and the
+// process gets OOM-killed (the site goes ERR_TIMED_OUT, then restarts). Defences:
+//   • libvips: no decode cache between calls; bounded per-op thread pool.
+//   • a semaphore so only N images are decoded at once, regardless of request burst.
+//   • a hard input-pixel cap so a decompression-bomb image is rejected, not decoded.
+// All tunable via env for larger instances.
+sharp.cache(false);
+sharp.concurrency(Math.max(1, Number(process.env.SHARP_CONCURRENCY) || 1));
+
+const MAX_INPUT_PIXELS = Math.max(1_000_000, Number(process.env.MEDIA_MAX_PIXELS) || 50_000_000); // ~50 MP
+const SHARP_OPTS = { failOn: "none" as const, limitInputPixels: MAX_INPUT_PIXELS };
+
+/** Minimal counting semaphore: hands a freed slot directly to the next waiter so the
+ *  active count can never exceed `max` (no increment race on release). */
+class Semaphore {
+    private active = 0;
+    private readonly queue: (() => void)[] = [];
+    constructor(private readonly max: number) {}
+    private acquire(): Promise<void> {
+        if (this.active < this.max) {
+            this.active++;
+            return Promise.resolve();
+        }
+        return new Promise<void>((res) => this.queue.push(res));
+    }
+    private release(): void {
+        const next = this.queue.shift();
+        if (next) next(); // hand the slot over (active unchanged)
+        else this.active--; // slot is now free
+    }
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+        await this.acquire();
+        try {
+            return await fn();
+        } finally {
+            this.release();
+        }
+    }
+}
+const imageGate = new Semaphore(Math.max(1, Number(process.env.MEDIA_PROCESS_CONCURRENCY) || 2));
+
 @Injectable()
 export class AssetsService {
     private readonly logger = new Logger("AssetsService");
@@ -138,7 +181,7 @@ export class AssetsService {
             // Not converting — still record dimensions for raster images (e.g. GIF).
             if (file.mimetype.startsWith("image/") && file.mimetype !== "image/svg+xml") {
                 try {
-                    const meta = await sharp(file.buffer, { failOn: "none" }).metadata();
+                    const meta = await sharp(file.buffer, SHARP_OPTS).metadata();
                     pass.width = meta.width ?? null;
                     pass.height = meta.height ?? null;
                 } catch {
@@ -150,7 +193,7 @@ export class AssetsService {
 
         try {
             const MAX_EDGE = 2560;
-            const out = await sharp(file.buffer, { failOn: "none" })
+            const out = await sharp(file.buffer, SHARP_OPTS)
                 .rotate()
                 .resize(MAX_EDGE, MAX_EDGE, { fit: "inside", withoutEnlargement: true })
                 .webp({ quality: 80 })
@@ -178,7 +221,8 @@ export class AssetsService {
         if (!contentMatchesDeclared(file.mimetype, file.buffer))
             throw new BadRequestException("File content does not match its declared type.");
 
-        const opt = await this.optimizeImage(file);
+        // Gate the CPU/RAM-heavy decode so concurrent uploads can't OOM the API.
+        const opt = await imageGate.run(() => this.optimizeImage(file));
         const ext = (extname(opt.filename) || `.${opt.mimetype.split("/")[1] ?? "bin"}`).toLowerCase();
         const stored = `${randomUUID()}${ext}`;
         await this.storage.put(stored, opt.buffer, opt.mimetype);
@@ -186,10 +230,12 @@ export class AssetsService {
         // Web-friendly thumbnail for images (skip SVG), from the stored bytes.
         if (opt.mimetype.startsWith("image/") && opt.mimetype !== "image/svg+xml") {
             try {
-                const thumb = await sharp(opt.buffer, { failOn: "none" })
-                    .resize(640, 640, { fit: "inside", withoutEnlargement: true })
-                    .webp({ quality: 78 })
-                    .toBuffer();
+                const thumb = await imageGate.run(() =>
+                    sharp(opt.buffer, SHARP_OPTS)
+                        .resize(640, 640, { fit: "inside", withoutEnlargement: true })
+                        .webp({ quality: 78 })
+                        .toBuffer(),
+                );
                 await this.storage.put(this.thumbKey(stored), thumb, "image/webp");
             } catch (e) {
                 this.logger.warn(`thumbnail failed for ${stored}: ${e instanceof Error ? e.message : e}`);
@@ -254,7 +300,9 @@ export class AssetsService {
         let b64: string;
         let mime = m.mimeType;
         try {
-            const small = await sharp(buffer, { failOn: "none" }).resize(768, 768, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
+            const small = await imageGate.run(() =>
+                sharp(buffer, SHARP_OPTS).resize(768, 768, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(),
+            );
             b64 = small.toString("base64");
             mime = "image/jpeg";
         } catch {

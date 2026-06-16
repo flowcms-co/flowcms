@@ -86,14 +86,14 @@ const FieldGroup = ({
 }) => {
     const set = (name: string, v: unknown) => onChange({ ...data, [name]: v });
     return (
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
             {fields.map((f) => {
                 // Media, Rich text and Component render interactive content (picker
                 // buttons, the TipTap editor, nested labelled fields); wrapping those
                 // in a <label> nests labels / steals focus, so use a plain <div>.
                 const Wrap = f.type === "Media" || f.type === "Rich text" || f.type === "Component" ? "div" : "label";
                 return (
-                    <Wrap key={f.id} className="flex flex-col gap-1.5">
+                    <Wrap key={f.id} className="flex min-w-0 flex-col gap-1.5">
                         <span className="flex items-center gap-1.5 text-caption-1 text-grey">
                             {fieldLabel(f)}
                             {f.required && <span className="text-error">*</span>}

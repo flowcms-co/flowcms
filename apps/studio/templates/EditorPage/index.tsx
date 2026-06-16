@@ -527,12 +527,14 @@ const EditorPage = () => {
                 </div>
             </div>
 
-            {/* Body: canvas + panel */}
-            <div ref={bodyScope} className="relative flex grow min-h-0">
+            {/* Body: canvas + panel. overflow-x-clip + the docked panel's shrink-0
+                keep the tools panel on-screen no matter how wide a field's content
+                is (the canvas column shrinks via min-w-0 instead of overflowing). */}
+            <div ref={bodyScope} className="relative flex grow min-h-0 overflow-x-clip">
                 <div className="reveal-up flex grow min-w-0 flex-col bg-gradient-to-br from-lavender-mist/70 via-white to-purple-100/40 dark:from-dark-2 dark:via-dark-1 dark:to-dark-2/80">
                     <div className="grow overflow-y-auto scrollbar-thin px-3 sm:px-5">
                     {ready ? (
-                        <div className="flex w-full flex-col gap-4 py-6">
+                        <div className="flex w-full min-w-0 flex-col gap-4 py-6">
                             {/* Slug — the page's URL path. */}
                             <label className="flex flex-col gap-1.5">
                                 <span className="text-caption-1 text-grey">Slug</span>
@@ -601,7 +603,7 @@ const EditorPage = () => {
                 {/* Tools panel: a slide-over drawer below md, a docked column on md+. */}
                 <aside
                     className={cn(
-                        "bg-surface overflow-hidden dark:bg-dark-1",
+                        "bg-surface overflow-hidden dark:bg-dark-1 md:shrink-0",
                         "fixed inset-y-0 right-0 z-50 w-[min(22rem,calc(100vw-2.5rem))] border-l border-grey-light shadow-[0_0_2.5rem_rgba(26,26,46,0.20)] transition-transform duration-300 dark:border-grey-light/10",
                         panelOpen ? "translate-x-0" : "translate-x-full",
                         "md:static md:z-auto md:translate-x-0 md:shadow-none md:transition-[width] md:duration-300",

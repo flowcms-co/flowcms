@@ -14,6 +14,9 @@ import { cn } from "@/lib/cn";
 
 gsap.registerPlugin(useGSAP);
 
+/** How many files to upload at once. The rest queue and start as slots free up. */
+const UPLOAD_CONCURRENCY = 3;
+
 /** Live asset shape returned by the API (GET /assets). */
 type LiveAsset = {
     id: string;
@@ -60,10 +63,13 @@ const AssetsPage = () => {
     const [folder, setFolder] = useState("all");
     const [query, setQuery] = useState("");
     const [selectedId, setSelectedId] = useState<string | null>(null);
-    const [uploading, setUploading] = useState(0);
+    const [pending, setPending] = useState(0); // files queued + in flight (drives the button + unload guard)
     const [altBusy, setAltBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const fileRef = useRef<HTMLInputElement>(null);
+    const queueRef = useRef<{ file: File; folder: string }[]>([]);
+    const inFlightRef = useRef(0);
+    const imageIdsRef = useRef<string[]>([]);
     const { enqueue } = useJobs();
 
     const load = () =>
@@ -76,6 +82,19 @@ const AssetsPage = () => {
         void load();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Warn before leaving while uploads are still in flight: the file bytes live in
+    // this tab and can't resume after a refresh. (Queued AI alt-text jobs DO continue
+    // server-side, so once a file has uploaded its alt text finishes regardless.)
+    useEffect(() => {
+        if (pending === 0) return;
+        const warn = (e: BeforeUnloadEvent) => {
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", warn);
+        return () => window.removeEventListener("beforeunload", warn);
+    }, [pending]);
 
     const q = query.trim().toLowerCase();
     const visible = items.filter(
@@ -113,31 +132,52 @@ const AssetsPage = () => {
     const patchLocal = (id: string, p: Partial<LiveAsset>) =>
         setItems((prev) => prev.map((a) => (a.id === id ? { ...a, ...p } : a)));
 
-    // Real upload → server. After an image lands, kick off AI alt text (best-effort).
-    const onFiles = async (files: FileList | null) => {
+    // Upload one file to the server (a slot in the concurrency pool).
+    const uploadOne = async ({ file, folder: targetFolder }: { file: File; folder: string }) => {
+        const fd = new FormData();
+        fd.append("file", file);
+        if (targetFolder) fd.append("folder", targetFolder);
+        try {
+            const created = await uploadFile<LiveAsset>("/assets", fd);
+            setItems((prev) => [created, ...prev]);
+            if (created.type === "image") imageIdsRef.current.push(created.id);
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : `Couldn’t upload ${file.name}.`);
+        }
+    };
+
+    // Drain the queue with at most UPLOAD_CONCURRENCY uploads in flight. When the
+    // whole batch finishes, kick off AI alt text for the images it added (inline for
+    // one, a background job for several) so the big batch never blocks the page.
+    const pump = () => {
+        while (inFlightRef.current < UPLOAD_CONCURRENCY && queueRef.current.length) {
+            const item = queueRef.current.shift()!;
+            inFlightRef.current += 1;
+            void uploadOne(item).finally(() => {
+                inFlightRef.current -= 1;
+                setPending(queueRef.current.length + inFlightRef.current);
+                if (queueRef.current.length || inFlightRef.current) {
+                    pump();
+                } else {
+                    const ids = imageIdsRef.current;
+                    imageIdsRef.current = [];
+                    if (ids.length === 1) void autoAlt(ids[0]);
+                    else if (ids.length > 1) void enqueue("/assets/bulk-process", { ids });
+                }
+            });
+        }
+        setPending(queueRef.current.length + inFlightRef.current);
+    };
+
+    // Real upload → server. Queues the chosen files and keeps the Upload button free
+    // so more can be added mid-flight; each file remembers the folder it was added to.
+    const onFiles = (files: FileList | null) => {
         if (!files?.length) return;
         setError(null);
-        setUploading((n) => n + files.length);
         const targetFolder = folder === "all" ? "" : folder;
-        const imageIds: string[] = [];
-        for (const file of Array.from(files)) {
-            const fd = new FormData();
-            fd.append("file", file);
-            if (targetFolder) fd.append("folder", targetFolder);
-            try {
-                const created = await uploadFile<LiveAsset>("/assets", fd);
-                setItems((prev) => [created, ...prev]);
-                if (created.type === "image") imageIds.push(created.id);
-            } catch (e) {
-                setError(e instanceof ApiError ? e.message : "Upload failed.");
-            } finally {
-                setUploading((n) => Math.max(0, n - 1));
-            }
-        }
-        // One image: generate alt inline (instant). Several: run alt as a background
-        // job so the big batch never blocks the page; progress shows in the toast.
-        if (imageIds.length === 1) void autoAlt(imageIds[0]);
-        else if (imageIds.length > 1) void enqueue("/assets/bulk-process", { ids: imageIds });
+        queueRef.current.push(...Array.from(files).map((file) => ({ file, folder: targetFolder })));
+        setPending(queueRef.current.length + inFlightRef.current);
+        pump();
         if (fileRef.current) fileRef.current.value = "";
     };
 
@@ -205,9 +245,9 @@ const AssetsPage = () => {
                         {missingAlt} missing alt
                     </span>
                 )}
-                <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading > 0} className="btn-primary ml-auto disabled:opacity-60">
+                <button type="button" onClick={() => fileRef.current?.click()} aria-busy={pending > 0} className="btn-primary ml-auto">
                     <Icon className="w-5 h-5 fill-white" name="plus" />
-                    {uploading > 0 ? `Uploading ${uploading}…` : "Upload"}
+                    {pending > 0 ? `Uploading ${pending}… · add more` : "Upload"}
                 </button>
             </div>
 
