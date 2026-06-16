@@ -39,7 +39,7 @@ export default function SignupPage() {
     return (
         <div>
             <h2 className="font-poppins text-h3 font-extrabold text-black dark:text-white">Create your account</h2>
-            <p className="mt-1 text-body-sm text-grey">Join your team's Flow CMS workspace.</p>
+            <p className="mt-1 text-body-sm text-grey">Join your team&rsquo;s Flow CMS workspace.</p>
 
             <form onSubmit={onSubmit} className="mt-7 flex flex-col gap-4">
                 {error && (
