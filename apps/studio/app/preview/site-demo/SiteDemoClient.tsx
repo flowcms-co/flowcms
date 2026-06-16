@@ -9,7 +9,7 @@ import Sections, { findSections } from "../Sections";
  * Bundled EXAMPLE FRONTEND — a stand-in for a customer's real site, used to
  * demonstrate the live preview's "Site" mode end to end (and as a clean surface
  * for docs / marketing screenshots). It reads ?id (or ?slug), fetches the (draft)
- * entry from Flow's API, and renders it inside a realistic agency-site shell:
+ * entry from FlowCMS's API, and renders it inside a realistic agency-site shell:
  * header, image hero, article, "more stories", CTA, footer. A real frontend does
  * the same but fetches via the public API with a Preview token; here we read it
  * same-origin for the demo. The accent is deliberately NOT the studio purple so it
@@ -77,7 +77,7 @@ const SiteDemoClient = () => {
         ) ||
         "";
 
-    // Visual-editing bridge (Storyblok-style): when this site is embedded in Flow's
+    // Visual-editing bridge (Storyblok-style): when this site is embedded in FlowCMS's
     // preview, the studio can toggle in-place editing of the article and we stream
     // the changes back over postMessage. A real customer frontend opts in the same
     // way. Only acts on messages from the embedding parent's origin.
@@ -100,7 +100,7 @@ const SiteDemoClient = () => {
         }
         const post = (msg: Record<string, unknown>) => {
             try {
-                window.parent?.postMessage({ source: "flow-preview", ...msg }, parentOrigin);
+                window.parent?.postMessage({ source: "flowcms-preview", ...msg }, parentOrigin);
             } catch {
                 /* ignore */
             }
@@ -110,7 +110,9 @@ const SiteDemoClient = () => {
         const onInput = () => {
             post({ type: "dirty" });
             clearTimeout(timer);
-            timer = setTimeout(() => post({ type: "fields", ...fields() }), 200);
+            // Stream edits as a field map (generalized bridge protocol); the flat
+            // keys are kept for back-compat with older studio builds.
+            timer = setTimeout(() => post({ type: "fields", fields: fields(), ...fields() }), 200);
         };
         // Title + summary are single-line text (plaintext-only so no stray markup);
         // the body keeps rich formatting.
@@ -134,14 +136,16 @@ const SiteDemoClient = () => {
         };
         const onMessage = (e: MessageEvent) => {
             if (parentOrigin !== "*" && e.origin !== parentOrigin) return;
-            const d = e.data as { source?: string; type?: string; editing?: boolean; title?: string; summary?: string; body?: string } | null;
-            if (!d || d.source !== "flow-studio") return;
+            const d = e.data as { source?: string; type?: string; editing?: boolean; title?: string; summary?: string; body?: string; fields?: Record<string, unknown> } | null;
+            if (!d || d.source !== "flowcms-studio") return;
             if (d.type === "hello") return post({ type: "ready", editable: true });
             if (d.type === "baseline") {
+                // New protocol carries a `fields` map; fall back to flat keys.
+                const f = (d.fields && typeof d.fields === "object" ? d.fields : d) as { title?: unknown; summary?: unknown; body?: unknown };
                 baselineRef.current = {
-                    title: typeof d.title === "string" ? d.title : baselineRef.current.title,
-                    summary: typeof d.summary === "string" ? d.summary : baselineRef.current.summary,
-                    body: typeof d.body === "string" ? d.body : baselineRef.current.body,
+                    title: typeof f.title === "string" ? f.title : baselineRef.current.title,
+                    summary: typeof f.summary === "string" ? f.summary : baselineRef.current.summary,
+                    body: typeof f.body === "string" ? f.body : baselineRef.current.body,
                 };
                 return;
             }

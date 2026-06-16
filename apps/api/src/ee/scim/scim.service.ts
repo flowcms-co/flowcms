@@ -18,7 +18,7 @@ type FlowUser = { id: string; email: string; name: string | null; isActive: bool
 
 /**
  * EE (Enterprise) — SCIM 2.0 user provisioning + the SCIM token lifecycle. Maps a
- * SCIM User to a Flow user + a membership in the token's workspace, so an IdP
+ * SCIM User to a FlowCMS user + a membership in the token's workspace, so an IdP
  * (Okta/Azure AD/…) can create, update and deactivate people automatically. Gated
  * by `scim` at the guard.
  */
@@ -133,7 +133,7 @@ export class ScimService {
         return this.toScim({ id: updated.id, email: updated.email, name: updated.name, isActive: updated.isActive });
     }
 
-    /** SCIM delete = deactivate (we never hard-delete a Flow user from an IdP signal). */
+    /** SCIM delete = deactivate (we never hard-delete a FlowCMS user from an IdP signal). */
     async deactivate(workspaceId: string, id: string) {
         const u = await this.member(workspaceId, id);
         if (!u) throw new NotFoundException("User not found.");

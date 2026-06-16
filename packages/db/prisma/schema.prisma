@@ -195,7 +195,7 @@ model SsoConfig {
   jwksUri          String?
   clientId         String?
   clientSecret     String? // AES-256-GCM encrypted
-  autoProvision    Boolean   @default(false) // create a Flow user on first SSO login
+  autoProvision    Boolean   @default(false) // create a FlowCMS user on first SSO login
   allowedDomain    String? // only auto-provision emails on this domain (e.g. acme.com)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

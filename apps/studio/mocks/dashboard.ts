@@ -431,7 +431,7 @@ export const activityEntries: ActivityEntry[] = [
     },
     {
         id: "2",
-        person: "Flow AI",
+        person: "FlowCMS AI",
         avatar: "/images/avatar.png",
         role: "agent",
         action: "generated",

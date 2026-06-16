@@ -147,7 +147,7 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
     /** POST a payload to one webhook and record the delivery. */
     private async deliver(webhook: Webhook, event: string, payload: unknown, attempt = 1) {
         const body = JSON.stringify({ event, payload, at: new Date().toISOString() });
-        const headers: Record<string, string> = { "Content-Type": "application/json", "X-Flow-Event": event };
+        const headers: Record<string, string> = { "Content-Type": "application/json", "X-FlowCMS-Event": event };
         // Secrets are stored AES-256-GCM-encrypted; decrypt only to sign (fail
         // closed — if decryption fails we send unsigned rather than leak/guess).
         let signingSecret: string | null = null;
@@ -159,7 +159,7 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
             }
         }
         if (signingSecret) {
-            headers["X-Flow-Signature"] = "sha256=" + createHmac("sha256", signingSecret).update(body).digest("hex");
+            headers["X-FlowCMS-Signature"] = "sha256=" + createHmac("sha256", signingSecret).update(body).digest("hex");
         }
         let statusCode: number | null = null;
         let success = false;

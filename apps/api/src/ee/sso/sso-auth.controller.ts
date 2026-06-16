@@ -13,7 +13,7 @@ const stateCookie = () => ({ httpOnly: true, sameSite: "lax" as const, secure: p
 /**
  * Public OIDC login flow (the session guard is skipped). `/auth/sso/start`
  * redirects to the IdP; `/auth/sso/callback` finishes the exchange and sets the
- * Flow session cookie. Both are inert unless SSO is licensed + configured (the
+ * FlowCMS session cookie. Both are inert unless SSO is licensed + configured (the
  * service enforces `sso`), so exposing them on Community is harmless.
  */
 @Public()

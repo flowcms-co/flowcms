@@ -23,7 +23,7 @@ const Arrow = ({ className }: { className?: string }) => (
 );
 
 /**
- * SEO health card — the canonical Flow SEO Score (same /seo/score the SEO suite
+ * SEO health card — the canonical FlowCMS SEO Score (same /seo/score the SEO suite
  * shows) as a circular progress ring, with critical-issue and warning counts from
  * the live audit ledger (/seo/scan). Shows a "Run a scan" empty state until a
  * score exists. The footer links to the full AI Auditor report.
@@ -64,14 +64,14 @@ const SeoCard = () => {
             <Card className="flex h-full flex-col !p-6">
                 <div className="flex items-center gap-2">
                     <h2 className="text-h5 text-black dark:text-white">SEO Health</h2>
-                    <span className="ml-auto"><LiveBadge live={false} source="Flow score" /></span>
+                    <span className="ml-auto"><LiveBadge live={false} source="FlowCMS score" /></span>
                 </div>
                 <div className="flex grow flex-col items-center justify-center py-6">
                     <EmptyState
                         variant="bare"
                         icon="search"
                         title="No SEO score yet"
-                        description="Run a scan to see your Flow SEO Score, critical issues and warnings."
+                        description="Run a scan to see your FlowCMS SEO Score, critical issues and warnings."
                         action={{ label: "Run a scan", href: "/seo/optimizer" }}
                     />
                 </div>
@@ -83,7 +83,7 @@ const SeoCard = () => {
         <Card className="flex h-full flex-col !p-6">
             <div className="flex items-center gap-2">
                 <h2 className="text-h5 text-black dark:text-white">SEO Health</h2>
-                <span className="ml-auto"><LiveBadge live={score != null} source="Flow score" /></span>
+                <span className="ml-auto"><LiveBadge live={score != null} source="FlowCMS score" /></span>
             </div>
 
             {/* Ring + rating — vertically centered so the card height-matches the

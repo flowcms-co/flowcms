@@ -57,7 +57,7 @@ export const notifications: Notification[] = [
     },
     {
         id: "n3",
-        person: "Flow AI",
+        person: "FlowCMS AI",
         action: "flagged cannibalization on",
         target: "“brand strategy agency”",
         time: "1h ago",
@@ -105,7 +105,7 @@ export const notifications: Notification[] = [
     },
     {
         id: "n7",
-        person: "Flow AI",
+        person: "FlowCMS AI",
         action: "improved alt text on",
         target: "38 product images",
         time: "Yesterday",

@@ -378,6 +378,7 @@ const FieldRow = ({
 }) => {
     const controls = useDragControls();
     const [showDesc, setShowDesc] = useState(false);
+    const [showLabel, setShowLabel] = useState(false);
     const isComp = field.type === "Component";
     const isZone = field.type === "DynamicZone";
     const isRef = isComp && !!field.componentApiId;
@@ -410,7 +411,7 @@ const FieldRow = ({
 
                 {(isComp || isZone) && <Icon className="w-4 h-4 fill-primary shrink-0" name={isZone ? "grid" : "copy"} />}
 
-                <input value={field.name} onChange={(e) => onUpdate({ name: e.target.value })} className="flow-input !py-2 min-w-0 flex-1 basis-40" />
+                <input value={field.name} onChange={(e) => onUpdate({ name: e.target.value })} title="Field name (the data key). Add a friendly label below to change how it reads in the editor." className="flow-input !py-2 min-w-0 flex-1 basis-40" />
 
                 <Select
                     variant="field"
@@ -452,9 +453,21 @@ const FieldRow = ({
                 </button>
             </div>
 
-            {/* Optional per-field description (helper text shown to editors). */}
-            <div className="px-2.5 pb-2.5 -mt-1">
-                {showDesc || field.description ? (
+            {/* Optional per-field label (pretty name) + description (helper text),
+                both shown to editors in the block editor. The label never changes the
+                stored data key — it's purely how the field reads to authors. */}
+            <div className="flex flex-col gap-1.5 px-2.5 pb-2.5 -mt-1">
+                {(showLabel || field.label) && (
+                    <input
+                        value={field.label ?? ""}
+                        onChange={(e) => onUpdate({ label: e.target.value })}
+                        onBlur={(e) => !e.target.value && setShowLabel(false)}
+                        autoFocus={showLabel && !field.label}
+                        placeholder="Label shown to editors (optional, e.g. “Hero image”)"
+                        className="flow-input !py-1.5 !text-caption-2"
+                    />
+                )}
+                {(showDesc || field.description) && (
                     <input
                         value={field.description ?? ""}
                         onChange={(e) => onUpdate({ description: e.target.value })}
@@ -463,11 +476,22 @@ const FieldRow = ({
                         placeholder="Description shown to editors (optional)"
                         className="flow-input !py-1.5 !text-caption-2"
                     />
-                ) : (
-                    <button type="button" onClick={() => setShowDesc(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
-                        <Icon className="h-3 w-3 fill-current" name="plus" />
-                        Add description
-                    </button>
+                )}
+                {((!showLabel && !field.label) || (!showDesc && !field.description)) && (
+                    <div className="flex items-center gap-3">
+                        {!showLabel && !field.label && (
+                            <button type="button" onClick={() => setShowLabel(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
+                                <Icon className="h-3 w-3 fill-current" name="plus" />
+                                Add label
+                            </button>
+                        )}
+                        {!showDesc && !field.description && (
+                            <button type="button" onClick={() => setShowDesc(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
+                                <Icon className="h-3 w-3 fill-current" name="plus" />
+                                Add description
+                            </button>
+                        )}
+                    </div>
                 )}
             </div>
 

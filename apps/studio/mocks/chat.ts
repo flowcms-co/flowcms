@@ -39,7 +39,7 @@ export const chatMembers: ChatMember[] = [
     { id: "u-daniel", name: "Daniel Brooks", avatar: "/images/avatar-3.png", role: "editor", online: false },
     { id: "u-olivia", name: "Olivia Hayes", avatar: "/images/avatar-4.png", role: "editor", online: true },
     { id: "u-liam", name: "Liam Foster", avatar: "/images/avatar-1.png", role: "editor", online: true },
-    { id: "u-flow", name: "Flow AI", avatar: "/images/avatar.png", role: "agent", online: true },
+    { id: "u-flow", name: "FlowCMS AI", avatar: "/images/avatar.png", role: "agent", online: true },
 ];
 
 /** Map the active dashboard role to the member who "is" the current user. */

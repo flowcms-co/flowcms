@@ -10,7 +10,7 @@ const b64urlJson = (s: string): Record<string, unknown> =>
     JSON.parse(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
 const ALG: Record<string, string> = { RS256: "RSA-SHA256", RS384: "RSA-SHA384", RS512: "RSA-SHA512" };
 
-/** Thrown when an SSO login resolves to a user with Flow 2FA enabled but the IdP
+/** Thrown when an SSO login resolves to a user with FlowCMS 2FA enabled but the IdP
  *  did not assert a second factor — the controller maps this to a specific message
  *  instead of the generic SSO failure (SECURITY_AUDIT_REPORT F-16). */
 export class SsoTwoFactorRequiredError extends UnauthorizedException {
@@ -35,7 +35,7 @@ type SetSsoDto = {
  * EE (Enterprise) — OIDC single sign-on. Stores a per-workspace OIDC config
  * (clientSecret AES-encrypted), builds the authorize redirect, and on callback
  * exchanges the code, verifies the id_token (signature via the IdP's JWKS + iss /
- * aud / exp), then finds or provisions the Flow user and mints a session. All gated
+ * aud / exp), then finds or provisions the FlowCMS user and mints a session. All gated
  * by `sso`.
  */
 @Injectable()
@@ -166,7 +166,7 @@ export class SsoService {
             throw new SsoTwoFactorRequiredError();
         }
 
-        // 4. Mint a Flow session pinned to this workspace.
+        // 4. Mint a FlowCMS session pinned to this workspace.
         const { token, hash } = generateToken("sess");
         await this.prisma.session.create({
             data: { userId: user!.id, tokenHash: hash, activeWorkspaceId: ws.id, expiresAt: new Date(Date.now() + SESSION_TTL_MS), userAgent: meta?.userAgent, ip: meta?.ip },

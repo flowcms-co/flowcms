@@ -64,7 +64,7 @@ const WhiteLabelCard = () => {
             description="Replace Flow CMS branding with your own across this workspace's studio."
             icon="sparkles"
             includes={[
-                "Your logo in the sidebar, in place of the Flow mark",
+                "Your logo in the sidebar, in place of the FlowCMS mark",
                 "Your product name instead of the Flow CMS wordmark",
                 "A brand accent color applied across the studio",
             ]}

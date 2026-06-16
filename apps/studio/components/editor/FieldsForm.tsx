@@ -11,7 +11,7 @@
 
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
-import type { SchemaField } from "@/mocks/schema";
+import { fieldLabel, type SchemaField } from "@/mocks/schema";
 
 type Json = Record<string, unknown>;
 
@@ -87,7 +87,7 @@ const FieldGroup = ({
             {fields.map((f) => (
                 <label key={f.id} className="flex flex-col gap-1.5">
                     <span className="flex items-center gap-1.5 text-caption-1 text-grey">
-                        {f.name}
+                        {fieldLabel(f)}
                         {f.required && <span className="text-error">*</span>}
                         {f.type === "Component" && (
                             <span className="text-caption-2 text-grey/70">
@@ -126,7 +126,7 @@ const ComponentControl = ({
                     <div key={i} className="rounded-2xl border border-grey-light bg-lavender-mist/30 p-3 dark:border-grey-light/10 dark:bg-dark-3/30">
                         <div className="mb-2 flex items-center justify-between">
                             <span className="text-caption-2 font-medium text-grey">
-                                {field.name} #{i + 1}
+                                {fieldLabel(field)} #{i + 1}
                             </span>
                             <button
                                 type="button"
@@ -142,7 +142,7 @@ const ComponentControl = ({
                 ))}
                 <button type="button" onClick={add} className="btn-secondary h-9 self-start px-3.5 text-caption-1">
                     <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name="plus" />
-                    Add {field.name}
+                    Add {fieldLabel(field)}
                 </button>
             </div>
         );

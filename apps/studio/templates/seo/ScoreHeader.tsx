@@ -5,10 +5,10 @@ import CountUp from "@/components/motion/CountUp";
 import SeoDonut from "@/components/charts/SeoDonut";
 import { cn } from "@/lib/cn";
 
-/** One pillar of the Flow SEO Score. */
+/** One pillar of the FlowCMS SEO Score. */
 export type ScorePillar = { key: string; label: string; source: string; weight: number; score: number | null; live: boolean };
 
-/** The unified Flow SEO Score + the inputs for the next-best-actions, from the Dashboard. */
+/** The unified FlowCMS SEO Score + the inputs for the next-best-actions, from the Dashboard. */
 export type ScoreData = {
     isLive: boolean;
     score: number;
@@ -22,7 +22,7 @@ const PILLAR_COLOR: Record<string, string> = { visibility: "#6C5CE7", technical:
 
 /**
  * SEO score header — two cards matching the rest of the dashboard:
- *  • the one Flow SEO Score as a segmented donut (the 3 pillars are the segments,
+ *  • the one FlowCMS SEO Score as a segmented donut (the 3 pillars are the segments,
  *    same visual as the Overview SEO card) + a legend of each pillar's weight + score;
  *  • the three highest-leverage next actions, each a deep link.
  */

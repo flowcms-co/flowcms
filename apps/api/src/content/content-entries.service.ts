@@ -10,8 +10,9 @@ import { APPROVAL_PORT, type ApprovalPort } from "./approval.port";
 import { RBAC_PORT, type RbacPort, type RoleRules } from "./rbac.port";
 import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
 import { fieldsOf, validateEntryData, type ComponentMap } from "./entry-validation";
+import { entryPath } from "./route-path";
 
-type EntryWithType = ContentEntry & { contentType: { id: string; name: string; apiId: string } };
+type EntryWithType = ContentEntry & { contentType: { id: string; name: string; apiId: string; pluralApiId?: string } };
 type Shaped = ReturnType<ContentEntriesService["shape"]>;
 
 /** Statuses for which all required fields must be present. */
@@ -44,7 +45,7 @@ export class ContentEntriesService {
     /** How many full-body version snapshots to retain per entry. Each snapshot
      *  stores a complete copy of the entry data, so unbounded growth is a real
      *  storage cost on heavily-edited entries; we keep the most recent N. */
-    private static readonly VERSION_RETENTION = 50;
+    private static readonly VERSION_RETENTION = 10;
 
     /** Append a version snapshot of the entry's current data + status, then prune
      *  older snapshots beyond the retention window. */
@@ -100,7 +101,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id: entryId },
             data: { data: version.data as Prisma.InputJsonValue },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         await this.snapshot(entryId, version.data, e.status, actorId);
         const shaped = this.shape(e);
@@ -135,7 +136,7 @@ export class ContentEntriesService {
     async recordReview(workspaceId: string, entryId: string, reviewerId: string, decision: "approve" | "request_changes", note?: string) {
         const entry = await this.prisma.contentEntry.findFirst({
             where: { id: entryId, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         if (!entry) throw new NotFoundException("Entry not found.");
         const d: ReviewDecision = decision === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
@@ -173,7 +174,7 @@ export class ContentEntriesService {
             const e = await this.prisma.contentEntry.update({
                 where: { id: entryId },
                 data: { status: "APPROVED" },
-                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
             });
             await this.snapshot(entryId, entry.data, "APPROVED", reviewerId);
             await this.notifyTransition(workspaceId, reviewerId, entry, this.title(e), "IN_REVIEW", "APPROVED");
@@ -262,6 +263,11 @@ export class ContentEntriesService {
             status: e.status,
             locale: e.locale,
             contentType: e.contentType,
+            // Site-relative path the entry lives at on the public frontend, derived
+            // from the content type's route prefix: "/services/<slug>", "/blogs/<slug>",
+            // or "/" for a homepage type. Lets the studio preview the right page and
+            // gives webhook consumers the URL to revalidate.
+            path: entryPath(e.contentType, e.slug),
             author: authorName ? { name: authorName } : null,
             publishedAt: e.publishedAt,
             scheduledAt: e.scheduledAt,
@@ -285,7 +291,7 @@ export class ContentEntriesService {
             where.contentTypeId = opts.typeId
                 ? allowed.includes(opts.typeId)
                     ? opts.typeId
-                    : " none" // a filtered type the role can't see → no results
+                    : " none" // a filtered type the role can't see → no results
                 : { in: allowed };
         }
         // Bounded by default (take: 500); callers (e.g. the agent API) may page with
@@ -294,7 +300,7 @@ export class ContentEntriesService {
         const skip = opts.offset != null ? Math.max(0, Math.floor(opts.offset)) : 0;
         const rows = await this.prisma.contentEntry.findMany({
             where,
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
             orderBy: { updatedAt: "desc" },
             take,
             skip,
@@ -332,7 +338,7 @@ export class ContentEntriesService {
     async get(workspaceId: string, id: string) {
         const e = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         if (!e) throw new NotFoundException("Entry not found.");
         // The editor edits the draft overlay when one exists (a published entry with
@@ -373,7 +379,7 @@ export class ContentEntriesService {
                 status: "DRAFT",
                 authorId: userId ?? null,
             },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         await this.snapshot(e.id, data, "DRAFT", userId);
         const shaped = this.shape(e);
@@ -422,7 +428,7 @@ export class ContentEntriesService {
             const updated = await this.prisma.contentEntry.update({
                 where: { id },
                 data: patch,
-                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
             });
             await this.snapshot(updated.id, draft, existing.status, actorId);
             const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
@@ -469,7 +475,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data,
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         if (actorId && targetStatus !== existing.status) {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, targetStatus);
@@ -508,7 +514,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { status, publishedAt },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         if (actorId && status !== existing.status) {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, status);
@@ -537,7 +543,7 @@ export class ContentEntriesService {
             const e = await this.prisma.contentEntry.update({
                 where: { id },
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date() },
-                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
             });
             await this.snapshot(e.id, promoted, "PUBLISHED", actorId);
             const shaped = this.shape(e);
@@ -556,7 +562,7 @@ export class ContentEntriesService {
             const e = await this.prisma.contentEntry.update({
                 where: { id },
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "DRAFT", publishedAt: null },
-                include: { contentType: { select: { id: true, name: true, apiId: true } } },
+                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
             });
             await this.snapshot(e.id, e.data, "DRAFT", actorId);
             const shaped = this.shape(e);
@@ -571,7 +577,7 @@ export class ContentEntriesService {
     async approveDraft(workspaceId: string, id: string, actorId?: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true, schema: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true, schema: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         if (existing.draftData == null) throw new BadRequestException("No draft changes to approve.");
@@ -579,7 +585,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { draftApproved: true },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         const draft = (e.draftData ?? {}) as { title?: string };
         return { ...this.shape(e), data: e.draftData, title: draft.title ?? "Untitled" };
@@ -589,14 +595,14 @@ export class ContentEntriesService {
     async discardDraft(workspaceId: string, id: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         if (existing.draftData == null) return this.shape(existing);
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { draftData: Prisma.DbNull, draftApproved: false },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         return this.shape(e);
     }
@@ -615,7 +621,7 @@ export class ContentEntriesService {
                 status: "DRAFT",
                 authorId: userId,
             },
-            include: { contentType: { select: { id: true, name: true, apiId: true } } },
+            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
         });
         return this.shape(e);
     }
@@ -623,7 +629,7 @@ export class ContentEntriesService {
     async remove(workspaceId: string, id: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { apiId: true } } },
+            include: { contentType: { select: { apiId: true, pluralApiId: true, name: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         // deleteMany with workspaceId is defence-in-depth: even if the ownership
@@ -633,6 +639,7 @@ export class ContentEntriesService {
             id: existing.id,
             slug: existing.slug,
             type: existing.contentType.apiId,
+            path: entryPath(existing.contentType, existing.slug),
             title: this.title(existing),
         });
         return { ok: true };

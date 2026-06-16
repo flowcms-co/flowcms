@@ -222,7 +222,7 @@ const Webhooks = () => {
                                                 ))}
                                             </div>
                                         </div>
-                                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Signing secret {editing && <span className="text-grey">(leave blank to keep)</span>}</span><input value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="optional: used for the X-Flow-Signature HMAC" className={field} /></label>
+                                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Signing secret {editing && <span className="text-grey">(leave blank to keep)</span>}</span><input value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="optional: used for the X-FlowCMS-Signature HMAC" className={field} /></label>
                                     </div>
                                     <div className="mt-6 flex gap-3">
                                         <button type="button" onClick={() => setOpen(false)} className="btn-secondary grow">Cancel</button>

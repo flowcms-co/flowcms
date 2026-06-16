@@ -48,7 +48,7 @@ export const seoTrend = [
 
 export const seoHealth = 82;
 
-/** Sample for the unified Flow SEO Score (Visibility 40% + Technical 35% + Speed 25%). */
+/** Sample for the unified FlowCMS SEO Score (Visibility 40% + Technical 35% + Speed 25%). */
 export const seoScoreSample = {
     score: 82,
     pillars: [
@@ -58,7 +58,7 @@ export const seoScoreSample = {
     ],
 };
 
-/** Sample 30-day movement of the Flow SEO Score (no live history endpoint yet). */
+/** Sample 30-day movement of the FlowCMS SEO Score (no live history endpoint yet). */
 export const seoScorePointsDelta = 12;
 
 /** Sample for the dashboard's Issues Snapshot card — mirrors the grouped issue

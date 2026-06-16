@@ -135,7 +135,7 @@ const ContentGenerator = () => {
                         </span>
                         <div>
                             <h2 className="text-h5 text-black dark:text-white">Generate content</h2>
-                            <p className="text-caption-2 text-grey">Describe what you need: Flow AI drafts it.</p>
+                            <p className="text-caption-2 text-grey">Describe what you need: FlowCMS AI drafts it.</p>
                         </div>
                     </div>
 

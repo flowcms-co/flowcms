@@ -59,7 +59,7 @@ export class SeoController {
         return this.seo.summary(user.workspaceId, n);
     }
 
-    /** The one canonical Flow SEO Score (Visibility + Technical + Speed) shown everywhere. */
+    /** The one canonical FlowCMS SEO Score (Visibility + Technical + Speed) shown everywhere. */
     @Get("score")
     score(@CurrentUser() user: AuthUser) {
         return this.seo.score(user.workspaceId);

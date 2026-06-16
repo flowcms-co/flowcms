@@ -119,7 +119,7 @@ const InitialBadge = ({ name, color }: { name: string; color: string }) => {
 
 /**
  * SEO Dashboard — real-time overview of SEO performance and opportunities:
- * SEO Health (the one Flow score + pillars) and an Issues Snapshot on top,
+ * SEO Health (the one FlowCMS score + pillars) and an Issues Snapshot on top,
  * a clicks/impressions/CTR/position KPI strip, AI Search & Answer Engines next
  * to a Backlinks overview, then Top pages + Top keywords. Live where connected,
  * empty behind a ConnectLock otherwise (each card carries a Live badge). The deep
@@ -166,7 +166,7 @@ const SeoDashboard = () => {
         setRerunning(false);
     };
 
-    // ── SEO Health (the one Flow SEO Score, crawler-internal) ──
+    // ── SEO Health (the one FlowCMS SEO Score, crawler-internal) ──
     const scoreLive = !!score?.hasData;
     const scoreValue = scoreLive ? score!.score! : 0;
     const pillars = scoreLive ? score!.pillars : [];
@@ -271,7 +271,7 @@ const SeoDashboard = () => {
                     <div className="mb-2 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                             <h2 className="text-h5 text-black dark:text-white">SEO Health</h2>
-                            <LiveBadge live={scoreLive} source="Flow score" />
+                            <LiveBadge live={scoreLive} source="FlowCMS score" />
                         </div>
                     </div>
                     {!scoreLive ? (

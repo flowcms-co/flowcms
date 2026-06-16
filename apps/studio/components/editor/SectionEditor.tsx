@@ -18,7 +18,7 @@ import EditorCanvas from "./EditorCanvas";
 import MediaPicker from "@/components/ui/MediaPicker";
 import { runAi, extractJson, aiErrorMessage } from "@/lib/useAi";
 import { FieldControl } from "./FieldsForm";
-import type { SchemaField } from "@/mocks/schema";
+import { fieldLabel, type SchemaField } from "@/mocks/schema";
 import { cn } from "@/lib/cn";
 
 export type ComponentDef = { apiId: string; name: string; icon: string; fields: SchemaField[] };
@@ -81,8 +81,8 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
     if (field.type === "Boolean") {
         return (
             <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                <Switch checked={!!value} onChange={onChange} aria-label={field.name} />
-                <span className="text-caption-1 text-grey">{field.name}</span>
+                <Switch checked={!!value} onChange={onChange} aria-label={fieldLabel(field)} />
+                <span className="text-caption-1 text-grey">{fieldLabel(field)}</span>
             </label>
         );
     }
@@ -91,10 +91,10 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
         const url = str(value);
         return (
             <div className="flex flex-col gap-1.5">
-                <span className="text-caption-1 text-grey">{field.name}</span>
+                <span className="text-caption-1 text-grey">{fieldLabel(field)}</span>
                 {field.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{field.description}</span>}
                 {url ? (
-                    <MediaPreview key={url} url={url} alt={field.name} onReplace={() => setPicker(true)} onRemove={() => onChange("")} />
+                    <MediaPreview key={url} url={url} alt={fieldLabel(field)} onReplace={() => setPicker(true)} onRemove={() => onChange("")} />
                 ) : (
                     <button
                         type="button"
@@ -116,7 +116,7 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
             <label className="flex flex-col gap-1.5">
                 <span className="flex items-center justify-between gap-2 text-caption-1 text-grey">
                     <span className="flex items-center gap-1">
-                        {field.name}
+                        {fieldLabel(field)}
                         {field.required && <span className="text-error">*</span>}
                     </span>
                     <span className={cn("text-caption-2 tabular-nums", limit && v.length > limit ? "text-error" : "text-grey/70")}>
@@ -144,7 +144,7 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
     return (
         <label className="flex flex-col gap-1.5">
             <span className="flex items-center gap-1 text-caption-1 text-grey">
-                {field.name}
+                {fieldLabel(field)}
                 {field.required && <span className="text-error">*</span>}
             </span>
             {field.description && <span className="text-caption-2 text-grey/80">{field.description}</span>}

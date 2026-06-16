@@ -181,7 +181,7 @@ export const RocketScene = ({ size = 180, className }: Props) => {
     );
 };
 
-/* ── Migrate: content moving out of an old box into Flow ─────────────────── */
+/* ── Migrate: content moving out of an old box into FlowCMS ─────────────────── */
 export const BoxesScene = ({ size = 180, className }: Props) => {
     const ref = useRef<SVGSVGElement>(null);
     useIdle(ref, () => {
@@ -226,7 +226,7 @@ export const BoxesScene = ({ size = 180, className }: Props) => {
                     <rect x="46" y="96" width="60" height="52" rx="9" fill="url(#bxBox)" />
                     <path d="M46 110 v-5 a9 9 0 0 1 9 -9 h42 a9 9 0 0 1 9 9 v5 Z" fill="#fff" opacity="0.18" />
                     <rect x="70" y="96" width="12" height="52" fill="#fff" opacity="0.12" />
-                    {/* destination Flow container, right */}
+                    {/* destination FlowCMS container, right */}
                     <rect x="148" y="74" width="58" height="76" rx="15" fill="url(#bxFlow)" stroke="#6C5CE7" strokeWidth="2.5" />
                     <rect x="160" y="86" width="18" height="18" rx="6" fill="url(#bxMark)" />
                     <rect x="184" y="91" width="10" height="4" rx="2" fill="var(--ill-line)" />

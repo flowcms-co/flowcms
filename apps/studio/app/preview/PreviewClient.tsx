@@ -9,7 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
-import type { SchemaField } from "@/mocks/schema";
+import { fieldLabel, type SchemaField } from "@/mocks/schema";
 import Sections, { findSections } from "./Sections";
 
 const STATUS_PILL: Record<string, PillStatus> = {
@@ -41,24 +41,46 @@ type Entry = {
     hasDraft?: boolean;
 };
 
-type ApiType = { id: string; name: string; apiId?: string; fields: SchemaField[] };
+type ApiType = {
+    id: string;
+    name: string;
+    apiId?: string;
+    fields: SchemaField[];
+    // Public-site routing for this type (from the API): entries live at
+    // /<urlPrefix>/<slug>, or the site root when isHome is true.
+    urlPrefix?: string;
+    isHome?: boolean;
+};
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
-/** Fill a preview-URL template ({slug}/{id}/{type}/{locale}/{status}); when the
- *  template has no placeholder, treat it as a base and append the slug. */
-const buildTarget = (tpl: string, e: Entry): string => {
+/** The site path segments for an entry, honouring the content type's route prefix
+ *  (e.g. ["services", "water-damage"]); empty for a homepage type. */
+const pathSegments = (e: Entry, type?: ApiType | null): string[] => {
+    if (type?.isHome) return [];
+    const prefix = (type?.urlPrefix ?? "").trim();
+    return [prefix, e.slug ?? ""].filter(Boolean) as string[];
+};
+
+/** Fill a preview-URL template ({slug}/{id}/{type}/{locale}/{status}/{path}); when
+ *  the template has no placeholder, treat it as the site base and append the
+ *  type-prefixed path (/services/<slug>, /blogs/<slug>, or the root for a homepage). */
+const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
+    const segs = pathSegments(e, type);
     const map: Record<string, string> = {
         slug: e.slug ?? "",
         id: e.id,
         type: e.contentType?.apiId ?? (e.contentType?.name ?? "").toLowerCase().replace(/\s+/g, "-"),
         locale: e.locale ?? "",
         status: (e.status ?? "").toLowerCase(),
+        path: segs.join("/"),
     };
-    if (/\{(slug|id|type|locale|status)\}/.test(tpl)) {
+    if (/\{(slug|id|type|locale|status|path)\}/.test(tpl)) {
         return tpl.replace(/\{(\w+)\}/g, (_, k: string) => encodeURIComponent(map[k] ?? ""));
     }
-    return tpl.replace(/\/+$/, "") + "/" + encodeURIComponent(map.slug);
+    const root = tpl.replace(/\/+$/, "");
+    const path = segs.map(encodeURIComponent).join("/");
+    return path ? `${root}/${path}` : root;
 };
 
 /**
@@ -75,6 +97,7 @@ const PreviewClient = () => {
     const canLiveEdit = has("live_editor");
     const [entry, setEntry] = useState<Entry | null>(null);
     const [fields, setFields] = useState<SchemaField[]>([]);
+    const [type, setType] = useState<ApiType | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [device, setDevice] = useState<Device>("desktop");
     const [userMode, setUserMode] = useState<"site" | "content" | null>(null);
@@ -83,15 +106,19 @@ const PreviewClient = () => {
     const [dirty, setDirty] = useState(false);
     const [saving, setSaving] = useState(false);
     const [saveErr, setSaveErr] = useState<string | null>(null);
+    const [editNote, setEditNote] = useState<string | null>(null);
     const [savedTick, setSavedTick] = useState(false);
     const articleRef = useRef<HTMLDivElement>(null);
     const titleRef = useRef<HTMLHeadingElement>(null);
     const summaryRef = useRef<HTMLParagraphElement>(null);
-    // Site-mode editing (the iframe is an edit-aware frontend, e.g. the bundled
-    // Northbound demo): a postMessage bridge unlocks in-place editing + streams
-    // the edited fields (title / summary / body) back so Save can persist them.
+    // Site-mode editing (the iframe is an edit-aware frontend running the
+    // flowcms-live-edit bridge, e.g. the bundled Northbound demo or a customer site
+    // that embeds public/flowcms-live-edit.js): a postMessage bridge unlocks in-place
+    // editing + streams the edited fields back, keyed by their content-model field
+    // name (`title` maps to the entry title; everything else into entry data), so
+    // Save can persist them. Legacy demos still send {title, summary, body}.
     const iframeRef = useRef<HTMLIFrameElement>(null);
-    const siteFieldsRef = useRef<{ title?: string; summary?: string; body?: string }>({});
+    const siteFieldsRef = useRef<Record<string, string>>({});
     const [siteEditable, setSiteEditable] = useState(false);
 
     useEffect(() => {
@@ -117,6 +144,7 @@ const PreviewClient = () => {
                 if (off) return;
                 const t = types.find((x) => x.id === ctId) ?? types.find((x) => x.name === ctName);
                 setFields(t?.fields ?? []);
+                setType(t ?? null);
             })
             .catch(() => undefined);
         return () => {
@@ -138,7 +166,7 @@ const PreviewClient = () => {
     const metaFields = fields.filter((f) => f.type !== "Rich text" && f.type !== "Slug" && f.name.toLowerCase() !== "title" && f.type !== "DynamicZone");
     // Section-based page: render the dynamic-zone sections as the page content.
     const sections = findSections(entry?.data);
-    const target = entry && hasSite ? buildTarget(previewUrl, entry) : "";
+    const target = entry && hasSite ? buildTarget(previewUrl, entry, type) : "";
 
     // Two edit surfaces: an edit-aware Site iframe (postMessage bridge → edit on the
     // real rendered page) or the same-origin Content render (contentEditable). When
@@ -154,19 +182,36 @@ const PreviewClient = () => {
         } catch {
             /* keep * */
         }
-        win.postMessage({ source: "flow-studio", ...msg }, origin);
+        win.postMessage({ source: "flowcms-studio", ...msg }, origin);
     };
 
     // Listen to the edit-aware site iframe: `ready` unlocks in-place editing;
-    // `dirty`/`fields` stream its edited title/summary/body back so Save persists them.
+    // `dirty`/`fields` stream the edited fields back so Save persists them. Fields
+    // arrive either as a `fields` map keyed by content-model field name (the
+    // generalized bridge) or as legacy {title, summary, body} keys.
     useEffect(() => {
         const onMsg = (e: MessageEvent) => {
             if (e.source !== iframeRef.current?.contentWindow) return; // only our iframe
-            const d = e.data as { source?: string; type?: string; title?: string; summary?: string; body?: string } | null;
-            if (!d || d.source !== "flow-preview") return;
+            const d = e.data as {
+                source?: string;
+                type?: string;
+                title?: string;
+                summary?: string;
+                body?: string;
+                fields?: Record<string, unknown>;
+            } | null;
+            if (!d || d.source !== "flowcms-preview") return;
             if (d.type === "ready") setSiteEditable(true);
             else if (d.type === "dirty") setDirty(true);
-            else if (d.type === "fields") siteFieldsRef.current = { title: d.title, summary: d.summary, body: d.body };
+            else if (d.type === "fields") {
+                const map: Record<string, string> = {};
+                if (d.fields && typeof d.fields === "object") {
+                    for (const [k, v] of Object.entries(d.fields)) if (typeof v === "string") map[k] = v;
+                }
+                // Back-compat: accept the legacy flat keys too.
+                for (const k of ["title", "summary", "body"] as const) if (typeof d[k] === "string") map[k] = d[k] as string;
+                siteFieldsRef.current = map;
+            }
         };
         window.addEventListener("message", onMsg);
         return () => window.removeEventListener("message", onMsg);
@@ -174,11 +219,17 @@ const PreviewClient = () => {
 
     const startEdit = () => {
         setSaveErr(null);
+        setEditNote(null);
         if (mode === "site" && siteEditable) {
             setEditing(true);
             postToSite({ type: "edit", editing: true });
         } else {
-            // Fallback: edit the studio's same-origin content render.
+            // Fallback: edit the studio's same-origin content render. If a real site
+            // is configured but hasn't loaded the live-edit bridge, say why we
+            // dropped to the content view instead of editing the live page.
+            if (mode === "site" && !siteEditable) {
+                setEditNote("This page isn't set up for live editing yet. Add flowcms-live-edit.js to your site to edit it in place; for now you're editing the content version.");
+            }
             setUserMode("content");
             setEditing(true);
         }
@@ -210,20 +261,32 @@ const PreviewClient = () => {
     };
     const save = async () => {
         if (!id) return;
-        // Collect the edited fields from whichever surface is active.
-        const src = siteEditing
+        // Collect the edited fields from whichever surface is active, as a flat map
+        // keyed by content-model field name. Site mode streams that map over the
+        // bridge; content mode reads the three editable nodes it renders.
+        const src: Record<string, string> = siteEditing
             ? siteFieldsRef.current
             : {
-                  title: titleRef.current?.textContent ?? undefined,
-                  summary: summaryRef.current ? (summaryRef.current.textContent ?? "") : undefined,
-                  body: articleRef.current?.innerHTML ?? undefined,
+                  ...(titleRef.current ? { title: titleRef.current.textContent ?? "" } : {}),
+                  ...(summaryRef.current ? { summary: summaryRef.current.textContent ?? "" } : {}),
+                  ...(articleRef.current ? { body: articleRef.current.innerHTML ?? "" } : {}),
               };
+        // `title` maps to the entry title; everything else is entry data. `slug` is
+        // a structural column (the live URL) — never rewrite it from an in-place edit.
         const data: Record<string, unknown> = {};
-        if (typeof src.body === "string") data.body = src.body;
-        if (typeof src.summary === "string") data.summary = src.summary;
         const patch: Record<string, unknown> = {};
-        const newTitle = (src.title ?? "").trim();
-        if (newTitle) patch.title = newTitle; // never blank out the title
+        let newTitle = "";
+        for (const [k, v] of Object.entries(src)) {
+            if (typeof v !== "string") continue;
+            if (k === "title") {
+                newTitle = v.trim();
+                if (newTitle) patch.title = newTitle; // never blank out the title
+            } else if (k === "slug") {
+                continue;
+            } else {
+                data[k] = v;
+            }
+        }
         if (Object.keys(data).length) patch.data = data;
         if (!Object.keys(patch).length) return;
         setSaving(true);
@@ -232,7 +295,7 @@ const PreviewClient = () => {
             await api(`/entries/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
             setEntry((e) => (e ? { ...e, title: (patch.title as string) ?? e.title, data: { ...(e.data ?? {}), ...data } } : e));
             // Reset the iframe's revert-baseline to the saved copy.
-            if (siteEditing) postToSite({ type: "baseline", title: newTitle || entry?.title, summary: src.summary, body: src.body });
+            if (siteEditing) postToSite({ type: "baseline", fields: { ...src, ...(newTitle ? { title: newTitle } : {}) } });
             setDirty(false);
             setSavedTick(true);
             setTimeout(() => setSavedTick(false), 2000);
@@ -423,7 +486,7 @@ const PreviewClient = () => {
                                         if (!v) return null;
                                         return (
                                             <div key={f.id} className="flex flex-col gap-1.5">
-                                                <dt className="text-caption-2 font-semibold uppercase tracking-wide text-grey">{f.name}</dt>
+                                                <dt className="text-caption-2 font-semibold uppercase tracking-wide text-grey">{fieldLabel(f)}</dt>
                                                 <dd>
                                                     {f.type === "Media" ? (
                                                         // eslint-disable-next-line @next/next/no-img-element -- arbitrary external/asset URL, not a known-size local asset
@@ -464,6 +527,8 @@ const PreviewClient = () => {
                     <span className="text-caption-2">
                         {saveErr ? (
                             <span className="text-error">{saveErr}</span>
+                        ) : editNote ? (
+                            <span className="text-warning">{editNote}</span>
                         ) : (
                             <span className="text-grey">{dirty ? "Unsaved changes" : savedTick ? "Saved" : "Click the title, summary or body to edit it directly."}</span>
                         )}

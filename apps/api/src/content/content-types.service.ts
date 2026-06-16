@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
+import { isHomeType, routePrefixForType } from "./route-path";
 
 @Injectable()
 export class ContentTypesService {
@@ -50,6 +51,11 @@ export class ContentTypesService {
             jsonLd: s.jsonLd ?? "Article",
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
+            // Public-site routing derived from the API id: entries live at
+            // /<urlPrefix>/<slug> (e.g. /services/<slug>), or the site root when the
+            // type is a homepage (urlPrefix empty + isHome). Drives live preview.
+            urlPrefix: routePrefixForType(t),
+            isHome: isHomeType(t),
         };
     }
 

@@ -14,7 +14,7 @@ const prisma = new PrismaClient();
  * dashboards all look like a real agency at work.
  *
  * It also seeds a **second** workspace — "Atlas Coffee", a client the agency runs
- * in its own Flow workspace — with its own roles, content and a couple of shared
+ * in its own FlowCMS workspace — with its own roles, content and a couple of shared
  * members, so the Enterprise multi-workspace switcher has a real tenant to switch
  * into out of the box.
  *
@@ -381,7 +381,7 @@ async function main() {
     }
 
     // ── Second workspace: "Atlas Coffee" ─────────────────────────────────────
-    // A client the agency runs inside its own Flow workspace, so the Enterprise
+    // A client the agency runs inside its own FlowCMS workspace, so the Enterprise
     // multi-workspace switcher has a real second tenant to switch into. Sarah
     // (owner), Priya and Daniel are members of both; each workspace keeps its own
     // roles + content and (eventually) serves its own published domain.

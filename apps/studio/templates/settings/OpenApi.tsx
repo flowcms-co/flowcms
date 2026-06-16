@@ -111,7 +111,7 @@ curl -X POST "${displayBase}/agent/article/ENTRY_ID/publish" \\
         <Card className="flex flex-wrap items-center justify-between gap-3">
             <div>
                 <h3 className="text-title text-black dark:text-white">Outbound webhooks</h3>
-                <p className="mt-0.5 text-caption-2 text-grey">Get notified on your systems when content changes (signed with <code className="font-mono">X-Flow-Signature</code>).</p>
+                <p className="mt-0.5 text-caption-2 text-grey">Get notified on your systems when content changes (signed with <code className="font-mono">X-FlowCMS-Signature</code>).</p>
             </div>
             <Link href="/settings/developers?tab=webhooks" className="btn-secondary shrink-0">Configure webhooks</Link>
         </Card>

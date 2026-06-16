@@ -95,8 +95,10 @@ const WorkspaceSwitcher = ({ collapsed = false }: { collapsed?: boolean }) => {
                 >
                     <Menu.Items
                         className={cn(
-                            "absolute top-full z-20 mt-2 rounded-2xl bg-surface p-2 shadow-[0_1.25rem_2.5rem_rgba(26,26,46,0.16)] focus:outline-none dark:bg-dark-1 dark:shadow-[0_1.25rem_2.5rem_rgba(0,0,0,0.5)]",
-                            collapsed ? "left-0 w-60" : "left-0 right-0",
+                            // Fixed, comfortable width independent of the (narrow) sidebar
+                            // so workspace names and the "New workspace" row never wrap or
+                            // spill out of the panel. Overhangs the sidebar to the right.
+                            "absolute top-full left-0 z-20 mt-2 w-64 rounded-2xl bg-surface p-2 shadow-[0_1.25rem_2.5rem_rgba(26,26,46,0.16)] focus:outline-none dark:bg-dark-1 dark:shadow-[0_1.25rem_2.5rem_rgba(0,0,0,0.5)]",
                         )}
                     >
                         <div className="px-2.5 py-1.5 text-caption-2 text-grey">

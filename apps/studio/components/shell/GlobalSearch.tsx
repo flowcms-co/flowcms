@@ -29,7 +29,7 @@ const QUICK_LINKS: SearchItem[] = [
     { id: "overview", label: "Overview", sub: "Dashboard", icon: "overview", kind: "link", href: "/" },
     { id: "content", label: "All content", sub: "Entries", icon: "document", kind: "link", href: "/content" },
     { id: "calendar", label: "Content calendar", sub: "Schedule", icon: "calendar", kind: "link", href: "/content/calendar" },
-    { id: "seo", label: "SEO dashboard", sub: "Flow SEO Score", icon: "chart", kind: "link", href: "/seo" },
+    { id: "seo", label: "SEO dashboard", sub: "FlowCMS SEO Score", icon: "chart", kind: "link", href: "/seo" },
     { id: "ai", label: "AI suite", sub: "Generate & proofread", icon: "sparkles", kind: "link", href: "/ai" },
     { id: "assets", label: "Media library", sub: "Assets", icon: "folder", kind: "link", href: "/assets" },
     { id: "settings", label: "Settings", sub: "Workspace", icon: "settings", kind: "link", href: "/settings" },

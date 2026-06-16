@@ -728,7 +728,7 @@ export class SeoService {
     }
 
     /**
-     * THE canonical Flow SEO Score (0-100): one number for the whole product.
+     * THE canonical FlowCMS SEO Score (0-100): one number for the whole product.
      * Weighted blend of the pillars we can measure — Visibility (Search Console),
      * Technical (built-in crawler), Speed (Core Web Vitals). When a source isn't
      * connected, its weight redistributes across the live pillars, so the score is

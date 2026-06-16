@@ -322,11 +322,15 @@ const EditorPage = () => {
 
     /** Step 2: promote the approved draft to the live version (goes public now). */
     const publishChanges = async () => {
+        if (!entryId) return;
         setSaveState("saving");
         setError(null);
         try {
-            await persist();
-            if (!entryId) return;
+            // Don't re-save here. The draft was already flushed and approved in the
+            // Approve step; a no-op PATCH would re-stage the draft and clear its
+            // approval on the server, tripping the "approve before publishing" gate.
+            // Any edit made after approving already ticks autosave, which flips this
+            // button back to "Approve" — so when this runs the draft is approved.
             const e = await api<ApiEntry>(`/entries/${entryId}/publish`, { method: "POST" });
             setStatus(e.status);
             setHasDraft(false);

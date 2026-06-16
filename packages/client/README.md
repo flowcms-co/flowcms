@@ -29,6 +29,29 @@ await flow.publish("articles", draft.id);
 
 Works in the browser and Node 18+ (uses the global `fetch`; pass `fetch` in `createClient` for older runtimes).
 
+### Live editing (visual editor)
+
+A separate, browser-only entry point enables in-place editing of your rendered
+pages inside the Flow CMS live preview. It's independent of the data client above
+and needs no token.
+
+```ts
+import { enableVisualEditing } from "@flowcms/client/visual-editing";
+
+enableVisualEditing(); // call once on the client (a no-op during SSR)
+```
+
+Then tag editable regions with the matching content-model field name:
+
+```html
+<h1 data-flowcms-field="title">My title</h1>
+<div data-flowcms-field="body" data-flowcms-rich>…rich content…</div>
+```
+
+Use `data-flowcms-field="<name>"` for any field (`title` maps to the entry title),
+and add `data-flowcms-rich` to keep rich HTML. See the studio's **Connect your site**
+panel for a copy-paste snippet for your framework.
+
 ### Read options
 `list` / `get` / `single` accept: `limit`, `offset`, `sort` (`"field:desc"`), `fields` (string[]), `locale`, and `filters` (`{ category: "news" }`).
 

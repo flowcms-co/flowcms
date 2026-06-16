@@ -47,6 +47,10 @@ export type SchemaField = {
     name: string;
     type: FieldType;
     required: boolean;
+    /** Optional human-friendly label shown to editors in the block editor in place
+     *  of the machine `name`. Purely cosmetic — entry data is still keyed by `name`,
+     *  so adding/changing a label never touches stored content. */
+    label?: string;
     /** Optional helper text shown under the field in the content editor (Strapi-style). */
     description?: string;
     /** Component fields can repeat (a list) and nest their own fields (inline). */
@@ -56,6 +60,13 @@ export type SchemaField = {
     componentApiId?: string;
     /** DynamicZone: component apiIds allowed as sections in this ordered list. */
     allowedComponents?: string[];
+};
+
+/** The display label for a field in the block editor: the editor-friendly `label`
+ *  when set, otherwise the field's machine `name`. */
+export const fieldLabel = (f: { label?: string; name: string }): string => {
+    const l = f.label?.trim();
+    return l ? l : f.name;
 };
 
 export type ContentTypeSchema = {
