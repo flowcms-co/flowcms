@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
@@ -14,21 +14,27 @@ const TABS: { id: Fw; label: string }[] = [
     { id: "curl", label: "cURL" },
 ];
 
+type ContentType = { id: string; name: string; apiId: string; pluralApiId: string; kind?: string };
+
+// The path segment to fetch is one of this workspace's real content types (its
+// pluralApiId, e.g. "services"), not a hardcoded "articles" that may not exist.
+const resourceOf = (t: ContentType) => t.pluralApiId || t.apiId;
+
 // One-line "where does this go?" guidance per stack. Everything here uses the
 // plain REST API + your token, so there's nothing to install.
 const HINTS: Record<Fw, string> = {
-    fetch: "Works in any JavaScript / TypeScript project. No install: fetch the REST API with your token.",
-    next: "Drop this into a Server Component or Route Handler. No package to install.",
+    fetch: "Paste into any page, component, or build script in your website. No install: fetch the REST API with your token.",
+    next: "Paste into a Server Component or Route Handler in your Next.js site. No package to install.",
     curl: "A quick terminal test: confirms your token and URL work before you wire up any code.",
 };
 
-const snippet = (fw: Fw, token: string, displayBase: string) => {
+const snippet = (fw: Fw, token: string, displayBase: string, resource: string) => {
     const t = token || "YOUR_TOKEN";
     if (fw === "curl")
-        return `# Test the connection from your terminal\ncurl "${displayBase}/public/articles?limit=10" \\\n  -H "Authorization: Bearer ${t}"`;
+        return `# Test the connection from your terminal\ncurl "${displayBase}/public/${resource}?limit=10" \\\n  -H "Authorization: Bearer ${t}"`;
     if (fw === "next")
-        return `// app/blog/page.tsx — a Server Component (nothing to install)\nexport default async function Blog() {\n  const res = await fetch("${displayBase}/public/articles?limit=10", {\n    headers: { Authorization: "Bearer ${t}" }, // keep the token in FLOWCMS_TOKEN\n    next: { revalidate: 60 }, // ISR; pair with a webhook for instant updates\n  });\n  const { data } = await res.json();\n  return <ul>{data.map((p) => <li key={p.id}>{String(p.title)}</li>)}</ul>;\n}`;
-    return `// Any JS/TS project — no install, just fetch the REST API.\nconst res = await fetch("${displayBase}/public/articles?limit=10", {\n  headers: { Authorization: "Bearer ${t}" }, // store the token in an env var\n});\nconst { data } = await res.json();\nconsole.log(data);`;
+        return `// app/${resource}/page.tsx in YOUR website (example path — use any page)\nexport default async function Page() {\n  const res = await fetch("${displayBase}/public/${resource}?limit=10", {\n    headers: { Authorization: "Bearer ${t}" }, // keep the token in FLOWCMS_TOKEN\n    next: { revalidate: 60 }, // ISR; pair with a webhook for instant updates\n  });\n  const { data } = await res.json();\n  return <ul>{data.map((p) => <li key={p.id}>{String(p.title)}</li>)}</ul>;\n}`;
+    return `// In YOUR website's code — no install, just fetch the REST API.\nconst res = await fetch("${displayBase}/public/${resource}?limit=10", {\n  headers: { Authorization: "Bearer ${t}" }, // store the token in an env var\n});\nconst { data } = await res.json();\nconsole.log(data);`;
 };
 
 // Live-editor setup: enables clicking-to-edit on the real page inside the FlowCMS
@@ -62,6 +68,26 @@ const ConnectQuickstart = () => {
     const [error, setError] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
     const [copiedLive, setCopiedLive] = useState(false);
+    const [types, setTypes] = useState<ContentType[]>([]);
+    const [resource, setResource] = useState("articles");
+
+    // Load this workspace's real content types so the snippet fetches something
+    // that actually exists. Default to the first collection (a single type often
+    // has no list), falling back to whatever's first.
+    useEffect(() => {
+        let off = false;
+        api<ContentType[]>("/content-types")
+            .then((list) => {
+                if (off || !list.length) return;
+                setTypes(list);
+                const collection = list.find((t) => t.kind !== "SINGLE") ?? list[0];
+                setResource(resourceOf(collection));
+            })
+            .catch(() => undefined);
+        return () => {
+            off = true;
+        };
+    }, []);
 
     const createToken = async () => {
         setCreating(true);
@@ -77,7 +103,7 @@ const ConnectQuickstart = () => {
     };
 
     const copy = async () => {
-        await navigator.clipboard.writeText(snippet(fw, token, displayBase));
+        await navigator.clipboard.writeText(snippet(fw, token, displayBase, resource));
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
     };
@@ -93,7 +119,7 @@ const ConnectQuickstart = () => {
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <div>
                     <h2 className="text-h5 text-black dark:text-white">Connect your site in 60 seconds</h2>
-                    <p className="text-caption-2 text-grey">Generate a token, copy the snippet, and paste it into your website&rsquo;s code. That&rsquo;s it.</p>
+                    <p className="text-caption-2 text-grey">Generate a token, pick the content to pull, and paste the snippet into your website&rsquo;s code.</p>
                 </div>
                 {token ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-pill bg-success/10 text-success text-caption-2 font-semibold"><Icon className="w-3.5 h-3.5 fill-success" name="check" />Token created: it&rsquo;s in the snippet below</span>
@@ -101,6 +127,33 @@ const ConnectQuickstart = () => {
                     <button type="button" onClick={createToken} disabled={creating} className="btn-primary disabled:opacity-60"><Icon className="w-5 h-5 fill-white" name="key" />{creating ? "Creating…" : "Generate a read token"}</button>
                 )}
             </div>
+
+            {/* Where does this go? The most-asked question: this admin is the
+                source, your public website is where the code lives. */}
+            <div className="mb-4 flex items-start gap-2.5 rounded-2xl border border-primary/15 bg-primary/[0.06] px-4 py-3 dark:border-lilac/15">
+                <Icon className="mt-0.5 h-4 w-4 shrink-0 fill-primary dark:fill-lilac" name="info" />
+                <p className="text-caption-2 leading-relaxed text-grey">
+                    Paste this into <b className="font-semibold text-black dark:text-white">your website&rsquo;s code</b> (your public frontend), <b>not</b> here in the admin. This CMS is where you write content; your site reads it over the API.
+                    {" "}File paths like{" "}<code className="font-mono">app/{resource}/page.tsx</code>{" "}are just examples: use any page or component that should show this content, or create one if it doesn&rsquo;t exist yet.
+                </p>
+            </div>
+
+            {types.length > 0 && (
+                <label className="mb-3 flex flex-wrap items-center gap-2 text-caption-2 text-grey">
+                    <span className="font-semibold text-black dark:text-white">Content to fetch:</span>
+                    <select
+                        value={resource}
+                        onChange={(e) => setResource(e.target.value)}
+                        className="h-9 rounded-xl border border-grey-light bg-surface px-3 text-caption-1 font-semibold text-black dark:border-grey-light/15 dark:bg-dark-3 dark:text-white"
+                    >
+                        {types.map((t) => (
+                            <option key={t.id} value={resourceOf(t)}>
+                                {t.name} (/{resourceOf(t)})
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            )}
 
             <div className="flex gap-2 mb-2">
                 {TABS.map((t) => (
@@ -110,7 +163,7 @@ const ConnectQuickstart = () => {
             <p className="mb-3 flex items-start gap-1.5 text-caption-2 text-grey"><Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-grey" name="info" />{HINTS[fw]}</p>
 
             <div className="relative">
-                <pre className="overflow-x-auto rounded-2xl bg-ink px-4 py-3 text-caption-1 leading-relaxed text-white/90 dark:bg-dark-2">{snippet(fw, token, displayBase)}</pre>
+                <pre className="overflow-x-auto rounded-2xl bg-ink px-4 py-3 text-caption-1 leading-relaxed text-white/90 dark:bg-dark-2">{snippet(fw, token, displayBase, resource)}</pre>
                 <button type="button" onClick={copy} className="absolute right-3 top-3 rounded-lg bg-white/10 px-2.5 py-1 text-caption-2 font-semibold text-white transition-colors hover:bg-white/20">{copied ? "Copied!" : "Copy"}</button>
             </div>
 

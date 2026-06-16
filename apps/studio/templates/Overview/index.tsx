@@ -4,13 +4,11 @@ import { useRef } from "react";
 import Image from "next/image";
 import { useRole } from "@/components/providers/RoleProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
-import { useBrand } from "@/lib/useBrand";
 import { illustrationSrc, resolveCharacter } from "@/lib/avatar";
 import { useHeaderReveal } from "@/lib/useReveal";
 import SharedOverview from "@/templates/Overview/SharedOverview";
 import EditorOverview from "@/templates/Overview/EditorOverview";
 import SeoOverview from "@/templates/Overview/SeoOverview";
-import BrandHeroIllustration from "@/templates/Overview/BrandHeroIllustration";
 
 /** Time-of-day greeting + matching emoji (computed in the browser). Bold, clearly
  *  legible glyphs at small size: sun → partly-sunny → sunset → moon. */
@@ -32,7 +30,6 @@ function greetingFor(d: Date): { hello: string; emoji: string; label: string } {
 const Overview = () => {
     const { role, meta } = useRole();
     const { user } = useAuth();
-    const brand = useBrand();
     const firstName = meta.user.name.split(" ")[0];
     // The dashboard figure matches the avatar the user picked (illustrations are
     // numbered 1-14 to mirror the avatar pool); falls back to a stable pick.
@@ -68,24 +65,20 @@ const Overview = () => {
                     </p>
                 </div>
 
-                {/* Hero illustration. White-label (Enterprise) workspaces get the
-                    theme-aware flat-vector scene whose accents follow the brand
-                    color; everyone else gets the figure matching their chosen
-                    avatar. Decorative; hidden on small screens. */}
-                {brand.active ? (
-                    <BrandHeroIllustration className="reveal-pop hidden h-auto w-[clamp(15rem,22vw,21rem)] shrink-0 select-none md:block" />
-                ) : (
-                    <Image
-                        key={heroSrc}
-                        src={heroSrc}
-                        alt=""
-                        width={340}
-                        height={200}
-                        priority
-                        unoptimized
-                        className="reveal-pop hidden h-auto w-[clamp(15rem,22vw,21rem)] shrink-0 select-none md:block"
-                    />
-                )}
+                {/* Hero illustration: the figure matching the user's chosen avatar.
+                    Brand-independent (a raster character, not tinted by the accent),
+                    so it never recolors with white-label branding. Decorative;
+                    hidden on small screens. */}
+                <Image
+                    key={heroSrc}
+                    src={heroSrc}
+                    alt=""
+                    width={340}
+                    height={200}
+                    priority
+                    unoptimized
+                    className="reveal-pop hidden h-auto w-[clamp(15rem,22vw,21rem)] shrink-0 select-none md:block"
+                />
             </div>
 
             {role === "editor" ? <EditorOverview /> : role === "seo" ? <SeoOverview /> : <SharedOverview />}

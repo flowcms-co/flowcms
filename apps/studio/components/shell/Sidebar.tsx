@@ -178,17 +178,16 @@ const Sidebar = ({
                     />
                     {!collapsed && "Log out"}
                 </button>
-            </nav>
-            </div>
 
-            {/* Footer — optional powered-by badge for white-label workspaces */}
-            <div
-                className={cn(
-                    "mt-auto flex shrink-0 flex-col gap-2 pb-4",
-                    collapsed ? "items-center px-2" : "px-6",
+                {/* Powered-by badge — sits just below Log out (a small gap), so it
+                    stays in view next to the nav rather than pinned to the page
+                    bottom. White-label (Enterprise) only. */}
+                {showSwitcher && (
+                    <div className={cn("mt-4 shrink-0", collapsed && "flex justify-center")}>
+                        <PoweredBy collapsed={collapsed} />
+                    </div>
                 )}
-            >
-                {showSwitcher && <PoweredBy collapsed={collapsed} />}
+            </nav>
             </div>
         </aside>
     );

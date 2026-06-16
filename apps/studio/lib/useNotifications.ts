@@ -21,6 +21,7 @@ export const notifMeta: Record<string, { icon: string; color: string }> = {
     published: { icon: "check", color: "#00B894" },
     scheduled: { icon: "calendar", color: "#3B82F6" },
     generated: { icon: "sparkles", color: "#A29BFE" },
+    update_available: { icon: "download", color: "#6C5CE7" },
 };
 export const metaFor = (type: string) => notifMeta[type] ?? { icon: "bell", color: "#6C5CE7" };
 

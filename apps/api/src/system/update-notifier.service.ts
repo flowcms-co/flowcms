@@ -5,9 +5,13 @@ import { SystemService } from "./system.service";
 
 // The Updates panel only checks on demand. This drops an in-app notification to
 // super-admins when a newer release is published, so an update is surfaced without
-// anyone visiting Settings → System. First check shortly after boot, then daily.
+// anyone visiting Settings → System. First check shortly after boot, then hourly:
+// a daily tick can sit on an already-booted instance for almost a full day before
+// it notices a release published minutes after the last check. Hourly keeps the
+// GitHub calls negligible while surfacing a new release within the hour. The
+// per-version idempotency below means each release still notifies exactly once.
 const FIRST_DELAY_MS = 60_000;
-const INTERVAL_MS = 24 * 60 * 60 * 1000;
+const INTERVAL_MS = 60 * 60 * 1000;
 
 @Injectable()
 export class UpdateNotifierService implements OnModuleInit, OnModuleDestroy {
