@@ -10,6 +10,7 @@ import Icon from "@/components/ui/Icon";
 import Logo from "@/components/shell/Logo";
 import WorkspaceSwitcher from "@/components/shell/WorkspaceSwitcher";
 import { usePlan } from "@/components/providers/LicenseProvider";
+import { useBrand } from "@/lib/useBrand";
 import { cn } from "@/lib/cn";
 
 function isActive(pathname: string, href: string): boolean {
@@ -82,11 +83,15 @@ const Sidebar = ({
     // The workspace switcher is the multi-workspace (Enterprise) console. Without
     // it, the brand spot shows the Flow CMS logo (its icon doubles as the toggle).
     const showSwitcher = has("multi_workspace");
-    // White-label installs have paid to drop Flow CMS attribution, so the
-    // "Powered by" badge is suppressed for them. Gated on the license (seeded
-    // server-side at first paint) rather than the async-loaded brand, so the badge
-    // never flashes in before branding resolves.
-    const whiteLabel = has("white_label");
+    // The "Powered by" badge is suppressed only for installs that have ACTIVELY
+    // white-labeled (custom brand name/logo/accent set) — not merely those entitled
+    // to white-label. Enterprise unlocks the white_label entitlement by default, so
+    // gating on the entitlement hid the badge for every Enterprise install even when
+    // they hadn't customized branding. `brand.active` is the real signal; we wait for
+    // `brand.ready` so the badge only appears once the brand is known (no flash-in on
+    // a genuinely white-labeled install).
+    const brand = useBrand();
+    const showPoweredBy = brand.ready && !brand.active;
     const items = navForRole(role);
 
     async function handleLogout() {
@@ -179,7 +184,7 @@ const Sidebar = ({
                     stays in view next to the nav rather than pinned to the page
                     bottom. Multi-workspace (Enterprise) only, and hidden on
                     white-label installs (no Flow CMS attribution). */}
-                {showSwitcher && !whiteLabel && (
+                {showSwitcher && showPoweredBy && (
                     <div className={cn("mt-4 shrink-0", collapsed && "flex justify-center")}>
                         <PoweredBy collapsed={collapsed} />
                     </div>

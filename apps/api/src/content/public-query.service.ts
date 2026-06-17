@@ -24,6 +24,28 @@ const coerce = (v: string): string | number | boolean => {
 };
 
 /**
+ * Public origin that serves uploaded media. `Media.url` is stored relative
+ * ("/media/<key>"), which only resolves when the page is on the CMS origin — a
+ * customer's frontend (a different domain) would resolve "/media/..." against
+ * ITSELF and 404. So the delivery API rewrites relative "/media/..." values to
+ * absolute URLs on the CMS host. MEDIA_PUBLIC_URL overrides (e.g. a CDN); else the
+ * canonical CMS URL (STUDIO_URL), under which Caddy proxies /media to the API.
+ */
+const MEDIA_BASE = (process.env.MEDIA_PUBLIC_URL || process.env.STUDIO_URL || "").replace(/\/$/, "");
+
+/** Deep-rewrite relative "/media/..." strings to absolute CMS URLs. */
+const absolutizeMedia = (v: unknown): unknown => {
+    if (typeof v === "string") return v.startsWith("/media/") ? `${MEDIA_BASE}${v}` : v;
+    if (Array.isArray(v)) return v.map(absolutizeMedia);
+    if (v && typeof v === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = absolutizeMedia(val);
+        return out;
+    }
+    return v;
+};
+
+/**
  * Shared read-side query engine for the public delivery API — used by both the
  * REST controller and the GraphQL resolver so filtering/sorting/projection logic
  * lives in one place. Returns delivery-shaped objects (data fields flattened).
@@ -70,7 +92,9 @@ export class PublicQueryService {
             const jsonLd = [...manual, ...derived];
             if (jsonLd.length) base.jsonLd = jsonLd;
         }
-        return base;
+        // Make relative "/media/..." refs absolute so they load from the CMS on any
+        // frontend domain (not the consuming site's own origin).
+        return MEDIA_BASE ? (absolutizeMedia(base) as Record<string, unknown>) : base;
     }
 
     private where(ct: ContentType, opts: QueryOpts): Prisma.ContentEntryWhereInput {
