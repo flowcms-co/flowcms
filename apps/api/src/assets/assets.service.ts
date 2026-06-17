@@ -72,6 +72,10 @@ class Semaphore {
     }
 }
 const imageGate = new Semaphore(Math.max(1, Number(process.env.MEDIA_PROCESS_CONCURRENCY) || 2));
+// Separate (small) lane for AI alt-text downscaling so a big background bulk job
+// can't starve interactive uploads of the imageGate. Bounds total concurrent
+// decodes to imageGate + altGate.
+const altGate = new Semaphore(Math.max(1, Number(process.env.MEDIA_ALT_CONCURRENCY) || 1));
 
 @Injectable()
 export class AssetsService {
@@ -300,7 +304,7 @@ export class AssetsService {
         let b64: string;
         let mime = m.mimeType;
         try {
-            const small = await imageGate.run(() =>
+            const small = await altGate.run(() =>
                 sharp(buffer, SHARP_OPTS).resize(768, 768, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(),
             );
             b64 = small.toString("base64");

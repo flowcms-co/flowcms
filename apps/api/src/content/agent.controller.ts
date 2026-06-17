@@ -91,7 +91,10 @@ export class AgentController {
     @Patch(":type/:id")
     update(@Req() req: TokenReq, @Param("id") id: string, @Body() dto: AgentUpdateDto) {
         requireScope(req, PERMISSIONS.CONTENT_UPDATE);
-        return this.entries.update(req.apiToken.workspaceId, id, dto);
+        // Pass the token's publish capability so a content.update-only token can't
+        // PATCH status straight to APPROVED/SCHEDULED (approval-workflow bypass).
+        const canPublish = tokenScopeAllows(req.apiToken.scopes, PERMISSIONS.CONTENT_PUBLISH);
+        return this.entries.update(req.apiToken.workspaceId, id, dto, undefined, undefined, canPublish ? [PERMISSIONS.CONTENT_PUBLISH] : []);
     }
 
     @Post(":type/:id/publish")

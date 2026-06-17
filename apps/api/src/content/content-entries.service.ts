@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { ContentEntry, ContentStatus, Prisma, ReviewDecision } from "@flowcms/db";
+import { PERMISSIONS } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { CacheService } from "../cache/cache.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -17,6 +18,17 @@ type Shaped = ReturnType<ContentEntriesService["shape"]>;
 
 /** Statuses for which all required fields must be present. */
 const REQUIRE_COMPLETE = new Set<ContentStatus>(["PUBLISHED", "SCHEDULED", "APPROVED"]);
+
+/** Statuses an actor may only move INTO with publish rights. Reaching APPROVED is
+ *  otherwise reserved to the reviewer flow (recordReview); SCHEDULED/PUBLISHED to a
+ *  publisher. This stops a content.update-only actor from PATCHing straight to
+ *  APPROVED and then publishing (approval-workflow bypass). */
+const PUBLISH_STATES = new Set<string>(["APPROVED", "SCHEDULED", "PUBLISHED"]);
+
+/** Does this actor's permission/scope set grant publish? `undefined` = trusted
+ *  internal caller (scheduler, review flow) → allowed. */
+const grantsPublish = (perms?: string[]): boolean =>
+    !perms || perms.includes("*") || perms.includes(PERMISSIONS.CONTENT_PUBLISH);
 
 @Injectable()
 export class ContentEntriesService {
@@ -122,11 +134,15 @@ export class ContentEntriesService {
         const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { approvalsRequired: true } });
         const required = ws?.approvalsRequired ?? 1;
         const approvals = rows.filter((r) => r.decision === "APPROVED").length;
+        const enforced = this.approvals ? await this.approvals.isEnforced(workspaceId) : false;
         return {
             status: entry.status,
             approvalsRequired: required,
             approvals,
             isApproved: entry.status === "APPROVED" || approvals >= required,
+            // Approval is only required (so the UI shows "Submit for approval") when
+            // the workspace is licensed for it.
+            enforced,
             reviews: rows.map((r) => ({ reviewer: nameOf(r.reviewerId), decision: r.decision, note: r.note, at: r.createdAt })),
         };
     }
@@ -387,12 +403,21 @@ export class ContentEntriesService {
         return shaped;
     }
 
-    async update(workspaceId: string, id: string, dto: UpdateEntryDto, actorId?: string, role?: RoleRules) {
+    async update(workspaceId: string, id: string, dto: UpdateEntryDto, actorId?: string, role?: RoleRules, actorPermissions?: string[]) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
             include: { contentType: { select: { schema: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
+
+        // Authorization: only a publisher may move an entry INTO a sign-off / live
+        // state. Editors reach these only through the reviewer flow (submit → a
+        // reviewer approves via /review → editor publishes via /publish). Without this
+        // a content.update-only actor (session OR agent token) could PATCH status
+        // straight to APPROVED/SCHEDULED and bypass the approval workflow.
+        if (dto.status !== undefined && dto.status !== existing.status && PUBLISH_STATES.has(dto.status) && !grantsPublish(actorPermissions)) {
+            throw new ForbiddenException("Only a reviewer can approve, schedule, or publish content. Submit it for approval instead.");
+        }
 
         // advanced_rbac (Pro): block editing disallowed types + ignore writes to
         // fields the role can't edit (existing values are preserved).
@@ -526,12 +551,23 @@ export class ContentEntriesService {
         return shaped;
     }
 
-    async publish(workspaceId: string, id: string, actorId?: string) {
+    async publish(workspaceId: string, id: string, actorId?: string, actorPermissions?: string[]) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
             include: { contentType: { select: { schema: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
+        // An actor without CONTENT_PUBLISH (e.g. an Editor) may only do the FINAL
+        // publish of content a reviewer has already approved — never push unapproved
+        // content live. Both unapproved paths are rejected explicitly. This holds
+        // regardless of license tier (it does not depend on the EE approval gate).
+        if (!grantsPublish(actorPermissions)) {
+            if (existing.draftData != null) {
+                if (!existing.draftApproved) throw new ForbiddenException("These changes must be approved by a reviewer before publishing.");
+            } else if (existing.status !== "APPROVED") {
+                throw new ForbiddenException("This content must be approved by a reviewer before you can publish it.");
+            }
+        }
         // Promote a pending draft (edits made to an already-live entry): the draft
         // becomes the new live `data` and the overlay is cleared. Enforce the two-step
         // Approve → Publish gate on the SERVER (not just the studio UI) so the direct

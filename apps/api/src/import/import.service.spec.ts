@@ -64,6 +64,34 @@ describe("import schema inference (JSON)", () => {
         expect(t("callToActionText")).toBe("Text"); // button label stays plain
     });
 
+    it("resolves imported media: library match first, then live-site fallback", () => {
+        const index = new Map<string, string>([
+            ["angela.webp", "/media/abc.webp"],
+            ["angela", "/media/abc.webp"],
+        ]);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const resolve = (v: unknown) => (svc as any).resolveAssetRefs(v, index, "https://restorationprosnearyou.co");
+
+        // 1) exact + extension-changed name → internal library URL
+        expect(resolve("/assets/images/avatar/angela.webp")).toBe("/media/abc.webp");
+        expect(resolve("/assets/images/avatar/angela.png")).toBe("/media/abc.webp");
+        // 2) not in library, root-relative → absolute live-site URL
+        expect(resolve("/assets/images/faq/faq-img1.jpg")).toBe("https://restorationprosnearyou.co/assets/images/faq/faq-img1.jpg");
+        // 3) untouched: external URLs, already-internal refs, bare non-paths
+        expect(resolve("https://cdn.example.com/x.webp")).toBe("https://cdn.example.com/x.webp");
+        expect(resolve("/media/already.webp")).toBe("/media/already.webp");
+        expect(resolve("susan")).toBe("susan");
+        // 4) recurses into nested objects/arrays
+        const nested = resolve({ hero: { backgroundImage: "/assets/x/h.webp" }, items: [{ avatar: "/assets/a/angela.webp" }] });
+        expect(nested).toEqual({ hero: { backgroundImage: "https://restorationprosnearyou.co/assets/x/h.webp" }, items: [{ avatar: "/media/abc.webp" }] });
+    });
+
+    it("leaves root-relative paths alone when no live site is configured", () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const resolve = (v: unknown) => (svc as any).resolveAssetRefs(v, new Map(), undefined);
+        expect(resolve("/assets/images/faq/faq-img1.jpg")).toBe("/assets/images/faq/faq-img1.jpg");
+    });
+
     it("infers a real model for a single nested object (one entry)", async () => {
         const text = JSON.stringify({ heroBanner: { title: "Hi", backgroundImage: "/assets/x.png" } });
         const res = await svc.preview("ws", { kind: "json", text, typeApiId: "svc", typeName: "Service" });

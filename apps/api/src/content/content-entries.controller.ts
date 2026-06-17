@@ -79,13 +79,16 @@ export class ContentEntriesController {
     @Patch(":id")
     @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
     update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateEntryDto) {
-        return this.entries.update(user.workspaceId, id, dto, user.id, user.role);
+        return this.entries.update(user.workspaceId, id, dto, user.id, user.role, user.role.permissions);
     }
 
+    // CONTENT_UPDATE (not CONTENT_PUBLISH) so an editor can do the final publish of
+    // content a reviewer has already approved. The service still refuses to publish
+    // anything not yet approved when the actor lacks CONTENT_PUBLISH.
     @Post(":id/publish")
-    @RequirePermissions(PERMISSIONS.CONTENT_PUBLISH)
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
     publish(@CurrentUser() user: AuthUser, @Param("id") id: string) {
-        return this.entries.publish(user.workspaceId, id, user.id);
+        return this.entries.publish(user.workspaceId, id, user.id, user.role.permissions);
     }
 
     @Post(":id/unpublish")

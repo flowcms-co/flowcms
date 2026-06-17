@@ -385,13 +385,11 @@ const VersionsTab = ({ entryId, onReload }: { entryId: string; onReload: () => v
 /* ---------------- Review ---------------- */
 const STATUS_LABEL: Record<string, string> = { DRAFT: "Draft", IN_REVIEW: "In review", APPROVED: "Approved", SCHEDULED: "Scheduled", PUBLISHED: "Published", ARCHIVED: "Archived" };
 type ReviewRow = { reviewer: string; decision: "APPROVED" | "CHANGES_REQUESTED"; note: string | null; at: string };
-type ReviewsResp = { status: string; approvalsRequired: number; approvals: number; isApproved: boolean; reviews: ReviewRow[] };
+type ReviewsResp = { status: string; approvalsRequired: number; approvals: number; isApproved: boolean; enforced: boolean; reviews: ReviewRow[] };
 
-const ReviewTab = ({ entryId, status, onStatus }: { entryId: string; status: string; onStatus: (s: string) => void }) => {
-    const { can } = useAuth();
-    const canPublish = can("content.publish");
-    const [busy, setBusy] = useState(false);
-    const [note, setNote] = useState("");
+// Read-only sign-off log. Submitting for approval, approving, and publishing all
+// happen from the editor's top action button now; this tab records who did what.
+const ReviewTab = ({ entryId, status }: { entryId: string; status: string; onStatus?: (s: string) => void }) => {
     const [info, setInfo] = useState<ReviewsResp | null>(null);
 
     const load = useCallback(async () => {
@@ -408,41 +406,6 @@ const ReviewTab = ({ entryId, status, onStatus }: { entryId: string; status: str
         // eslint-disable-next-line react-hooks/set-state-in-effect
         void load();
     }, [load, status]);
-
-    const setStatus = async (next: string) => {
-        setBusy(true);
-        try {
-            await api(`/entries/${entryId}`, { method: "PATCH", body: JSON.stringify({ status: next }) });
-            onStatus(next);
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const decide = async (decision: "approve" | "request_changes") => {
-        setBusy(true);
-        try {
-            const r = await api<ReviewsResp>(`/entries/${entryId}/review`, {
-                method: "POST",
-                body: JSON.stringify({ decision, note: note.trim() || undefined }),
-            });
-            setInfo(r);
-            setNote("");
-            if (r.status && r.status !== status) onStatus(r.status);
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const publishNow = async () => {
-        setBusy(true);
-        try {
-            await api(`/entries/${entryId}/publish`, { method: "POST" });
-            onStatus("PUBLISHED");
-        } finally {
-            setBusy(false);
-        }
-    };
 
     const required = info?.approvalsRequired ?? 1;
     const approvals = info?.approvals ?? 0;
@@ -487,36 +450,9 @@ const ReviewTab = ({ entryId, status, onStatus }: { entryId: string; status: str
                 </div>
             )}
 
-            {/* Actions */}
-            <div className="flex flex-wrap gap-2">
-                {status === "DRAFT" && (
-                    <button type="button" onClick={() => void setStatus("IN_REVIEW")} disabled={busy} className="btn-primary h-9 px-3.5 text-caption-1 disabled:opacity-60">
-                        Submit for review
-                    </button>
-                )}
-                {status === "IN_REVIEW" && canPublish && (
-                    <>
-                        <button type="button" onClick={() => void decide("approve")} disabled={busy} className="btn-primary h-9 px-3.5 text-caption-1 disabled:opacity-60">Approve</button>
-                        <button type="button" onClick={() => void decide("request_changes")} disabled={busy} className="btn-secondary h-9 px-3.5 text-caption-1 disabled:opacity-60">Request changes</button>
-                    </>
-                )}
-                {status === "IN_REVIEW" && !canPublish && <p className="text-caption-2 text-grey">Submitted. Waiting for a reviewer to sign off.</p>}
-                {status === "APPROVED" && canPublish && (
-                    <button type="button" onClick={() => void publishNow()} disabled={busy} className="btn-primary h-9 px-3.5 text-caption-1 disabled:opacity-60">Publish now</button>
-                )}
-                {status === "APPROVED" && (
-                    <button type="button" onClick={() => void setStatus("DRAFT")} disabled={busy} className="btn-secondary h-9 px-3.5 text-caption-1 disabled:opacity-60">Back to draft</button>
-                )}
-            </div>
-
-            {/* Decision note */}
-            {status === "IN_REVIEW" && canPublish && (
-                <div className="border-t border-grey-light pt-4 dark:border-grey-light/10">
-                    <div className="mb-2 text-caption-1 text-grey">Note for the author (optional)</div>
-                    <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note with your decision…" className="flow-input resize-none" />
-                    <p className="mt-1.5 text-[0.6875rem] text-grey">Attaches to your next Approve / Request changes.</p>
-                </div>
-            )}
+            <p className="rounded-2xl bg-lavender-mist/50 p-3 text-caption-2 text-grey dark:bg-dark-3/40">
+                Submit for approval, approve, and publish from the action button at the top of the editor. This tab is the sign-off log.
+            </p>
         </div>
     );
 };

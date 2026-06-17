@@ -13,10 +13,15 @@ import RightPanel from "@/components/editor/RightPanel";
 import FieldsForm from "@/components/editor/FieldsForm";
 import SectionEditor, { EditorStatsBar, type ComponentDef, type Section } from "@/components/editor/SectionEditor";
 import { api, ApiError } from "@/lib/api";
+import { useAuth } from "@/components/providers/AuthProvider";
 import { useRevealBatch } from "@/lib/useReveal";
 import { cn } from "@/lib/cn";
 import type { SchemaField } from "@/mocks/schema";
 import { confirm } from "@/components/providers/ConfirmProvider";
+
+/** Approval summary for an entry (GET /entries/:id/reviews). `enforced` is true only
+ *  when the workspace is licensed for approval workflows. */
+type ReviewInfo = { status: string; approvalsRequired: number; approvals: number; isApproved: boolean; enforced: boolean };
 
 type ApiEntry = {
     id: string;
@@ -124,6 +129,9 @@ const EditorPage = () => {
     // Draft-over-published: a live entry whose edits are staged (not yet published).
     const [hasDraft, setHasDraft] = useState(false);
     const [draftApproved, setDraftApproved] = useState(false);
+    // Approval state for the primary action button (Submit for approval → Approve → Publish).
+    const [review, setReview] = useState<ReviewInfo | null>(null);
+    const { can } = useAuth();
 
     /** Mark the doc dirty + tick the autosave debounce (called on every edit). */
     const bump = useCallback(() => {
@@ -244,6 +252,75 @@ const EditorPage = () => {
         router.replace(`/content/editor?id=${created.id}`);
         return created.id;
     }, [editor, entryId, title, slug, typeId, entryData, hasBody, router]);
+
+    /** Pull the approval summary so the primary button can show the right step. */
+    const loadReview = useCallback(async () => {
+        if (!entryId) {
+            setReview(null);
+            return;
+        }
+        try {
+            setReview(await api<ReviewInfo>(`/entries/${entryId}/reviews`));
+        } catch {
+            /* leave as-is; the button falls back to enforced-by-default */
+        }
+    }, [entryId]);
+
+    useEffect(() => {
+        void loadReview();
+    }, [loadReview, status]);
+
+    /** Step 1 of a fresh page: save it and send it to a reviewer. */
+    const submitForApproval = async () => {
+        setSaveState("saving");
+        setError(null);
+        try {
+            const id = await persist();
+            if (!id) {
+                setSaveState("dirty");
+                return;
+            }
+            const e = await api<ApiEntry>(`/entries/${id}`, { method: "PATCH", body: JSON.stringify({ status: "IN_REVIEW" }) });
+            setStatus(e.status);
+            setSaveState("saved");
+            await loadReview();
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Couldn't submit for approval.");
+            setSaveState("dirty");
+        }
+    };
+
+    /** Reviewer records a decision; enough approvals flips the entry to APPROVED. */
+    const decide = async (decision: "approve" | "request_changes") => {
+        if (!entryId) return;
+        setSaveState("saving");
+        setError(null);
+        try {
+            const r = await api<ReviewInfo>(`/entries/${entryId}/review`, { method: "POST", body: JSON.stringify({ decision }) });
+            setReview(r);
+            if (r.status) setStatus(r.status);
+            setSaveState("saved");
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Couldn't record your decision.");
+            setSaveState("dirty");
+        }
+    };
+
+    /** Publish an already-approved entry (no re-save, which would clear approval). */
+    const publishNow = async () => {
+        if (!entryId) return;
+        setSaveState("saving");
+        setError(null);
+        try {
+            const e = await api<ApiEntry>(`/entries/${entryId}/publish`, { method: "POST" });
+            setStatus(e.status);
+            setSaveState("saved");
+            await loadReview();
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Publish failed.");
+            setSaveState("dirty");
+        }
+    };
 
     /** Re-pull the entry (after a version restore) and reset the canvas to it. */
     const reload = useCallback(async () => {
@@ -474,33 +551,93 @@ const EditorPage = () => {
                         <Icon className="h-4 w-4 fill-current" name="eye" />
                         <span className="hidden sm:inline">Preview</span>
                     </button>
-                    {status === "PUBLISHED" ? (
-                        hasDraft ? (
-                            // Live entry with staged edits: two-step Approve → Publish.
-                            <>
-                                <button type="button" onClick={discardDraft} className="btn-ghost btn-md" title="Discard unpublished changes">
-                                    Discard
+                    {(() => {
+                        // Primary action reflects the approval state machine + the user's role:
+                        //   fresh draft → Submit for approval (everyone)
+                        //   in review   → Approve / Request changes (reviewers) · greyed Publish (others)
+                        //   approved    → Publish (reviewers AND editors)
+                        //   published   → Unpublish (reviewers) · draft overlay keeps Approve → Publish
+                        const canPublish = can("content.publish"); // reviewer = publisher
+                        const canUpdate = can("content.update");
+                        const enforced = review?.enforced ?? true; // assume enforced until we know
+                        const greyed = "btn-secondary btn-md opacity-50 cursor-not-allowed";
+
+                        if (status === "PUBLISHED" && hasDraft) {
+                            return (
+                                <>
+                                    {canUpdate && (
+                                        <button type="button" onClick={discardDraft} className="btn-ghost btn-md" title="Discard unpublished changes">
+                                            Discard
+                                        </button>
+                                    )}
+                                    {draftApproved ? (
+                                        <button type="button" onClick={publishChanges} disabled={saveState === "saving"} className="btn-primary btn-md disabled:opacity-60">
+                                            Publish changes
+                                        </button>
+                                    ) : canPublish ? (
+                                        <button type="button" onClick={approveDraft} disabled={saveState === "saving"} className="btn-secondary btn-md disabled:opacity-60">
+                                            Approve
+                                        </button>
+                                    ) : (
+                                        <button type="button" disabled className={greyed} title="A reviewer must approve these changes first">
+                                            Publish changes
+                                        </button>
+                                    )}
+                                </>
+                            );
+                        }
+                        if (status === "PUBLISHED") {
+                            return canPublish ? (
+                                <button type="button" onClick={unpublish} className="btn-secondary btn-md">
+                                    Unpublish
                                 </button>
-                                {draftApproved ? (
-                                    <button type="button" onClick={publishChanges} disabled={saveState === "saving"} className="btn-primary btn-md disabled:opacity-60">
-                                        Publish changes
+                            ) : null;
+                        }
+                        if (status === "IN_REVIEW") {
+                            return canPublish ? (
+                                <>
+                                    <button type="button" onClick={() => decide("request_changes")} className="btn-ghost btn-md">
+                                        Request changes
                                     </button>
-                                ) : (
-                                    <button type="button" onClick={approveDraft} disabled={saveState === "saving"} className="btn-secondary btn-md disabled:opacity-60">
+                                    <button type="button" onClick={() => decide("approve")} disabled={saveState === "saving"} className="btn-primary btn-md disabled:opacity-60">
                                         Approve
                                     </button>
-                                )}
-                            </>
-                        ) : (
-                            <button type="button" onClick={unpublish} className="btn-secondary btn-md">
-                                Unpublish
+                                </>
+                            ) : (
+                                <button type="button" disabled className={greyed} title="Submitted — awaiting a reviewer's approval">
+                                    Publish
+                                </button>
+                            );
+                        }
+                        if (status === "APPROVED" || status === "SCHEDULED") {
+                            return canPublish || canUpdate ? (
+                                <button type="button" onClick={publishNow} disabled={saveState === "saving"} className="btn-primary btn-md disabled:opacity-60">
+                                    Publish
+                                </button>
+                            ) : (
+                                <button type="button" disabled className={greyed}>
+                                    Publish
+                                </button>
+                            );
+                        }
+                        // DRAFT
+                        if (!enforced) {
+                            return canPublish ? (
+                                <button type="button" onClick={publish} className="btn-secondary btn-md">
+                                    Publish
+                                </button>
+                            ) : (
+                                <button type="button" disabled className={greyed} title="Only a publisher can publish">
+                                    Publish
+                                </button>
+                            );
+                        }
+                        return (
+                            <button type="button" onClick={submitForApproval} disabled={saveState === "saving"} className="btn-primary btn-md disabled:opacity-60">
+                                Submit for approval
                             </button>
-                        )
-                    ) : (
-                        <button type="button" onClick={publish} className="btn-secondary btn-md">
-                            Publish
-                        </button>
-                    )}
+                        );
+                    })()}
                     <button
                         type="button"
                         onClick={save}

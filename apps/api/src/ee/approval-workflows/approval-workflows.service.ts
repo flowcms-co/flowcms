@@ -32,6 +32,11 @@ export class ApprovalWorkflowsService implements ApprovalPort {
         );
     }
 
+    /** Approval is only enforced when the workspace is licensed for it. */
+    async isEnforced(_workspaceId: string): Promise<boolean> {
+        return this.license.has("approval_workflows");
+    }
+
     async getPolicy(workspaceId: string) {
         const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { approvalsRequired: true } });
         return { approvalsRequired: ws?.approvalsRequired ?? 1 };

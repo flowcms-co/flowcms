@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import Icon from "@/components/ui/Icon";
-import { api } from "@/lib/api";
+import { api, mediaUrl } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
 type Asset = { id: string; name: string; type: string; url: string; thumbUrl: string };
@@ -39,9 +39,10 @@ export const MediaPreview = ({ url, alt, onReplace, onRemove }: { url: string; a
         );
     }
     return (
-        <div className="group relative overflow-hidden rounded-none border border-grey-light dark:border-grey-light/10">
+        <div className="group relative flex items-center justify-center overflow-hidden rounded-none border border-grey-light bg-lavender-mist/40 p-2 dark:border-grey-light/10 dark:bg-dark-3/40">
+            {/* object-contain so the WHOLE image is visible (no center-crop), capped in height. */}
             {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary asset/external URL */}
-            <img src={url} alt={alt} onError={() => setBroken(true)} className="max-h-64 w-full object-cover" />
+            <img src={mediaUrl(url)} alt={alt} onError={() => setBroken(true)} className="max-h-64 w-auto max-w-full object-contain" />
             {overlay}
         </div>
     );
@@ -131,7 +132,7 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                 </div>
 
                 {tab === "library" ? (
-                    <div className="flex min-h-0 flex-col gap-3 p-4">
+                    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
                         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search media…" className="flow-input shrink-0" />
                         {loading ? (
                             <div className="grid place-items-center py-16">
@@ -143,17 +144,20 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                                 <p className="text-caption-1 text-grey">{assets.length ? "No matches." : "No images in your library yet. Paste a URL instead."}</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-3 gap-3 overflow-y-auto scrollbar-thin sm:grid-cols-4">
+                            <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-3 content-start gap-3 overflow-y-auto scrollbar-thin sm:grid-cols-4">
                                 {shown.map((a) => (
                                     <button
                                         key={a.id}
                                         type="button"
                                         onClick={() => { onSelect(a.url); onClose(); }}
                                         title={a.name}
-                                        className={cn("overflow-hidden rounded-xl border transition-all", value === a.url ? "border-primary ring-2 ring-primary/30" : "border-grey-light hover:border-primary dark:border-grey-light/10")}
+                                        className={cn("group flex flex-col overflow-hidden rounded-xl border text-left transition-all", value === a.url ? "border-primary ring-2 ring-primary/30" : "border-grey-light hover:border-primary dark:border-grey-light/10")}
                                     >
-                                        {/* eslint-disable-next-line @next/next/no-img-element -- workspace asset thumbnail */}
-                                        <img src={a.thumbUrl} alt={a.name} className="aspect-square w-full object-cover" />
+                                        <span className="block aspect-square w-full overflow-hidden bg-lavender-mist dark:bg-dark-3">
+                                            {/* eslint-disable-next-line @next/next/no-img-element -- workspace asset thumbnail */}
+                                            <img src={mediaUrl(a.thumbUrl)} alt={a.name} loading="lazy" className="h-full w-full object-cover" />
+                                        </span>
+                                        <span className="truncate px-2 py-1 text-caption-2 text-grey">{a.name}</span>
                                     </button>
                                 ))}
                             </div>
@@ -172,7 +176,7 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                         {url.trim() && isImg(url.trim()) && (
                             <div className="overflow-hidden rounded-none border border-grey-light dark:border-grey-light/10">
                                 {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary external/asset URL preview */}
-                                <img src={url.trim()} alt="Preview" className="max-h-56 w-full object-cover" />
+                                <img src={mediaUrl(url.trim())} alt="Preview" className="max-h-56 w-full object-cover" />
                             </div>
                         )}
                         <button type="button" onClick={commitUrl} disabled={!url.trim()} className="btn-primary self-end disabled:opacity-50">

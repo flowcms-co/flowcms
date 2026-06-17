@@ -18,4 +18,8 @@ export interface ApprovalPort {
         entry: { id: string; status: string },
         nextStatus: string,
     ): Promise<void>;
+
+    /** Whether approval is actually enforced for this workspace (licensed). Lets the
+     *  UI decide between a "Submit for approval" and a direct "Publish" action. */
+    isEnforced(workspaceId: string): Promise<boolean>;
 }
