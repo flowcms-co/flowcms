@@ -99,10 +99,11 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
     }, []);
 
     const shown = assets.filter((a) => !q || a.name.toLowerCase().includes(q.toLowerCase()));
+    const trimmed = url.trim();
+    const valid = isImg(trimmed);
     const commitUrl = () => {
-        const v = url.trim();
-        if (v) {
-            onSelect(v);
+        if (trimmed && valid) {
+            onSelect(trimmed);
             onClose();
         }
     };
@@ -133,6 +134,10 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
 
                 {tab === "library" ? (
                     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+                        <p className="flex items-start gap-2 rounded-xl bg-lavender-mist/60 px-3 py-2 text-caption-2 text-grey dark:bg-dark-3/60">
+                            <Icon className="mt-px h-3.5 w-3.5 shrink-0 fill-grey" name="info" />
+                            <span>FlowCMS-hosted images get a permanent URL that updates instantly, no site redeploy needed. Or use Paste URL for an externally hosted image.</span>
+                        </p>
                         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search media…" className="flow-input shrink-0" />
                         {loading ? (
                             <div className="grid place-items-center py-16">
@@ -165,6 +170,10 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                     </div>
                 ) : (
                     <div className="flex flex-col gap-3 p-4">
+                        <p className="flex items-start gap-2 rounded-xl bg-lavender-mist/60 px-3 py-2 text-caption-2 text-grey dark:bg-dark-3/60">
+                            <Icon className="mt-px h-3.5 w-3.5 shrink-0 fill-grey" name="external" />
+                            <span>Point this field at an already-hosted image (your CDN, Cloudinary, an existing URL). Nothing is uploaded to FlowCMS, so it never triggers a site rebuild.</span>
+                        </p>
                         <input
                             value={url}
                             onChange={(e) => setUrl(e.target.value)}
@@ -173,13 +182,14 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                             className="flow-input"
                             autoFocus
                         />
-                        {url.trim() && isImg(url.trim()) && (
+                        {trimmed && !valid && <p className="text-caption-2 text-error">Enter a full https:// URL or a root-relative /path.</p>}
+                        {trimmed && valid && (
                             <div className="overflow-hidden rounded-none border border-grey-light dark:border-grey-light/10">
                                 {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary external/asset URL preview */}
-                                <img src={mediaUrl(url.trim())} alt="Preview" className="max-h-56 w-full object-cover" />
+                                <img src={mediaUrl(trimmed)} alt="Preview" className="max-h-56 w-full object-cover" />
                             </div>
                         )}
-                        <button type="button" onClick={commitUrl} disabled={!url.trim()} className="btn-primary self-end disabled:opacity-50">
+                        <button type="button" onClick={commitUrl} disabled={!trimmed || !valid} className="btn-primary self-end disabled:opacity-50">
                             Use this URL
                         </button>
                     </div>

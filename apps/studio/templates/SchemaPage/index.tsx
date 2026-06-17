@@ -389,9 +389,21 @@ const FieldRow = ({
     const controls = useDragControls();
     const [showDesc, setShowDesc] = useState(false);
     const [showLabel, setShowLabel] = useState(false);
+    const [showValidation, setShowValidation] = useState(false);
     const isComp = field.type === "Component";
     const isZone = field.type === "DynamicZone";
     const isRef = isComp && !!field.componentApiId;
+    // Validation rules apply to plain value fields (not components / zones / toggles).
+    const isNumberField = field.type === "Number";
+    const canValidate = !isComp && !isZone && ["Text", "Rich text", "URL", "Slug", "Number"].includes(field.type);
+    const v = field.validation ?? {};
+    const hasValidation = !!field.validation && (v.minLength != null || v.maxLength != null || v.min != null || v.max != null || !!v.pattern || !!v.messages);
+    // A single, user-friendly message per field: stored against every rule so
+    // whichever rule fails shows it (covers "required" too).
+    const customMessage = v.messages ? v.messages.required ?? v.messages.pattern ?? v.messages.minLength ?? v.messages.type ?? "" : "";
+    const setV = (patch: Partial<NonNullable<SchemaField["validation"]>>) => onUpdate({ validation: { ...v, ...patch } });
+    const setCustomMessage = (text: string) =>
+        setV({ messages: text ? { required: text, minLength: text, maxLength: text, min: text, max: text, pattern: text, type: text } : undefined });
 
     const changeType = (type: FieldType) => {
         if (type === "Component") onUpdate({ type, fields: field.fields ?? [], repeatable: field.repeatable ?? false, allowedComponents: undefined, componentApiId: undefined });
@@ -487,8 +499,8 @@ const FieldRow = ({
                         className="flow-input !py-1.5 !text-caption-2"
                     />
                 )}
-                {((!showLabel && !field.label) || (!showDesc && !field.description)) && (
-                    <div className="flex items-center gap-3">
+                {((!showLabel && !field.label) || (!showDesc && !field.description) || (canValidate && !showValidation && !hasValidation)) && (
+                    <div className="flex flex-wrap items-center gap-3">
                         {!showLabel && !field.label && (
                             <button type="button" onClick={() => setShowLabel(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
                                 <Icon className="h-3 w-3 fill-current" name="plus" />
@@ -501,6 +513,58 @@ const FieldRow = ({
                                 Add description
                             </button>
                         )}
+                        {canValidate && !showValidation && !hasValidation && (
+                            <button type="button" onClick={() => setShowValidation(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
+                                <Icon className="h-3 w-3 fill-current" name="plus" />
+                                Add validation
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {/* Validation rules + a custom, user-friendly error message. Optional;
+                    the backend enforces these and surfaces the message inline. */}
+                {canValidate && (showValidation || hasValidation) && (
+                    <div className="mt-1 flex flex-col gap-2 rounded-xl border border-grey-light bg-lavender-mist/30 p-2.5 dark:border-grey-light/10 dark:bg-dark-3/30">
+                        <div className="flex items-center justify-between">
+                            <span className="text-caption-2 font-semibold text-grey">Validation</span>
+                            <button type="button" onClick={() => { setShowValidation(false); onUpdate({ validation: undefined }); }} className="text-caption-2 text-grey transition-colors hover:text-error">
+                                Clear
+                            </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {isNumberField ? (
+                                <>
+                                    <label className="flex flex-1 basis-28 flex-col gap-1">
+                                        <span className="text-caption-2 text-grey">Min value</span>
+                                        <input type="number" value={v.min ?? ""} onChange={(e) => setV({ min: e.target.value === "" ? undefined : Number(e.target.value) })} className="flow-input !py-1.5 !text-caption-2" />
+                                    </label>
+                                    <label className="flex flex-1 basis-28 flex-col gap-1">
+                                        <span className="text-caption-2 text-grey">Max value</span>
+                                        <input type="number" value={v.max ?? ""} onChange={(e) => setV({ max: e.target.value === "" ? undefined : Number(e.target.value) })} className="flow-input !py-1.5 !text-caption-2" />
+                                    </label>
+                                </>
+                            ) : (
+                                <>
+                                    <label className="flex flex-1 basis-28 flex-col gap-1">
+                                        <span className="text-caption-2 text-grey">Min length</span>
+                                        <input type="number" min={0} value={v.minLength ?? ""} onChange={(e) => setV({ minLength: e.target.value === "" ? undefined : Number(e.target.value) })} className="flow-input !py-1.5 !text-caption-2" />
+                                    </label>
+                                    <label className="flex flex-1 basis-28 flex-col gap-1">
+                                        <span className="text-caption-2 text-grey">Max length</span>
+                                        <input type="number" min={0} value={v.maxLength ?? ""} onChange={(e) => setV({ maxLength: e.target.value === "" ? undefined : Number(e.target.value) })} className="flow-input !py-1.5 !text-caption-2" />
+                                    </label>
+                                    <label className="flex flex-[2] basis-44 flex-col gap-1">
+                                        <span className="text-caption-2 text-grey">Pattern (regex)</span>
+                                        <input value={v.pattern ?? ""} onChange={(e) => setV({ pattern: e.target.value || undefined })} placeholder="e.g. ^[a-z0-9-]+$" className="flow-input !py-1.5 !text-caption-2 font-mono" />
+                                    </label>
+                                </>
+                            )}
+                        </div>
+                        <label className="flex flex-col gap-1">
+                            <span className="text-caption-2 text-grey">Custom error message</span>
+                            <input value={customMessage} onChange={(e) => setCustomMessage(e.target.value)} placeholder="Shown when this field fails (e.g. “Enter a valid phone number”)" className="flow-input !py-1.5 !text-caption-2" />
+                        </label>
                     </div>
                 )}
             </div>

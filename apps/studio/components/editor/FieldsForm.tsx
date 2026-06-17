@@ -23,10 +23,16 @@ export const FieldControl = ({
     field,
     value,
     onChange,
+    errors = {},
+    errorPath = "",
 }: {
     field: SchemaField;
     value: unknown;
     onChange: (v: unknown) => void;
+    /** Field-keyed validation errors, threaded to nested component fields. */
+    errors?: FieldErrors;
+    /** This field's error path, used as the prefix for nested component fields. */
+    errorPath?: string;
 }) => {
     switch (field.type) {
         case "Number":
@@ -60,7 +66,7 @@ export const FieldControl = ({
         case "Media":
             return <MediaField value={value} alt={fieldLabel(field)} onChange={onChange} />;
         case "Component":
-            return <ComponentControl field={field} value={value} onChange={onChange} />;
+            return <ComponentControl field={field} value={value} onChange={onChange} errors={errors} errorPath={errorPath} />;
         default:
             // Text / URL / Reference / Slug (when nested)
             return (
@@ -74,15 +80,25 @@ export const FieldControl = ({
     }
 };
 
-/** A group of labelled fields editing a single object. */
+/** Field-keyed validation errors (path -> message), as returned by the API's
+ *  validateEntryData. Keys are field paths (e.g. "SEO.Meta title"); we look up the
+ *  message for a field by its path within the current group. */
+export type FieldErrors = Record<string, string>;
+
+/** A group of labelled fields editing a single object. `errorPrefix` mirrors the
+ *  backend's path building so nested-component errors land under the right field. */
 const FieldGroup = ({
     fields,
     data,
     onChange,
+    errors = {},
+    errorPrefix = "",
 }: {
     fields: SchemaField[];
     data: Json;
     onChange: (next: Json) => void;
+    errors?: FieldErrors;
+    errorPrefix?: string;
 }) => {
     const set = (name: string, v: unknown) => onChange({ ...data, [name]: v });
     return (
@@ -92,6 +108,8 @@ const FieldGroup = ({
                 // buttons, the TipTap editor, nested labelled fields); wrapping those
                 // in a <label> nests labels / steals focus, so use a plain <div>.
                 const Wrap = f.type === "Media" || f.type === "Rich text" || f.type === "Component" ? "div" : "label";
+                const path = errorPrefix ? `${errorPrefix}.${f.name}` : f.name;
+                const error = errors[path];
                 return (
                     <Wrap key={f.id} className="flex min-w-0 flex-col gap-1.5">
                         <span className="flex items-center gap-1.5 text-caption-1 text-grey">
@@ -104,7 +122,8 @@ const FieldGroup = ({
                             )}
                         </span>
                         {f.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{f.description}</span>}
-                        <FieldControl field={f} value={data[f.name]} onChange={(v) => set(f.name, v)} />
+                        <FieldControl field={f} value={data[f.name]} onChange={(v) => set(f.name, v)} errors={errors} errorPath={path} />
+                        {error && <span className="text-caption-2 text-error">{error}</span>}
                     </Wrap>
                 );
             })}
@@ -117,10 +136,14 @@ const ComponentControl = ({
     field,
     value,
     onChange,
+    errors = {},
+    errorPath = "",
 }: {
     field: SchemaField;
     value: unknown;
     onChange: (v: unknown) => void;
+    errors?: FieldErrors;
+    errorPath?: string;
 }) => {
     const sub = field.fields ?? [];
 
@@ -146,7 +169,7 @@ const ComponentControl = ({
                                 <Icon className="h-4 w-4 fill-current" name="trash" />
                             </button>
                         </div>
-                        <FieldGroup fields={sub} data={it} onChange={(next) => replace(i, next)} />
+                        <FieldGroup fields={sub} data={it} onChange={(next) => replace(i, next)} errors={errors} errorPrefix={errorPath ? `${errorPath}[${i}]` : ""} />
                     </div>
                 ))}
                 <button type="button" onClick={add} className="btn-secondary h-9 self-start px-3.5 text-caption-1">
@@ -160,7 +183,7 @@ const ComponentControl = ({
     const obj: Json = value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
     return (
         <div className="rounded-2xl border border-grey-light bg-lavender-mist/30 p-3 dark:border-grey-light/10 dark:bg-dark-3/30">
-            <FieldGroup fields={sub} data={obj} onChange={onChange} />
+            <FieldGroup fields={sub} data={obj} onChange={onChange} errors={errors} errorPrefix={errorPath} />
         </div>
     );
 };
@@ -173,16 +196,20 @@ const FieldsForm = ({
     fields,
     data,
     onChange,
+    errors = {},
 }: {
     fields: SchemaField[];
     data: Json;
     onChange: (next: Json) => void;
+    /** Optional field-keyed validation errors (path -> message) from the API. Each
+     *  message renders in red under its field. Defaults to none. */
+    errors?: FieldErrors;
 }) => {
     const shown = fields.filter(
         (f) => f.type !== "Rich text" && f.type !== "Slug" && f.name.trim().toLowerCase() !== "title",
     );
     if (!shown.length) return null;
-    return <FieldGroup fields={shown} data={data} onChange={onChange} />;
+    return <FieldGroup fields={shown} data={data} onChange={onChange} errors={errors} />;
 };
 
 export default FieldsForm;

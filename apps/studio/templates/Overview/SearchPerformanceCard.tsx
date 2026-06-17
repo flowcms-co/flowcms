@@ -46,23 +46,43 @@ const PERIODS: { id: string; label: string }[] = [
 const PERIOD_DAYS: Record<string, number> = { month: 30, "30d": 30, quarter: 90, year: 365, "12m": 365 };
 const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${Math.round(n)}`);
 
+type Pt = { date: string; value: number };
 type Overview = {
     hasData: boolean;
     totals?: { clicks: number; impressions: number; ctr: number; position: number; sessions: number };
-    series?: { clicks: { date: string; value: number }[] };
+    series?: { clicks: Pt[]; impressions: Pt[]; sessions: Pt[] };
 };
 
-type Metric = { key: string; label: string; value: string; delta: string; color: string; icon: string };
+// delta is null when there is no series long enough to compute a real change;
+// the column then renders the value with no trend arrow (rather than a fake one).
+type Metric = { key: string; label: string; value: string; delta: string | null; color: string; icon: string };
 type Built = { big: string; bigDelta: string; chart: { x: string; cur: number; prev: number }[]; metrics: Metric[] };
 
-/** % change between the first and second half of a series. */
-const halfDelta = (arr: { value: number }[]): string => {
-    if (arr.length < 4) return "+0%";
+const sumOf = (arr: { value: number }[], lo: number, hi: number) => arr.slice(lo, hi).reduce((a, b) => a + b.value, 0);
+
+/** % change between the first and second half of a series, or null if too short. */
+const halfDelta = (arr: { value: number }[]): string | null => {
+    if (arr.length < 4) return null;
     const mid = Math.floor(arr.length / 2);
-    const f = arr.slice(0, mid).reduce((a, b) => a + b.value, 0);
-    const s = arr.slice(mid).reduce((a, b) => a + b.value, 0);
-    if (f === 0) return "new";
+    const f = sumOf(arr, 0, mid);
+    const s = sumOf(arr, mid, arr.length);
+    if (f === 0) return null;
     const p = Math.round(((s - f) / f) * 100);
+    return `${p >= 0 ? "+" : ""}${p}%`;
+};
+
+/** % change of the CTR ratio (clicks/impressions) between the two halves. */
+const ctrDelta = (clk: { value: number }[], imp: { value: number }[]): string | null => {
+    const n = Math.min(clk.length, imp.length);
+    if (n < 4) return null;
+    const mid = Math.floor(n / 2);
+    const i1 = sumOf(imp, 0, mid);
+    const i2 = sumOf(imp, mid, n);
+    if (i1 === 0 || i2 === 0) return null;
+    const c1 = sumOf(clk, 0, mid) / i1;
+    const c2 = sumOf(clk, mid, n) / i2;
+    if (c1 === 0) return null;
+    const p = Math.round(((c2 - c1) / c1) * 100);
     return `${p >= 0 ? "+" : ""}${p}%`;
 };
 
@@ -73,29 +93,37 @@ const EMPTY: Built = {
     bigDelta: "+0%",
     chart: [],
     metrics: [
-        { key: "organic", label: "Organic traffic", value: "—", delta: "+0%", color: "#6C5CE7", icon: PATHS.search },
-        { key: "impr", label: "Impressions", value: "—", delta: "+0%", color: "#00B894", icon: PATHS.eye },
-        { key: "pos", label: "Avg. position", value: "—", delta: "+0%", color: "#E91E63", icon: PATHS.target },
-        { key: "ctr", label: "Click through rate", value: "—", delta: "+0%", color: "#F59E0B", icon: PATHS.cursor },
+        { key: "organic", label: "Organic traffic", value: "—", delta: null, color: "#6C5CE7", icon: PATHS.search },
+        { key: "impr", label: "Impressions", value: "—", delta: null, color: "#00B894", icon: PATHS.eye },
+        { key: "pos", label: "Avg. position", value: "—", delta: null, color: "#E91E63", icon: PATHS.target },
+        { key: "ctr", label: "Click through rate", value: "—", delta: null, color: "#F59E0B", icon: PATHS.cursor },
     ],
 };
 
 function buildLive(o: Overview): Built | null {
     if (!o.hasData || !o.totals) return null;
     const t = o.totals;
-    const series = o.series?.clicks ?? [];
-    const step = Math.max(1, Math.ceil(series.length / 6));
-    const pts = series.filter((_, i) => i % step === 0);
+    const clicks = o.series?.clicks ?? [];
+    const impressions = o.series?.impressions ?? [];
+    const sessions = o.series?.sessions ?? [];
+    const step = Math.max(1, Math.ceil(clicks.length / 6));
+    const pts = clicks.filter((_, i) => i % step === 0);
     const chart = pts.map((p) => ({ x: p.date.slice(5), cur: +(p.value / 1000).toFixed(1), prev: 0 }));
+    // Headline trend follows the same series as the headline number (sessions when
+    // GA4 is connected, else clicks), so the "%" matches what is shown above it.
+    const big = halfDelta(sessions.length ? sessions : clicks);
     return {
         big: fmt(t.sessions || t.clicks),
-        bigDelta: halfDelta(series),
+        bigDelta: big ?? "+0%",
         chart,
+        // Every delta is computed from the real daily series; metrics with no
+        // series long enough (e.g. average position, which has no daily series
+        // here) show no trend arrow rather than a fabricated one.
         metrics: [
-            { key: "organic", label: "Organic traffic", value: fmt(t.clicks), delta: halfDelta(series), color: "#6C5CE7", icon: PATHS.search },
-            { key: "impr", label: "Impressions", value: fmt(t.impressions), delta: "+12%", color: "#00B894", icon: PATHS.eye },
-            { key: "pos", label: "Avg. position", value: t.position.toFixed(1), delta: t.position <= 10 ? "+8%" : "-3%", color: "#E91E63", icon: PATHS.target },
-            { key: "ctr", label: "Click through rate", value: `${t.ctr.toFixed(1)}%`, delta: "+6%", color: "#F59E0B", icon: PATHS.cursor },
+            { key: "organic", label: "Organic traffic", value: fmt(t.clicks), delta: halfDelta(clicks), color: "#6C5CE7", icon: PATHS.search },
+            { key: "impr", label: "Impressions", value: fmt(t.impressions), delta: halfDelta(impressions), color: "#00B894", icon: PATHS.eye },
+            { key: "pos", label: "Avg. position", value: t.position.toFixed(1), delta: null, color: "#E91E63", icon: PATHS.target },
+            { key: "ctr", label: "Click through rate", value: `${t.ctr.toFixed(1)}%`, delta: ctrDelta(clicks, impressions), color: "#F59E0B", icon: PATHS.cursor },
         ],
     };
 }
@@ -220,7 +248,7 @@ const SearchPerformanceCard = () => {
                 {/* Metric column */}
                 <div className="flex flex-col divide-y divide-grey-light/70 lg:border-l lg:border-grey-light/70 lg:pl-5 dark:divide-grey-light/10 dark:lg:border-grey-light/10">
                     {d.metrics.map((m) => {
-                        const mUp = !m.delta.startsWith("-");
+                        const mUp = m.delta != null && !m.delta.startsWith("-");
                         return (
                             <div key={m.key} className="flex flex-1 items-center gap-3 py-3.5">
                                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${m.color}1f` }}>
@@ -230,10 +258,13 @@ const SearchPerformanceCard = () => {
                                     <div className="text-caption-2 text-grey">{m.label}</div>
                                     <div className="font-poppins text-title font-bold text-black dark:text-white">{m.value}</div>
                                 </div>
-                                <span className={cn("inline-flex shrink-0 items-center gap-0.5 text-caption-2 font-semibold", mUp ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
-                                    <Stroke d={mUp ? PATHS.arrowUp : PATHS.arrowDown} className="h-3 w-3" />
-                                    {m.delta.replace(/^[+-]/, "")}
-                                </span>
+                                {/* Only render a trend arrow when we have a real delta from the series. */}
+                                {m.delta != null && (
+                                    <span className={cn("inline-flex shrink-0 items-center gap-0.5 text-caption-2 font-semibold", mUp ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
+                                        <Stroke d={mUp ? PATHS.arrowUp : PATHS.arrowDown} className="h-3 w-3" />
+                                        {m.delta.replace(/^[+-]/, "")}
+                                    </span>
+                                )}
                             </div>
                         );
                     })}

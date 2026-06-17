@@ -18,6 +18,7 @@ import { useRevealBatch } from "@/lib/useReveal";
 import { cn } from "@/lib/cn";
 import type { SchemaField } from "@/mocks/schema";
 import { confirm } from "@/components/providers/ConfirmProvider";
+import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
 
 /** Approval summary for an entry (GET /entries/:id/reviews). `enforced` is true only
  *  when the workspace is licensed for approval workflows. */
@@ -133,8 +134,23 @@ const EditorPage = () => {
     const [review, setReview] = useState<ReviewInfo | null>(null);
     const { can } = useAuth();
 
-    /** Mark the doc dirty + tick the autosave debounce (called on every edit). */
+    // Two-way live link to the preview tab. `localEdits` ticks only on edits made
+    // *here*, so we broadcast those to the preview; edits arriving FROM the preview
+    // feed autosave (via bumpRemote) without echoing straight back.
+    const [localEdits, setLocalEdits] = useState(0);
+    const syncRef = useRef<PreviewSyncHandle | null>(null);
+    const draftRef = useRef<PreviewDraft>({});
+
+    /** Mark the doc dirty + tick the autosave debounce (called on every local edit). */
     const bump = useCallback(() => {
+        setRev((r) => r + 1);
+        setLocalEdits((n) => n + 1);
+        setSaveState((s) => (s === "saving" ? s : "dirty"));
+    }, []);
+
+    /** Like bump, but for edits applied FROM the preview: keeps autosave + word
+     *  count live without re-broadcasting the change back to the preview. */
+    const bumpRemote = useCallback(() => {
         setRev((r) => r + 1);
         setSaveState((s) => (s === "saving" ? s : "dirty"));
     }, []);
@@ -485,6 +501,62 @@ const EditorPage = () => {
         const t = setTimeout(() => void autosaveRef.current(), 1500);
         return () => clearTimeout(t);
     }, [rev]);
+
+    /** Apply a live draft pushed from the preview tab (the user is editing the page
+     *  in place). Updates fields without re-broadcasting; bumpRemote feeds autosave. */
+    const applyRemoteDraft = useCallback((draft: PreviewDraft) => {
+        if (draft.title !== undefined) setTitle(draft.title || "Untitled");
+        if (draft.slug !== undefined) setSlug(draft.slug ?? "");
+        if (draft.data) {
+            const { body, ...rest } = draft.data as Record<string, unknown>;
+            setEntryData(rest);
+            // Push a new body into TipTap silently (emitUpdate:false → no echo loop).
+            if (typeof body === "string" && editor && editor.getHTML() !== body) {
+                editor.commands.setContent(body, { emitUpdate: false });
+            }
+        }
+        bumpRemote();
+    }, [editor, bumpRemote]);
+
+    // Keep the message handler current without re-opening the channel on every edit.
+    const onSync = useRef<(m: PreviewSyncMessage) => void>(() => {});
+    useEffect(() => {
+        onSync.current = (msg) => {
+            if (msg.kind === "hello") syncRef.current?.post({ kind: "draft", from: "editor", draft: draftRef.current });
+            else if (msg.kind === "draft") applyRemoteDraft(msg.draft);
+            else if (msg.kind === "saved") void reload();
+        };
+    }, [applyRemoteDraft, reload]);
+
+    // Open the live channel once we have an entry id; greet the preview so a freshly
+    // opened preview tab immediately receives the current unsaved draft.
+    useEffect(() => {
+        if (!entryId) return;
+        const handle = openPreviewSync(entryId, "editor", (m) => onSync.current(m));
+        syncRef.current = handle;
+        handle?.post({ kind: "hello", from: "editor" });
+        return () => {
+            handle?.close();
+            syncRef.current = null;
+        };
+    }, [entryId]);
+
+    // Keep the outgoing snapshot fresh for the preview channel (runs after each
+    // render, so the next broadcast / hello reply carries the latest title + data).
+    useEffect(() => {
+        draftRef.current = {
+            title,
+            slug,
+            status,
+            data: hasBody ? { ...entryData, body: editor?.getHTML() ?? initialBody ?? "" } : entryData,
+        };
+    });
+
+    // Stream local edits to the preview (localEdits ticks only on edits made here).
+    useEffect(() => {
+        if (localEdits === 0) return;
+        syncRef.current?.post({ kind: "draft", from: "editor", draft: draftRef.current });
+    }, [localEdits]);
 
     // Guard against losing unsaved work on tab close / refresh / hard navigation.
     useEffect(() => {

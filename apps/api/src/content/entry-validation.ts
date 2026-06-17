@@ -13,6 +13,30 @@ export type SchemaField = {
     componentApiId?: string;
     /** DynamicZone: the component apiIds allowed in this ordered list of sections. */
     allowedComponents?: string[];
+    /** Richer validation rules + custom messages. Length rules apply to text values;
+     *  min/max to numbers; pattern is a regex source string. Only checked when a
+     *  value is present (except required). */
+    validation?: FieldValidation;
+};
+
+/** Per-field validation rules with optional custom messages. Mirrors the Schema
+ *  Builder type in the studio (apps/studio/mocks/schema.ts). */
+export type FieldValidation = {
+    required?: string;
+    minLength?: number;
+    maxLength?: number;
+    min?: number;
+    max?: number;
+    pattern?: string;
+    messages?: {
+        required?: string;
+        minLength?: string;
+        maxLength?: string;
+        min?: string;
+        max?: string;
+        pattern?: string;
+        type?: string;
+    };
 };
 
 /** Map of reusable-component apiId → its field defs (from kind=COMPONENT types). */
@@ -42,27 +66,73 @@ function valueFor(data: Record<string, unknown>, name: string): unknown {
 
 const isPresent = (data: Record<string, unknown>, name: string) => valueFor(data, name) !== undefined;
 
-/** Type-check a present value. Lenient: only flags clearly-wrong types. */
+/** Type-check a present value. Lenient: only flags clearly-wrong types. A custom
+ *  `validation.messages.type` overrides the default message. */
 function typeError(field: SchemaField, value: unknown): string | null {
+    const custom = field.validation?.messages?.type;
     switch (field.type) {
         case "Number":
             if (typeof value === "number") return null;
             if (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))) return null;
-            return `“${field.name}” must be a number.`;
+            return custom ?? `“${field.name}” must be a number.`;
         case "Boolean":
             if (typeof value === "boolean") return null;
             if (value === "true" || value === "false") return null;
-            return `“${field.name}” must be true or false.`;
+            return custom ?? `“${field.name}” must be true or false.`;
         case "Date":
             if (value instanceof Date) return null;
             if (typeof value === "string" && !Number.isNaN(Date.parse(value))) return null;
-            return `“${field.name}” must be a valid date.`;
+            return custom ?? `“${field.name}” must be a valid date.`;
         case "URL":
             if (typeof value === "string" && /^https?:\/\/|^\//.test(value.trim())) return null;
-            return `“${field.name}” must be a URL.`;
+            return custom ?? `“${field.name}” must be a URL.`;
         default:
             return null; // Text / Rich text / Media / Reference / Component / Slug — accept as-is
     }
+}
+
+/** Enforce the richer validation rules (min/max length, min/max value, pattern)
+ *  on a present value. Returns the first failing rule's message, or null. Custom
+ *  messages from `validation.messages.*` win over the sensible defaults. */
+function ruleError(field: SchemaField, value: unknown): string | null {
+    const v = field.validation;
+    if (!v) return null;
+    const m = v.messages ?? {};
+
+    // Length rules apply to string values (the common case for text fields).
+    if (typeof value === "string") {
+        const len = value.length;
+        if (typeof v.minLength === "number" && len < v.minLength) {
+            return m.minLength ?? `“${field.name}” must be at least ${v.minLength} characters.`;
+        }
+        if (typeof v.maxLength === "number" && len > v.maxLength) {
+            return m.maxLength ?? `“${field.name}” must be at most ${v.maxLength} characters.`;
+        }
+        if (v.pattern) {
+            try {
+                if (!new RegExp(v.pattern).test(value)) {
+                    return m.pattern ?? `“${field.name}” is not in the expected format.`;
+                }
+            } catch {
+                // Invalid regex authored in the Schema Builder: skip rather than throw.
+            }
+        }
+    }
+
+    // Numeric min/max — accept numbers and numeric strings (matches typeError leniency).
+    if (typeof v.min === "number" || typeof v.max === "number") {
+        const num = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+        if (!Number.isNaN(num)) {
+            if (typeof v.min === "number" && num < v.min) {
+                return m.min ?? `“${field.name}” must be at least ${v.min}.`;
+            }
+            if (typeof v.max === "number" && num > v.max) {
+                return m.max ?? `“${field.name}” must be at most ${v.max}.`;
+            }
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -110,7 +180,7 @@ function validateFields(
         if (opts.enforceRequired && field.required) {
             const present = isSlug && topLevel ? !!(opts.slug && opts.slug.trim()) : isPresent(data, field.name);
             if (!present) {
-                errors[path] = `“${field.name}” is required.`;
+                errors[path] = field.validation?.messages?.required ?? `“${field.name}” is required.`;
                 continue;
             }
         }
@@ -151,7 +221,13 @@ function validateFields(
         }
 
         const err = typeError(field, value);
-        if (err) errors[path] = err;
+        if (err) {
+            errors[path] = err;
+            continue;
+        }
+
+        const rule = ruleError(field, value);
+        if (rule) errors[path] = rule;
     }
 }
 

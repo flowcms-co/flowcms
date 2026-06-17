@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Icon from "@/components/ui/Icon";
@@ -10,9 +10,11 @@ import { useWorkspace } from "@/lib/useWorkspace";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
-import Sections, { findSections } from "./Sections";
+import Sections, { findSections, type Section as ViewSection } from "./Sections";
+import SectionEditor, { type ComponentDef, type Section as ZoneSection } from "@/components/editor/SectionEditor";
 import Mapper from "./Mapper";
 import { confirm } from "@/components/providers/ConfirmProvider";
+import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",
@@ -54,10 +56,36 @@ type ApiType = {
     isHome?: boolean;
 };
 
+/** Reusable component (block) definition, for the in-preview section builder. */
+type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
+
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
 /** One field→DOM binding from a CMS selector map. */
 type Binding = { fieldPath: string; selector: string; mode: string; nth?: number };
+
+/** Placeholder page shown when an entry has no content yet (a brand-new or not-yet
+ *  filled service / landing page). Keeps the preview seamless — a sensible default
+ *  layout instead of a blank card or a 404 — while the content is being set up. */
+const defaultScaffold = (title: string): ViewSection[] => [
+    {
+        __component: "hero",
+        __uid: "default-hero",
+        title: title && title !== "Untitled" ? title : "Your page title goes here",
+        subtitle: "This is placeholder content. Add sections in the editor and they replace this preview instantly.",
+    },
+    {
+        __component: "rich-text",
+        __uid: "default-body",
+        body: "<p>Start writing or drop in a block to build this page. Until then, visitors see a tidy default instead of an error.</p>",
+    },
+    {
+        __component: "cta",
+        __uid: "default-cta",
+        heading: "Ready when you are",
+        "button label": "Get in touch",
+    },
+];
 
 /** Set a dot/array path on an object, creating intermediate objects/arrays.
  *  e.g. setPath(o, "mainContent.contentList.0.title", "x"). Numeric segments
@@ -146,6 +174,12 @@ const PreviewClient = () => {
     const [bindings, setBindings] = useState<Binding[]>([]);
     // Visual mapper drawer (M2): build the selector map by auto-suggest + clicks.
     const [mapping, setMapping] = useState(false);
+    // In-preview section builder (live editor): add / edit / reorder components and
+    // their fields right on the page. Needs the reusable component (block) defs.
+    const [components, setComponents] = useState<ApiComponent[]>([]);
+    // Two-way live link to the editor tab (same-origin BroadcastChannel).
+    const syncRef = useRef<PreviewSyncHandle | null>(null);
+    const draftRef = useRef<PreviewDraft>({});
 
     useEffect(() => {
         if (!id) return;
@@ -193,6 +227,17 @@ const PreviewClient = () => {
         };
     }, [type, entry]);
 
+    // Load the reusable component defs so the in-preview builder can add new blocks.
+    useEffect(() => {
+        let off = false;
+        api<ApiComponent[]>("/content-types/components")
+            .then((c) => !off && setComponents(Array.isArray(c) ? c : []))
+            .catch(() => undefined);
+        return () => {
+            off = true;
+        };
+    }, []);
+
     const shownError = error ?? (!id ? "No entry to preview." : null);
     const previewUrl = ws?.previewUrl ?? "";
     const hasSite = !!previewUrl.trim();
@@ -209,10 +254,71 @@ const PreviewClient = () => {
     const sections = findSections(entry?.data);
     const target = entry && hasSite ? buildTarget(previewUrl, entry, type) : "";
 
+    // The dynamic-zone field (if any) + its block defs, for the in-preview builder.
+    // Fall back to detecting the zone key straight from the data shape.
+    const zoneField = fields.find((f) => f.type === "DynamicZone");
+    const zoneName =
+        zoneField?.name ??
+        Object.keys(entry?.data ?? {}).find((k) => {
+            const v = (entry?.data as Record<string, unknown> | null | undefined)?.[k];
+            return Array.isArray(v) && v.some((x) => x && typeof x === "object" && "__component" in (x as object));
+        });
+    const componentDefs = useMemo(() => {
+        const map: Record<string, ComponentDef> = {};
+        for (const c of components) map[c.apiId] = { apiId: c.apiId, name: c.name, icon: c.icon, fields: c.fields };
+        return map;
+    }, [components]);
+    const zoneSections: ZoneSection[] =
+        zoneName && Array.isArray((entry?.data as Record<string, unknown> | undefined)?.[zoneName])
+            ? ((entry!.data as Record<string, unknown>)[zoneName] as ZoneSection[])
+            : [];
+    // A section page we can edit in place: it has a zone and we know its block defs.
+    const isSectionPage = !!zoneName && (sections != null || !!zoneField);
+    const sectionEditing = editing && mode === "content" && isSectionPage && Object.keys(componentDefs).length > 0;
+    // Empty page (new service / not yet filled) → show a default scaffold, not a blank.
+    const hasMeta = metaFields.some((f) => !!str(entry?.data?.[f.name]));
+    const isEmpty = !sections && !body && !hasMeta;
+
     // Two edit surfaces: an edit-aware Site iframe (postMessage bridge → edit on the
     // real rendered page) or the same-origin Content render (contentEditable). When
     // a Site is editable we edit there; otherwise we fall back to Content mode.
     const siteEditing = editing && mode === "site";
+
+    // ── Two-way live sync with the editor tab (same-origin BroadcastChannel) ─────
+    /** Apply a draft pushed from the editor so the rendered preview tracks unsaved
+     *  edits instantly. Skipped while editing here, so we never clobber live edits. */
+    const applyEditorDraft = (draft: PreviewDraft) => {
+        setEntry((e) =>
+            e
+                ? {
+                      ...e,
+                      title: draft.title ?? e.title,
+                      slug: draft.slug !== undefined ? draft.slug : e.slug,
+                      status: draft.status ?? e.status,
+                      data: draft.data ?? e.data,
+                  }
+                : e,
+        );
+    };
+    /** Stream the in-place content-mode edits (title / summary / body) back to the
+     *  editor so its fields update live. */
+    const broadcastFromNodes = () => {
+        if (!syncRef.current || !entry) return;
+        const data: Record<string, unknown> = JSON.parse(JSON.stringify(entry.data ?? {}));
+        if (summaryRef.current) data.summary = summaryRef.current.textContent ?? "";
+        if (articleRef.current) data.body = articleRef.current.innerHTML ?? "";
+        const nextTitle = titleRef.current ? titleRef.current.textContent ?? entry.title : entry.title;
+        syncRef.current.post({ kind: "draft", from: "preview", draft: { title: nextTitle, slug: entry.slug ?? null, status: entry.status, data } });
+    };
+    /** Section builder edits (add / edit / reorder blocks): write the zone array into
+     *  the entry and mirror it to the editor. */
+    const updateSections = (next: ZoneSection[]) => {
+        if (!entry || !zoneName) return;
+        const data = { ...(entry.data ?? {}), [zoneName]: next };
+        setEntry({ ...entry, data });
+        setDirty(true);
+        syncRef.current?.post({ kind: "draft", from: "preview", draft: { title: entry.title, slug: entry.slug ?? null, status: entry.status, data } });
+    };
 
     const postToSite = (msg: Record<string, unknown>) => {
         const win = iframeRef.current?.contentWindow;
@@ -265,6 +371,37 @@ const PreviewClient = () => {
         return () => window.removeEventListener("message", onMsg);
     }, []);
 
+    // Live link to the editor tab. Keep the handler current (so it sees the latest
+    // `editing` / `entry`) without re-opening the channel on every render.
+    const onSync = useRef<(m: PreviewSyncMessage) => void>(() => {});
+    useEffect(() => {
+        onSync.current = (msg) => {
+            if (msg.kind === "hello") {
+                // Only answer with our copy when we hold unsaved in-place edits, so a
+                // freshly opened editor/preview pair doesn't dirty each other on contact.
+                if (entry && dirty) syncRef.current?.post({ kind: "draft", from: "preview", draft: draftRef.current });
+            } else if (msg.kind === "draft" && !editing) {
+                applyEditorDraft(msg.draft);
+            }
+        };
+    });
+    useEffect(() => {
+        if (!id) return;
+        const handle = openPreviewSync(id, "preview", (m) => onSync.current(m));
+        syncRef.current = handle;
+        handle?.post({ kind: "hello", from: "preview" });
+        return () => {
+            handle?.close();
+            syncRef.current = null;
+        };
+    }, [id]);
+
+    // Keep the outgoing snapshot fresh for the editor channel (hello replies + the
+    // initial sync read it).
+    useEffect(() => {
+        draftRef.current = { title: entry?.title, slug: entry?.slug ?? null, status: entry?.status, data: (entry?.data ?? {}) as Record<string, unknown> };
+    });
+
     const startEdit = () => {
         setSaveErr(null);
         setEditNote(null);
@@ -283,6 +420,14 @@ const PreviewClient = () => {
         }
     };
     const discard = () => {
+        if (sectionEditing) {
+            // Drop unsaved block edits by re-pulling the entry from the API.
+            if (id) api<Entry>(`/entries/${id}`).then((e) => setEntry(e)).catch(() => undefined);
+            setDirty(false);
+            setSaveErr(null);
+            setEditing(false);
+            return;
+        }
         if (siteEditing) {
             postToSite({ type: "revert" });
             postToSite({ type: "edit", editing: false });
@@ -309,6 +454,24 @@ const PreviewClient = () => {
     };
     const save = async () => {
         if (!id) return;
+        // Section builder: the edited blocks already live in entry.data (via the
+        // inline builder), so persist the entry data as-is.
+        if (sectionEditing && entry) {
+            setSaving(true);
+            setSaveErr(null);
+            try {
+                await api(`/entries/${id}`, { method: "PATCH", body: JSON.stringify({ title: entry.title, data: entry.data }) });
+                syncRef.current?.post({ kind: "saved", from: "preview" });
+                setDirty(false);
+                setSavedTick(true);
+                setTimeout(() => setSavedTick(false), 2000);
+            } catch (e) {
+                setSaveErr(e instanceof ApiError ? e.message : "Could not save.");
+            } finally {
+                setSaving(false);
+            }
+            return;
+        }
         // Collect the edited fields from whichever surface is active, as a flat map
         // keyed by content-model field name. Site mode streams that map over the
         // bridge; content mode reads the three editable nodes it renders.
@@ -349,6 +512,8 @@ const PreviewClient = () => {
             setEntry((e) => (e ? { ...e, title: (patch.title as string) ?? e.title, data: nextData } : e));
             // Reset the iframe's revert-baseline to the saved copy.
             if (siteEditing) postToSite({ type: "baseline", fields: { ...src, ...(newTitle ? { title: newTitle } : {}) } });
+            // Tell the editor tab to reload the canonical saved copy.
+            syncRef.current?.post({ kind: "saved", from: "preview" });
             setDirty(false);
             setSavedTick(true);
             setTimeout(() => setSavedTick(false), 2000);
@@ -509,9 +674,25 @@ const PreviewClient = () => {
                         className="mx-auto rounded-3xl bg-white px-6 py-12 shadow-[0_0.5rem_2.5rem_rgba(26,26,46,0.10)] transition-[max-width] duration-300 ease-out sm:px-12 dark:bg-dark-1"
                         style={{ maxWidth: dev.card }}
                     >
-                        {sections ? (
+                        {sectionEditing ? (
+                            /* In-place block builder (Pro live editor): add / edit /
+                               reorder components and their fields right on the page. */
+                            <div className="-mx-2 sm:-mx-6">
+                                <p className="mb-3 px-2 text-caption-2 text-grey">Add, edit, and reorder sections. Changes sync to the editor live.</p>
+                                <SectionEditor sections={zoneSections} components={componentDefs} allowed={zoneField?.allowedComponents} onChange={updateSections} />
+                            </div>
+                        ) : sections ? (
                             <div className="-mx-6 sm:-mx-12">
                                 <Sections sections={sections} />
+                            </div>
+                        ) : isEmpty && !editing ? (
+                            /* New / not-yet-filled page → a tidy default instead of a blank. */
+                            <div className="-mx-6 sm:-mx-12">
+                                <div className="mb-4 flex items-center gap-2 px-6 text-caption-2 text-grey">
+                                    <Icon className="h-4 w-4 shrink-0 fill-grey" name="info" />
+                                    Showing default content while this page is being set up.
+                                </div>
+                                <Sections sections={defaultScaffold(entry.title)} />
                             </div>
                         ) : (
                         <article className="mx-auto max-w-[44rem]">
@@ -520,7 +701,7 @@ const PreviewClient = () => {
                                 ref={titleRef}
                                 contentEditable={editing}
                                 suppressContentEditableWarning
-                                onInput={() => setDirty(true)}
+                                onInput={() => { setDirty(true); broadcastFromNodes(); }}
                                 className={cn(
                                     "font-poppins text-[2.25rem] leading-[1.15] font-bold tracking-[-0.02em] text-balance text-black focus:outline-none dark:text-white",
                                     editing && "-mx-2 rounded-lg px-2 outline-2 outline-dashed outline-primary/40",
@@ -533,7 +714,7 @@ const PreviewClient = () => {
                                     ref={summaryRef}
                                     contentEditable={editing}
                                     suppressContentEditableWarning
-                                    onInput={() => setDirty(true)}
+                                    onInput={() => { setDirty(true); broadcastFromNodes(); }}
                                     className={cn("mt-4 text-[1.0625rem] leading-7 text-grey focus:outline-none", editing && "-mx-2 rounded-lg px-2 outline-2 outline-dashed outline-primary/40")}
                                 >
                                     {summary}
@@ -574,7 +755,7 @@ const PreviewClient = () => {
                                 ref={articleRef}
                                 contentEditable={editing}
                                 suppressContentEditableWarning
-                                onInput={() => setDirty(true)}
+                                onInput={() => { setDirty(true); broadcastFromNodes(); }}
                                 className={cn("flow-prose focus:outline-none", editing && "-mx-3 rounded-xl p-3 outline-2 outline-dashed outline-primary/40")}
                                 dangerouslySetInnerHTML={{ __html: body || "<p>Nothing here yet — start writing in the editor.</p>" }}
                             />
@@ -596,7 +777,7 @@ const PreviewClient = () => {
                         ) : editNote ? (
                             <span className="text-warning">{editNote}</span>
                         ) : (
-                            <span className="text-grey">{dirty ? "Unsaved changes" : savedTick ? "Saved" : "Click the title, summary or body to edit it directly."}</span>
+                            <span className="text-grey">{dirty ? "Unsaved changes" : savedTick ? "Saved" : sectionEditing ? "Add, edit, and reorder sections below." : "Click the title, summary or body to edit it directly."}</span>
                         )}
                     </span>
                     <div className="ml-auto flex items-center gap-2">

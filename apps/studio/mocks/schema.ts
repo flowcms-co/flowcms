@@ -60,6 +60,31 @@ export type SchemaField = {
     componentApiId?: string;
     /** DynamicZone: component apiIds allowed as sections in this ordered list. */
     allowedComponents?: string[];
+    /** Richer validation rules + custom, user-friendly messages. The top-level
+     *  `required` flag stays for backward compat; `messages.required` overrides the
+     *  default required message. Rules other than required are only checked when a
+     *  value is present. */
+    validation?: FieldValidation;
+};
+
+/** Per-field validation rules with optional custom messages. Length rules apply to
+ *  text values; min/max apply to numbers; pattern is a regex source string. */
+export type FieldValidation = {
+    required?: string;
+    minLength?: number;
+    maxLength?: number;
+    min?: number;
+    max?: number;
+    pattern?: string;
+    messages?: {
+        required?: string;
+        minLength?: string;
+        maxLength?: string;
+        min?: string;
+        max?: string;
+        pattern?: string;
+        type?: string;
+    };
 };
 
 /** The display label for a field in the block editor: the editor-friendly `label`

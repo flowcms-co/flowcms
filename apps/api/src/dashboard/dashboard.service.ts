@@ -138,6 +138,12 @@ export class DashboardService {
             return myPublished.some((e) => +new Date(e.publishedAt!) >= +d && +new Date(e.publishedAt!) < +next);
         });
         const publishedThisWeek = week.filter(Boolean).length;
+        // Consecutive publishing streak: the run of back-to-back days (ending at
+        // today) on which something was published. `week` is Mon→Sun, so walk
+        // backwards from today's index while days stay published.
+        const todayIdx = (now.getDay() + 6) % 7;
+        let streakDays = 0;
+        for (let i = todayIdx; i >= 0 && week[i]; i--) streakDays++;
         const lastWeekStart = new Date(weekStart);
         lastWeekStart.setDate(lastWeekStart.getDate() - 7);
         const publishedLastWeek = myPublished.filter((e) => {
@@ -202,7 +208,7 @@ export class DashboardService {
                 scheduled: scheduledThisWeekPieces,
                 target: goalTarget,
                 topic: myMembership?.weeklyGoalTopic ?? null,
-                streakDays: week.filter(Boolean).length,
+                streakDays,
                 week,
             },
         };

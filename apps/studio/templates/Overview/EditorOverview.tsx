@@ -8,7 +8,6 @@ import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import Card from "@/components/ui/Card";
 import CountUp from "@/components/motion/CountUp";
 import MetricBar from "@/components/ui/MetricBar";
-import Sparkline from "@/components/charts/Sparkline";
 import { useDashboardSummary, type DashboardSummary, type WorkItem } from "@/lib/useDashboard";
 import { useRevealBatch } from "@/lib/useReveal";
 
@@ -93,7 +92,7 @@ const EditorOverview = () => {
             <div className="reveal-up grid grid-cols-1 gap-6 xl:grid-cols-3">
                 <RecentlyPublished items={my.recentlyPublished} />
                 <ContentActivity mix={my.contentMix} />
-                <WritingInsights wordsThisMonth={my.insights.wordsThisMonth} />
+                <WritingInsights wordsThisMonth={my.insights.wordsThisMonth} aiGenerations={my.aiGenerations} />
             </div>
         </div>
     );
@@ -104,13 +103,14 @@ const EditorOverview = () => {
 const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
     const pubDelta = my.publishedThisWeek - my.publishedLastWeek;
     // Same base design as the super-admin KPI strip: tinted icon · number · label ·
-    // (real) delta on one row, with a small trend line beneath. The number is real;
-    // the sparkline is light trend texture (we keep no per-metric daily history).
+    // (real) delta on one row. The number is real; "Published this week" carries a
+    // real week-over-week delta. We keep no per-metric daily history, so there are
+    // no fabricated sparklines.
     const kpis = [
-        { key: "due", icon: PATHS.edit, color: "#6C5CE7", value: my.dueToday, label: "Due today", delta: null as number | null, spark: [1, 2, 1, 2, 3, 2, 3, 2, Math.max(1, my.dueToday)], href: "/content?author=me" },
-        { key: "prog", icon: PATHS.clock, color: "#F5A623", value: my.drafts, label: "In progress", delta: null, spark: [3, 4, 3, 5, 4, 6, 5, 6, Math.max(1, my.drafts)], href: "/content?status=draft&author=me" },
-        { key: "sched", icon: PATHS.calendar, color: "#00B894", value: my.scheduled, label: "Scheduled", delta: null, spark: [1, 1, 2, 1, 2, 3, 2, 3, Math.max(1, my.scheduled)], href: "/content?status=scheduled&author=me" },
-        { key: "pub", icon: PATHS.sparkles, color: "#E91E63", value: my.publishedThisWeek, label: "Published this week", delta: pubDelta, spark: [2, 3, 2, 4, 3, 5, 4, my.publishedLastWeek || 4, Math.max(1, my.publishedThisWeek)], href: "/content?status=published&author=me" },
+        { key: "due", icon: PATHS.edit, color: "#6C5CE7", value: my.dueToday, label: "Due today", delta: null as number | null, href: "/content?author=me" },
+        { key: "prog", icon: PATHS.clock, color: "#F5A623", value: my.drafts, label: "In progress", delta: null, href: "/content?status=draft&author=me" },
+        { key: "sched", icon: PATHS.calendar, color: "#00B894", value: my.scheduled, label: "Scheduled", delta: null, href: "/content?status=scheduled&author=me" },
+        { key: "pub", icon: PATHS.sparkles, color: "#E91E63", value: my.publishedThisWeek, label: "Published this week", delta: pubDelta, href: "/content?status=published&author=me" },
     ];
     return (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
@@ -131,9 +131,6 @@ const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
                                         {Math.abs(k.delta)}
                                     </span>
                                 )}
-                            </div>
-                            <div className="mt-3 -mb-1">
-                                <Sparkline data={k.spark} color={k.color} height={34} />
                             </div>
                         </Card>
                     </Link>
@@ -531,39 +528,42 @@ const ContentActivity = ({ mix }: { mix: DashboardSummary["my"]["contentMix"] })
 
 /* ---------------- Writing insights ---------------- */
 
-const WritingInsights = ({ wordsThisMonth }: { wordsThisMonth: number }) => {
+const WritingInsights = ({ wordsThisMonth, aiGenerations }: { wordsThisMonth: number; aiGenerations: number }) => {
     const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`);
+    // Only real, currently-available signals: words written this month (from the
+    // user's entry bodies) and AI generations in the last 30 days (usage records).
+    // We keep no per-metric history, so no trend deltas, and no fabricated rows
+    // (avg. writing time / AI assistance rate / pieces improved) until those are
+    // actually tracked.
     const rows = [
-        { icon: PATHS.pen, color: "#3B82F6", value: fmt(wordsThisMonth), label: "Words written", delta: "18%", up: true },
-        { icon: PATHS.clockSmall, color: "#00B894", value: "2h 34m", label: "Avg. writing time", delta: "8%", up: false, sample: true },
-        { icon: PATHS.sparkles, color: "#6C5CE7", value: "89%", label: "AI assistance rate", delta: "12%", up: true, sample: true },
-        { icon: PATHS.check, color: "#F5A623", value: "4", label: "Content pieces improved", delta: "2", up: true, sample: true },
+        { icon: PATHS.pen, color: "#3B82F6", value: fmt(wordsThisMonth), label: "Words written" },
+        { icon: PATHS.sparkles, color: "#6C5CE7", value: fmt(aiGenerations), label: "AI generations" },
     ];
+    const empty = wordsThisMonth === 0 && aiGenerations === 0;
     return (
         <Card className="flex flex-col !p-6">
             <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-h5 text-black dark:text-white">Writing insights</h2>
                 <span className="text-caption-2 text-grey">This month</span>
             </div>
-            <div className="flex grow flex-col justify-between">
-                {rows.map((r, i) => (
-                    <div key={r.label} className={`flex items-center gap-3 py-2.5 ${i > 0 ? "border-t border-grey-light/60 dark:border-grey-light/10" : ""}`}>
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${r.color}1f` }}>
-                            <Stroke d={r.icon} color={r.color} className="h-[18px] w-[18px]" />
-                        </span>
-                        <div className="min-w-0 grow">
-                            <div className="font-poppins text-[1.25rem] leading-none font-bold text-black dark:text-white">{r.value}</div>
-                            <div className="mt-1 text-caption-2 text-grey">
-                                {r.label}
-                                {r.sample && <span className="ml-1 text-grey/60">· sample</span>}
+            <div className="flex grow flex-col justify-center gap-2">
+                {empty ? (
+                    <p className="py-6 text-center text-body-sm text-grey">
+                        Start writing and using AI tools to see your activity here.
+                    </p>
+                ) : (
+                    rows.map((r, i) => (
+                        <div key={r.label} className={`flex items-center gap-3 py-3 ${i > 0 ? "border-t border-grey-light/60 dark:border-grey-light/10" : ""}`}>
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${r.color}1f` }}>
+                                <Stroke d={r.icon} color={r.color} className="h-[18px] w-[18px]" />
+                            </span>
+                            <div className="min-w-0 grow">
+                                <div className="font-poppins text-[1.25rem] leading-none font-bold text-black dark:text-white">{r.value}</div>
+                                <div className="mt-1 text-caption-2 text-grey">{r.label}</div>
                             </div>
                         </div>
-                        <span className={`inline-flex shrink-0 items-center gap-0.5 text-caption-2 font-semibold ${r.up ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]"}`}>
-                            <Stroke d={PATHS.arrowUp} className={`h-3 w-3 ${r.up ? "" : "rotate-180"}`} />
-                            {r.delta}
-                        </span>
-                    </div>
-                ))}
+                    ))
+                )}
             </div>
             <Link href="/ai/usage" className="mt-4 inline-flex items-center gap-1.5 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
                 View all insights
