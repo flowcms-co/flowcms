@@ -145,11 +145,15 @@ async function createBackup() {
 
 async function listBackups() {
     await fsp.mkdir(BACKUP_DIR, { recursive: true });
-    const files = (await fsp.readdir(BACKUP_DIR)).filter((f) => f.endsWith(".json"));
+    // Only backup manifests, named <id>.json. Exclude upgrade-status.json (it lives
+    // in this dir too) and any stray json, so the list never shows a phantom entry
+    // with an "Invalid Date" / "NaN MB" because the file isn't a real backup.
+    const files = (await fsp.readdir(BACKUP_DIR)).filter((f) => f.endsWith(".json") && f !== "upgrade-status.json");
     const out = [];
     for (const f of files) {
         try {
-            out.push(JSON.parse(await fsp.readFile(path.join(BACKUP_DIR, f), "utf8")));
+            const m = JSON.parse(await fsp.readFile(path.join(BACKUP_DIR, f), "utf8"));
+            if (m && m.id && m.createdAt) out.push(m);
         } catch {
             /* skip unreadable manifest */
         }
@@ -288,12 +292,31 @@ async function runUpgrade(ctx) {
 
         await setStatus({ step: "download" });
         await writeEnvKeys({ API_IMAGE: ctx.newApi, STUDIO_IMAGE: ctx.newStudio });
-        try {
-            await compose("pull", "api", "studio");
-        } catch {
-            // Local/offline test images may not be in a registry — proceed if present.
-            await run("docker", ["image", "inspect", ctx.newApi]);
-            await run("docker", ["image", "inspect", ctx.newStudio]);
+        // Pull the new images, retrying a few times so a transient registry/network
+        // blip doesn't fail the whole upgrade. GHCR throttles anonymous pulls and an
+        // occasional 5xx/timeout is expected; a short backoff clears almost all of them.
+        let pullErr = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                await compose("pull", "api", "studio");
+                pullErr = null;
+                break;
+            } catch (e) {
+                pullErr = e;
+                if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 3000));
+            }
+        }
+        if (pullErr) {
+            // Every pull attempt failed. Local/offline test images may not be in a
+            // registry at all, so accept them if both are already present locally.
+            // Otherwise surface the REAL pull error — not a misleading "No such image"
+            // from the inspect fallback, which only fails because nothing was pulled.
+            try {
+                await run("docker", ["image", "inspect", ctx.newApi]);
+                await run("docker", ["image", "inspect", ctx.newStudio]);
+            } catch {
+                throw new Error(`could not pull ${ctx.newApi}: ${pullErr.message || pullErr}`);
+            }
         }
 
         await setStatus({ step: "migrate" });
@@ -303,6 +326,19 @@ async function runUpgrade(ctx) {
         if (!(await waitHealthy(HEALTH_TIMEOUT))) throw new Error("the new version did not become healthy in time");
 
         await setStatus({ status: "success", step: "done", finishedAt: new Date().toISOString() });
+
+        // Reclaim disk: drop images no longer used by a running container (the prior
+        // versions this upgrade just replaced, plus dangling layers). Best-effort and
+        // strictly after success, with its own catch, so a prune failure can never
+        // fail or roll back a completed upgrade. Without this, every upgrade leaves
+        // another ~2GB image behind and the host's store grows without bound (it had
+        // climbed to ~24G of stale layers, which is what filled the disk and broke a
+        // pull). Volumes (database + media) are never touched by image prune.
+        try {
+            await run("docker", ["image", "prune", "-a", "-f"]);
+        } catch {
+            /* non-fatal: the upgrade already succeeded */
+        }
     } catch (e) {
         await rollback(ctx, e?.message || String(e));
     }

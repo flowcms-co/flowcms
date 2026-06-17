@@ -86,6 +86,14 @@ jobs:
           build-args: |
             FLOWCMS_VERSION=${{ steps.meta.outputs.version }}
             ${{ matrix.image == 'flowcms-studio' && 'NEXT_PUBLIC_API_URL=/api' || '' }}
+          # Publish a plain single-platform image manifest. Buildx defaults to
+          # provenance/SBOM attestations, which wrap the image in an OCI index that
+          # older Docker/containerd on a self-host server can fail to pull (surfacing
+          # as a confusing "No such image" via the updater). Disabling them keeps the
+          # published manifest maximally compatible with whatever Docker a user runs.
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -106,10 +114,30 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      # Prefer curated, user-facing notes committed at release-notes/<tag>.md so
+      # the GitHub Release reads like product notes instead of a raw commit list.
+      # If no file exists for this tag, fall back to auto-generated notes.
+      - name: Resolve release notes
+        id: notes
+        run: |
+          file="release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$file" ]; then
+            echo "Using curated notes: $file"
+            echo "body_path=$file" >> "$GITHUB_OUTPUT"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No curated notes for ${GITHUB_REF_NAME}; using generated notes."
+            echo "body_path=" >> "$GITHUB_OUTPUT"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create or update the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: FlowCMS ${{ github.ref_name }}
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
           make_latest: "true"
