@@ -15,6 +15,7 @@ import SectionEditor, { type ComponentDef, type Section as ZoneSection } from "@
 import Mapper from "./Mapper";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
+import { isHiddenFieldPath } from "@/lib/mappableField";
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",
@@ -64,6 +65,11 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
 /** One field→DOM binding from a CMS selector map. */
 type Binding = { fieldPath: string; selector: string; mode: string; nth?: number };
 
+/** One repeating-list item as reported by the live-edit bridge. `index` is its slot
+ *  in the saved array (null when added live); `clonedFrom` is the slot it was copied
+ *  from; `fields` are the edited sub-fields (or `value` for a scalar list item). */
+type ArrayItemMsg = { index: number | null; clonedFrom: number | null; fields?: Record<string, string>; value?: string };
+
 /** Placeholder page shown when an entry has no content yet (a brand-new or not-yet
  *  filled service / landing page). Keeps the preview seamless — a sensible default
  *  layout instead of a blank card or a 404 — while the content is being set up. */
@@ -101,6 +107,44 @@ const setPath = (obj: Record<string, unknown>, path: string, value: unknown) => 
         cur = cur[key] as Record<string, unknown>;
     }
     cur[parts[parts.length - 1]] = value;
+};
+
+/** Read a dot/array path from an object (undefined if any segment is missing). */
+const getPath = (obj: Record<string, unknown>, path: string): unknown => {
+    let cur: unknown = obj;
+    for (const p of path.split(".")) {
+        if (cur == null || typeof cur !== "object") return undefined;
+        cur = (cur as Record<string, unknown>)[p];
+    }
+    return cur;
+};
+
+let liveIdSeq = 0;
+const ID_KEY_RE = /(^|_)(id|key|uid|slug)$/i;
+/** Give a cloned item fresh id-like keys so a live-added item doesn't duplicate the
+ *  id of the item it was copied from (which would collide on the rendered list). */
+const freshenIds = (item: Record<string, unknown>): Record<string, unknown> => {
+    for (const k of Object.keys(item)) {
+        if (ID_KEY_RE.test(k) && typeof item[k] === "string") item[k] = `${k.toLowerCase()}-${Date.now().toString(36)}${liveIdSeq++}`;
+    }
+    return item;
+};
+
+/** Rebuild one array (in the order the bridge reported) from its live items, merging
+ *  edited fields onto the original item so non-rendered fields (id, etc.) survive. */
+const rebuildArray = (original: unknown, items: ArrayItemMsg[]): unknown[] => {
+    const orig = Array.isArray(original) ? original : [];
+    return items.map((rec) => {
+        // Scalar list item (no sub-fields): the value is the whole item.
+        if (rec.value !== undefined && (!rec.fields || !Object.keys(rec.fields).length)) return rec.value;
+        const srcIdx = rec.index != null ? rec.index : rec.clonedFrom;
+        const source = srcIdx != null ? orig[srcIdx] : undefined;
+        let base: Record<string, unknown> = source && typeof source === "object" && !Array.isArray(source) ? (JSON.parse(JSON.stringify(source)) as Record<string, unknown>) : {};
+        // A newly added item was cloned from an existing one — regenerate its ids.
+        if (rec.index == null) base = freshenIds(base);
+        if (rec.fields) for (const [sub, val] of Object.entries(rec.fields)) setPath(base, sub, val);
+        return base;
+    });
 };
 
 /** The site path segments for an entry, honouring the content type's route prefix
@@ -168,7 +212,19 @@ const PreviewClient = () => {
     // Save can persist them. Legacy demos still send {title, summary, body}.
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const siteFieldsRef = useRef<Record<string, string>>({});
+    // Repeating-list state streamed from the bridge: each array path maps to its
+    // items in document order. Each item carries its original index (null when added
+    // live) and the index it was cloned from, so Save can rebuild the array while
+    // preserving non-rendered fields (id, etc.). See flowcms-live-edit.js.
+    const siteArraysRef = useRef<Record<string, ArrayItemMsg[]>>({});
     const [siteEditable, setSiteEditable] = useState(false);
+    // Template fallback: when an entry's own live URL can't render (a new / not-yet-
+    // published page 404s on the site, or its page hasn't rebuilt), we preview it on a
+    // published sibling of the same type and push this entry's values onto it, so live
+    // editing works before publish. `templateTarget` is that borrowed page's URL.
+    const [templateTarget, setTemplateTarget] = useState<string | null>(null);
+    const fellBackRef = useRef(false); // guard: only borrow a template once per entry
+    const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // CMS-stored field→DOM map for this entry's type + URL. Sent to the bridge so
     // the customer site needs no per-field attributes (M1 of assisted mapping).
     const [bindings, setBindings] = useState<Binding[]>([]);
@@ -253,6 +309,14 @@ const PreviewClient = () => {
     // Section-based page: render the dynamic-zone sections as the page content.
     const sections = findSections(entry?.data);
     const target = entry && hasSite ? buildTarget(previewUrl, entry, type) : "";
+    // The URL the preview iframe actually loads: the entry's own page, or a borrowed
+    // published-sibling template when that page can't render this (unpublished) entry.
+    const frameSrc = templateTarget ?? target;
+    const usingTemplate = !!templateTarget;
+    // Bindings the live editor actually uses: structural / SEO / id fields are never
+    // editable on the page (matches what the mapper now hides), even if an older saved
+    // map still contains them.
+    const liveBindings = useMemo(() => bindings.filter((b) => !isHiddenFieldPath(b.fieldPath)), [bindings]);
 
     // The dynamic-zone field (if any) + its block defs, for the in-preview builder.
     // Fall back to detecting the zone key straight from the data shape.
@@ -325,19 +389,95 @@ const PreviewClient = () => {
         if (!win) return;
         let origin = "*";
         try {
-            if (target) origin = new URL(target).origin;
+            if (frameSrc) origin = new URL(frameSrc).origin;
         } catch {
             /* keep * */
         }
         win.postMessage({ source: "flowcms-studio", ...msg }, origin);
     };
 
+    /** The entry's own live URL can't render it (a new page 404s on the site, or it
+     *  hasn't rebuilt). Borrow the most recently updated published page of the same
+     *  type as a live template; we push this entry's values onto it below. If none
+     *  exists (or a borrowed one also fails), drop to the in-studio Content view. */
+    const attemptTemplateFallback = async () => {
+        if (!type || !entry || mode !== "site") return;
+        if (fellBackRef.current) {
+            setTemplateTarget(null);
+            setUserMode("content");
+            setEditNote("Couldn't load a live preview for this page; showing the content view. Your edits still save to this page.");
+            return;
+        }
+        fellBackRef.current = true;
+        try {
+            const sibs = await api<Array<{ id: string; slug?: string | null }>>(`/entries?typeId=${encodeURIComponent(type.id)}&status=PUBLISHED`);
+            const donor = sibs.find((s) => s.id !== entry.id && !!(s.slug ?? "").trim());
+            if (!donor) {
+                setUserMode("content");
+                setEditNote(`This page isn't published yet and there's no published ${type.name} to preview it on. Showing the content view; your edits still save to this page.`);
+                return;
+            }
+            const donorEntry = { id: donor.id, slug: donor.slug, status: "PUBLISHED", contentType: entry.contentType } as Entry;
+            setSiteEditable(false);
+            setTemplateTarget(buildTarget(previewUrl, donorEntry, type));
+        } catch {
+            setUserMode("content");
+            setEditNote("Couldn't load a live preview for this page; showing the content view. Your edits still save to this page.");
+        }
+    };
+
     // Push the selector map to the bridge once the site is ready (and again if the
-    // map or target changes). The bridge applies it idempotently.
+    // map / target changes). On the entry's own page we also `probe` whether the map
+    // resolves (to detect a 404 / wrong page); on a borrowed template we instead push
+    // this entry's values so the user edits their content on a real, rendered layout.
     useEffect(() => {
-        if (siteEditable && mode === "site" && bindings.length) postToSite({ type: "map", bindings });
+        if (!(siteEditable && mode === "site" && liveBindings.length)) return;
+        postToSite({ type: "map", bindings: liveBindings });
+        if (templateTarget) {
+            const vals: Record<string, string> = {};
+            for (const b of liveBindings) {
+                const v = b.fieldPath === "title" ? entry?.title ?? "" : getPath((entry?.data ?? {}) as Record<string, unknown>, b.fieldPath);
+                vals[b.fieldPath] = typeof v === "string" ? v : "";
+            }
+            postToSite({ type: "set", fields: vals });
+        } else {
+            postToSite({ type: "probe" });
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [siteEditable, bindings, target, mode]);
+    }, [siteEditable, liveBindings, target, templateTarget, mode]);
+
+    // Reset the template-fallback state when switching to a different entry.
+    useEffect(() => {
+        fellBackRef.current = false;
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTemplateTarget(null);
+        setSiteEditable(false);
+    }, [id]);
+
+    // While trying to live-edit a real page, if the bridge never signals `ready`
+    // within a few seconds (the page 404'd or doesn't run the live-edit script), fall
+    // back to a borrowed template. Only when a map exists (else there's nothing to
+    // live-edit and the normal "waiting…" / content flow applies).
+    useEffect(() => {
+        if (mode !== "site" || !frameSrc || siteEditable || !liveBindings.length) return;
+        const t = setTimeout(() => attemptTemplateFallback(), 6000);
+        readyTimerRef.current = t;
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mode, frameSrc, siteEditable, liveBindings.length]);
+
+    // Keep a fresh probe-result handler for the iframe listener (which has a stable
+    // closure): if none of the saved bindings resolve on the entry's own page, the
+    // page isn't rendering this content, so borrow a template.
+    const onProbeResult = useRef<(unresolved: string[]) => void>(() => {});
+    useEffect(() => {
+        onProbeResult.current = (unresolved) => {
+            if (templateTarget || !liveBindings.length) return;
+            // Count only the live (non-hidden) bindings as unresolved.
+            const liveUnresolved = unresolved.filter((p) => !isHiddenFieldPath(p));
+            if (liveUnresolved.length >= liveBindings.length) attemptTemplateFallback();
+        };
+    });
 
     // Listen to the edit-aware site iframe: `ready` unlocks in-place editing;
     // `dirty`/`fields` stream the edited fields back so Save persists them. Fields
@@ -353,9 +493,12 @@ const PreviewClient = () => {
                 summary?: string;
                 body?: string;
                 fields?: Record<string, unknown>;
+                arrays?: Record<string, ArrayItemMsg[]>;
+                unresolved?: string[];
             } | null;
             if (!d || d.source !== "flowcms-preview") return;
             if (d.type === "ready") setSiteEditable(true);
+            else if (d.type === "probe-result" && Array.isArray(d.unresolved)) onProbeResult.current(d.unresolved);
             else if (d.type === "dirty") setDirty(true);
             else if (d.type === "fields") {
                 const map: Record<string, string> = {};
@@ -365,6 +508,8 @@ const PreviewClient = () => {
                 // Back-compat: accept the legacy flat keys too.
                 for (const k of ["title", "summary", "body"] as const) if (typeof d[k] === "string") map[k] = d[k] as string;
                 siteFieldsRef.current = map;
+                // Repeating-list state (add / edit / remove), keyed by array path.
+                if (d.arrays && typeof d.arrays === "object") siteArraysRef.current = d.arrays;
             }
         };
         window.addEventListener("message", onMsg);
@@ -503,6 +648,15 @@ const PreviewClient = () => {
             setPath(nextData, k, v);
             changedData = true;
         }
+        // Repeating lists: rebuild each edited array from the bridge's live items so
+        // added / removed / reordered items persist (only in site mode).
+        if (siteEditing) {
+            for (const [path, items] of Object.entries(siteArraysRef.current)) {
+                if (!Array.isArray(items)) continue;
+                setPath(nextData, path, rebuildArray(getPath(nextData, path), items));
+                changedData = true;
+            }
+        }
         if (changedData) patch.data = nextData;
         if (!Object.keys(patch).length) return;
         setSaving(true);
@@ -640,22 +794,32 @@ const PreviewClient = () => {
                 /* One iframe for every device size (never unmounts → no reload); the
                    frame's width / padding / bezel animate smoothly between sizes.
                    Desktop = full-bleed; Tablet / Mobile = a centered device frame. */
-                <div
-                    className={cn(
-                        "flex min-h-0 flex-1 justify-center overflow-auto transition-[padding] duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-                        device === "desktop" ? "p-0" : "p-4 sm:p-6",
+                <div className="flex min-h-0 flex-1 flex-col">
+                    {usingTemplate && (
+                        <div className="flex items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-caption-2 text-warning">
+                            <Icon className="h-4 w-4 shrink-0 fill-warning" name="info" />
+                            <span>
+                                Previewing on your <strong className="font-semibold">{type?.name ?? "page"}</strong> template because this page isn&apos;t published yet. Fields you fill save to this page.
+                            </span>
+                        </div>
                     )}
-                >
                     <div
                         className={cn(
-                            "h-full shrink-0 overflow-hidden bg-white transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] dark:bg-dark-1",
-                            device === "desktop"
-                                ? "border-0"
-                                : "rounded-[1.75rem] border-[6px] border-ink/80 shadow-[0_1.5rem_3rem_rgba(26,26,46,0.22)] dark:border-black",
+                            "flex min-h-0 flex-1 justify-center overflow-auto transition-[padding] duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+                            device === "desktop" ? "p-0" : "p-4 sm:p-6",
                         )}
-                        style={{ width: dev.frame, maxWidth: "100%" }}
                     >
-                        <iframe ref={iframeRef} key={target} src={target} onLoad={() => postToSite({ type: "hello" })} title="Live site preview" className="h-full w-full border-0" />
+                        <div
+                            className={cn(
+                                "h-full shrink-0 overflow-hidden bg-white transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] dark:bg-dark-1",
+                                device === "desktop"
+                                    ? "border-0"
+                                    : "rounded-[1.75rem] border-[6px] border-ink/80 shadow-[0_1.5rem_3rem_rgba(26,26,46,0.22)] dark:border-black",
+                            )}
+                            style={{ width: dev.frame, maxWidth: "100%" }}
+                        >
+                            <iframe ref={iframeRef} key={frameSrc} src={frameSrc} onLoad={() => postToSite({ type: "hello" })} title="Live site preview" className="h-full w-full border-0" />
+                        </div>
                     </div>
                 </div>
             ) : (

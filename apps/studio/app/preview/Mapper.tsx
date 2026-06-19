@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { isHiddenFieldPath } from "@/lib/mappableField";
 
 type Binding = { fieldPath: string; selector: string; mode: string; nth?: number };
 type Suggestion = { fieldPath: string; selector?: string; nth?: number; mode?: string; value?: string; confidence: number; ambiguous?: boolean };
@@ -32,7 +33,9 @@ const flatten = (obj: unknown, prefix: string, out: Field[]) => {
         for (const [k, v] of Object.entries(obj as Record<string, unknown>)) flatten(v, prefix ? `${prefix}.${k}` : k, out);
         return;
     }
-    if (typeof obj === "string" && obj.trim()) out.push({ path: prefix, value: obj, kind: kindOf(prefix, obj) });
+    // Skip structural / SEO / identifier fields (slug, page title, meta title, ids):
+    // they aren't on-page content you map or live-edit.
+    if (typeof obj === "string" && obj.trim() && !isHiddenFieldPath(prefix)) out.push({ path: prefix, value: obj, kind: kindOf(prefix, obj) });
 };
 
 const KIND_ICON: Record<string, string> = { media: "image", url: "external", rich: "document", text: "edit" };
@@ -73,7 +76,9 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
     // Seed the working map from the saved map.
     useEffect(() => {
         const m: Record<string, Binding> = {};
-        for (const b of initialBindings) m[b.fieldPath] = b;
+        // Drop any previously-saved structural / SEO / id bindings so they no longer
+        // show or get re-saved (they're now excluded from mapping).
+        for (const b of initialBindings) if (!isHiddenFieldPath(b.fieldPath)) m[b.fieldPath] = b;
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setBindings(m);
     }, [initialBindings]);

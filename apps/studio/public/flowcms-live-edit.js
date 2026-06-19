@@ -45,6 +45,8 @@
     // and any data-flowcms-field attributes already on the page.
 
     var mapBindings = []; // last selector map received from the studio
+    var arrayGroups = []; // active repeating-list groups while editing (see array module)
+    var addedCounter = 0; // unique suffix for items added live
 
     function attrTargets() {
         return Array.prototype.slice
@@ -119,6 +121,9 @@
     function snapshot() {
         var m = {};
         targets().forEach(function (t) {
+            // Repeating-list items are reported separately, under `arrays`, so the
+            // studio can rebuild the whole list (incl. added / removed items).
+            if (parsePath(t.key)) return;
             m[t.key] = readValue(t.el, t.mode);
         });
         return m;
@@ -140,7 +145,7 @@
         post({ type: "dirty" });
         clearTimeout(timer);
         timer = setTimeout(function () {
-            post({ type: "fields", fields: snapshot() });
+            post({ type: "fields", fields: snapshot(), arrays: arraysSnapshot() });
         }, 200);
     }
 
@@ -149,6 +154,7 @@
         editing = on;
         targets().forEach(function (t) {
             if (!isInline(t.mode)) return; // images/links are edited from the studio panel
+            if (parsePath(t.key)) return; // repeating-list items wire their own editing
             if (on) {
                 t.el.setAttribute("contenteditable", t.mode === "rich" ? "true" : "plaintext-only");
                 t.el.classList.add("flowcms-edit-on");
@@ -159,6 +165,8 @@
                 t.el.removeEventListener("input", onInput);
             }
         });
+        if (on) mountArrayControls();
+        else unmountArrayControls();
     }
 
     function applyMap(bindings) {
@@ -168,7 +176,7 @@
             toggle(false);
             toggle(true);
         }
-        post({ type: "fields", fields: snapshot() });
+        post({ type: "fields", fields: snapshot(), arrays: arraysSnapshot() });
         post({ type: "mapped", count: targets().length });
     }
 
@@ -361,6 +369,358 @@
         post({ type: "probe-result", unresolved: unresolved });
     }
 
+    // ── Repeating lists: live add / edit / remove of array items ───────────────
+    // Any set of selector-map bindings whose field path looks like
+    // "<arrayPath>.<index>.<field>" (or "<arrayPath>.<index>" for a scalar list)
+    // is treated as one repeating list (FAQs, services, testimonials…). We locate
+    // each rendered item's wrapper element, then the editor can clone the last one
+    // to add, or drop one to remove. The whole list is rebuilt from the DOM (in
+    // order) on every change, so add / edit / remove all just work on Save — no
+    // fragile index bookkeeping. Items already in the saved content carry their
+    // original index back so the studio can preserve non-rendered fields (id, etc.).
+
+    var ARR_RE = /^(.+)\.(\d+)(?:\.(.+))?$/;
+
+    function parsePath(fieldPath) {
+        var m = ARR_RE.exec(String(fieldPath || ""));
+        if (!m) return null;
+        return { arrayPath: m[1], index: parseInt(m[2], 10), sub: m[3] || "" };
+    }
+
+    function resolveBinding(b) {
+        try {
+            return document.querySelectorAll(b.selector)[b.nth || 0] || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function ancestorsOf(el) {
+        var a = [];
+        while (el) {
+            a.push(el);
+            el = el.parentElement;
+        }
+        return a;
+    }
+
+    /** Lowest common ancestor of a set of elements (the closest shared wrapper). */
+    function lca(els) {
+        els = els.filter(Boolean);
+        if (!els.length) return null;
+        var common = ancestorsOf(els[0]);
+        for (var i = 1; i < els.length; i++) {
+            var set = ancestorsOf(els[i]);
+            common = common.filter(function (x) {
+                return set.indexOf(x) !== -1;
+            });
+            if (!common.length) return null;
+        }
+        return common[0];
+    }
+
+    /** The repeating block for one item: the largest wrapper that holds all of this
+     *  item's fields but none of any sibling item's fields. */
+    function itemRoot(myEls, otherEls) {
+        var root = lca(myEls);
+        if (!root) return null;
+        var p = root.parentElement;
+        while (p && p !== document.body) {
+            var swallows = false;
+            for (var i = 0; i < otherEls.length; i++) {
+                if (p.contains(otherEls[i])) {
+                    swallows = true;
+                    break;
+                }
+            }
+            if (swallows) break;
+            root = p;
+            p = p.parentElement;
+        }
+        return root;
+    }
+
+    /** Child-index path from an item root down to one of its field elements, so the
+     *  matching element can be found inside a structurally identical clone. */
+    function indexPath(root, el) {
+        var path = [];
+        var n = el;
+        while (n && n !== root) {
+            var parent = n.parentElement;
+            if (!parent) return null;
+            path.unshift(Array.prototype.indexOf.call(parent.children, n));
+            n = parent;
+        }
+        return n === root ? path : null;
+    }
+    function atPath(root, path) {
+        var n = root;
+        for (var i = 0; path && i < path.length && n; i++) n = n.children[path[i]];
+        return n || null;
+    }
+
+    function byDocOrder(get) {
+        return function (a, b) {
+            var na = get(a),
+                nb = get(b);
+            if (na === nb) return 0;
+            return na.compareDocumentPosition(nb) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+        };
+    }
+
+    /** Group the current bindings into repeating lists with resolved item roots. */
+    function buildArrayGroups() {
+        arrayGroups = [];
+        var raw = {};
+        for (var i = 0; i < mapBindings.length; i++) {
+            var b = mapBindings[i];
+            if (!b || !b.fieldPath || !b.selector) continue;
+            var p = parsePath(b.fieldPath);
+            if (!p) continue;
+            var g = raw[p.arrayPath] || (raw[p.arrayPath] = { path: p.arrayPath, items: {} });
+            (g.items[p.index] || (g.items[p.index] = [])).push({ sub: p.sub, selector: b.selector, nth: b.nth || 0, mode: b.mode || "text" });
+        }
+        Object.keys(raw).forEach(function (key) {
+            var g = raw[key];
+            var indices = Object.keys(g.items)
+                .map(Number)
+                .sort(function (a, b) {
+                    return a - b;
+                });
+            // Resolve every binding's element first (so item roots can exclude siblings).
+            var perIndex = {};
+            var allEls = [];
+            indices.forEach(function (idx) {
+                var fields = {};
+                g.items[idx].forEach(function (bd) {
+                    var el = resolveBinding(bd);
+                    if (!el) return;
+                    fields[bd.sub || "_value"] = { el: el, mode: bd.mode };
+                    allEls.push(el);
+                });
+                perIndex[idx] = fields;
+            });
+            var items = [];
+            indices.forEach(function (idx) {
+                var subs = Object.keys(perIndex[idx]);
+                if (!subs.length) return;
+                var myEls = subs.map(function (s) {
+                    return perIndex[idx][s].el;
+                });
+                var otherEls = allEls.filter(function (e) {
+                    return myEls.indexOf(e) === -1;
+                });
+                var root = itemRoot(myEls, otherEls);
+                if (!root) return;
+                var fieldDefs = {};
+                subs.forEach(function (s) {
+                    var fe = perIndex[idx][s];
+                    fieldDefs[s] = { path: indexPath(root, fe.el), mode: fe.mode, el: fe.el };
+                });
+                items.push({ key: g.path + "#" + idx, origIndex: idx, clonedFrom: null, root: root, fields: fieldDefs });
+            });
+            if (!items.length) return;
+            items.sort(
+                byDocOrder(function (it) {
+                    return it.root;
+                }),
+            );
+            arrayGroups.push({ path: g.path, items: items, addBtn: null, baseline: [] });
+        });
+    }
+
+    function stampItem(it) {
+        if (it.root) it.root.setAttribute("data-flowcms-item", it.key);
+    }
+    function makeItemEditable(it) {
+        Object.keys(it.fields).forEach(function (s) {
+            var f = it.fields[s];
+            if (!f.el || (f.mode !== "text" && f.mode !== "rich")) return;
+            f.el.setAttribute("contenteditable", f.mode === "rich" ? "true" : "plaintext-only");
+            f.el.classList.add("flowcms-edit-on");
+            f.el.addEventListener("input", onInput);
+        });
+    }
+    function makeItemReadonly(it) {
+        Object.keys(it.fields).forEach(function (s) {
+            var f = it.fields[s];
+            if (!f.el) return;
+            f.el.removeAttribute("contenteditable");
+            f.el.classList.remove("flowcms-edit-on");
+            f.el.removeEventListener("input", onInput);
+        });
+    }
+
+    function addRemoveBtn(it) {
+        if (!it.root) return;
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "flowcms-arr-remove";
+        btn.setAttribute("data-flowcms-control", "1");
+        btn.title = "Remove this item";
+        btn.setAttribute("aria-label", "Remove this item");
+        btn.textContent = "×";
+        btn.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            removeItem(it);
+        });
+        if (window.getComputedStyle(it.root).position === "static") it.root.style.position = "relative";
+        it.root.appendChild(btn);
+    }
+
+    function addAddButton(group) {
+        var last = group.items[group.items.length - 1];
+        if (!last || !last.root || !last.root.parentNode) return;
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "flowcms-arr-add";
+        btn.setAttribute("data-flowcms-control", "1");
+        btn.textContent = "+ Add item";
+        btn.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            addItem(group);
+        });
+        group.addBtn = btn;
+        last.root.parentNode.insertBefore(btn, last.root.nextSibling);
+    }
+
+    function addItem(group) {
+        var src = group.items[group.items.length - 1];
+        if (!src || !src.root || !src.root.parentNode) return;
+        var clone = src.root.cloneNode(true);
+        clone.removeAttribute("data-flowcms-item");
+        Array.prototype.slice.call(clone.querySelectorAll("[data-flowcms-control]")).forEach(function (n) {
+            n.parentNode && n.parentNode.removeChild(n);
+        });
+        Array.prototype.slice.call(clone.querySelectorAll(".flowcms-edit-on")).forEach(function (n) {
+            n.classList.remove("flowcms-edit-on");
+            n.removeAttribute("contenteditable");
+        });
+        src.root.parentNode.insertBefore(clone, src.root.nextSibling);
+        var it = { key: group.path + "#new-" + addedCounter++, origIndex: null, clonedFrom: src.origIndex, root: clone, fields: {} };
+        Object.keys(src.fields).forEach(function (s) {
+            var def = src.fields[s];
+            var el = atPath(clone, def.path);
+            if (!el) return;
+            it.fields[s] = { path: def.path, mode: def.mode, el: el };
+            // Wipe the photocopied text so the user fills the new item in. Media /
+            // link values are left as-is (changed from the studio media panel).
+            if (def.mode === "rich") el.innerHTML = "";
+            else if (def.mode === "text") el.textContent = "";
+        });
+        group.items.push(it);
+        stampItem(it);
+        makeItemEditable(it);
+        addRemoveBtn(it);
+        if (group.addBtn) clone.parentNode.insertBefore(group.addBtn, clone.nextSibling);
+        var first = Object.keys(it.fields)
+            .map(function (s) {
+                return it.fields[s].el;
+            })
+            .filter(Boolean)[0];
+        if (first) first.focus();
+        onInput();
+    }
+
+    function removeItem(it) {
+        makeItemReadonly(it);
+        if (it.root && it.root.parentNode) it.root.parentNode.removeChild(it.root);
+        for (var i = 0; i < arrayGroups.length; i++) {
+            var idx = arrayGroups[i].items.indexOf(it);
+            if (idx >= 0) {
+                arrayGroups[i].items.splice(idx, 1);
+                break;
+            }
+        }
+        onInput();
+    }
+
+    function mountArrayControls() {
+        buildArrayGroups();
+        // Record a baseline (node + position + clean HTML) before injecting anything,
+        // so a discard / revert can restore the original items exactly.
+        arrayGroups.forEach(function (group) {
+            group.baseline = group.items.map(function (it) {
+                return { node: it.root, parent: it.root.parentNode, next: it.root.nextSibling, html: it.root.innerHTML };
+            });
+        });
+        arrayGroups.forEach(function (group) {
+            group.items.forEach(function (it) {
+                stampItem(it);
+                makeItemEditable(it);
+                addRemoveBtn(it);
+            });
+            addAddButton(group);
+        });
+    }
+
+    function unmountArrayControls() {
+        arrayGroups.forEach(function (group) {
+            group.items.forEach(function (it) {
+                makeItemReadonly(it);
+                if (it.root) it.root.removeAttribute("data-flowcms-item");
+            });
+        });
+        Array.prototype.slice.call(document.querySelectorAll("[data-flowcms-control]")).forEach(function (n) {
+            n.parentNode && n.parentNode.removeChild(n);
+        });
+        arrayGroups = [];
+    }
+
+    function revertArrays() {
+        arrayGroups.forEach(function (group) {
+            // Drop items added live.
+            group.items
+                .filter(function (it) {
+                    return it.origIndex == null;
+                })
+                .forEach(function (it) {
+                    if (it.root && it.root.parentNode) it.root.parentNode.removeChild(it.root);
+                });
+            // Restore original items (re-insert any removed; reset edited HTML, which
+            // also strips any injected controls captured after the baseline).
+            group.baseline.forEach(function (b) {
+                if (!document.body.contains(b.node) && b.parent) {
+                    if (b.next && b.next.parentNode === b.parent) b.parent.insertBefore(b.node, b.next);
+                    else b.parent.appendChild(b.node);
+                }
+                b.node.innerHTML = b.html;
+            });
+        });
+        // Rebuild controls against the restored DOM.
+        unmountArrayControls();
+        mountArrayControls();
+    }
+
+    /** The current state of every repeating list, in document order. Each item
+     *  carries its original index (or null when added live) plus the source index it
+     *  was cloned from, so the studio can preserve non-rendered fields on Save. */
+    function arraysSnapshot() {
+        var out = {};
+        arrayGroups.forEach(function (group) {
+            var live = group.items.filter(function (it) {
+                return it.root && document.body.contains(it.root);
+            });
+            live.sort(
+                byDocOrder(function (it) {
+                    return it.root;
+                }),
+            );
+            out[group.path] = live.map(function (it) {
+                var rec = { index: it.origIndex, clonedFrom: it.clonedFrom, fields: {} };
+                Object.keys(it.fields).forEach(function (s) {
+                    var f = it.fields[s];
+                    if (s === "_value") rec.value = readValue(f.el, f.mode);
+                    else rec.fields[s] = readValue(f.el, f.mode);
+                });
+                return rec;
+            });
+        });
+        return out;
+    }
+
     window.addEventListener("message", function (e) {
         if (parentOrigin !== "*" && e.origin !== parentOrigin) return;
         var d = e.data;
@@ -397,6 +757,7 @@
             return;
         }
         if (d.type === "revert") {
+            revertArrays();
             targets().forEach(function (t) {
                 if (t.key in baseline) writeValue(t.el, t.mode, baseline[t.key]);
             });
@@ -427,7 +788,11 @@
     style.textContent =
         ".flowcms-edit-on{outline:2px dashed rgba(108,92,231,.5);outline-offset:4px;border-radius:4px;cursor:text}.flowcms-edit-on:focus{outline-color:rgba(108,92,231,1)}" +
         ".flowcms-picking,.flowcms-picking *{cursor:crosshair !important}" +
-        ".flowcms-hover{outline:2px solid rgba(108,92,231,.95) !important;outline-offset:2px;background:rgba(108,92,231,.10) !important}";
+        ".flowcms-hover{outline:2px solid rgba(108,92,231,.95) !important;outline-offset:2px;background:rgba(108,92,231,.10) !important}" +
+        ".flowcms-arr-add{display:inline-flex;align-items:center;gap:.375rem;margin:.75rem 0;padding:.4375rem .875rem;font:600 .8125rem/1 system-ui,-apple-system,sans-serif;color:#fff;background:#6c5ce7;border:0;border-radius:.5rem;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.18)}" +
+        ".flowcms-arr-add:hover{background:#5a4bd4}" +
+        ".flowcms-arr-remove{position:absolute;top:.375rem;right:.375rem;z-index:9;width:1.375rem;height:1.375rem;display:inline-flex;align-items:center;justify-content:center;padding:0;font:700 .9375rem/1 system-ui,sans-serif;color:#fff;background:rgba(214,48,49,.94);border:0;border-radius:999px;cursor:pointer;opacity:0;transition:opacity .12s}" +
+        "[data-flowcms-item]:hover>.flowcms-arr-remove,.flowcms-arr-remove:focus{opacity:1}";
     document.head.appendChild(style);
 
     baseline = snapshot();
