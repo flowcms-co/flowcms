@@ -64,6 +64,20 @@ export class ContentEntriesController {
         return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkDelete", `Delete ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"}`, { ids: dto.ids }, dto.ids.length);
     }
 
+    // Inline slug uniqueness check for the editor. Declared before `:id` so
+    // `/entries/slug-available` isn't swallowed by the `:id` route.
+    @Get("slug-available")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    slugAvailable(
+        @CurrentUser() user: AuthUser,
+        @Query("typeId") typeId?: string,
+        @Query("slug") slug?: string,
+        @Query("locale") locale?: string,
+        @Query("excludeId") excludeId?: string,
+    ) {
+        return this.entries.slugAvailability(user.workspaceId, typeId ?? "", slug ?? "", locale || "en", excludeId);
+    }
+
     @Get(":id")
     @RequirePermissions(PERMISSIONS.CONTENT_READ)
     get(@CurrentUser() user: AuthUser, @Param("id") id: string) {

@@ -3,18 +3,22 @@
 import { useState } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import StarterKit from "@tiptap/starter-kit";
-import Placeholder from "@tiptap/extension-placeholder";
 import Icon from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
+import { mediaUrl } from "@/lib/api";
 import { runAi, aiErrorMessage } from "@/lib/useAi";
+import { richTextExtensions, imageUploadProps } from "@/lib/tiptap";
+import { ColorMenu, EmojiMenu, TableMenu } from "./RichToolbarMenus";
+import MediaPicker from "@/components/ui/MediaPicker";
 
 /**
  * TipTap canvas (free MIT core) for the body + Main Content sections. Provides a
- * persistent (pinned) formatting toolbar — block type, marks, lists, quote, link —
- * plus a "Clear" action that strips marks/nodes back to plain paragraphs (handy for
- * pasted, pre-formatted web content), and an "AI" action that rewrites the
- * selection. StarterKit v3 already bundles bold/italic/strike/code/underline/link.
+ * persistent (pinned) formatting toolbar — undo/redo, block type, marks (bold,
+ * italic, underline, strike, inline code, highlight), links, super/subscript,
+ * lists, quote, code block, text alignment and inline images from the asset
+ * library — plus a "Clear" action that strips marks/nodes back to plain paragraphs
+ * (handy for pasted, pre-formatted web content), and an "AI" action that rewrites
+ * the selection.
  */
 const EditorCanvas = ({
     onReady,
@@ -24,21 +28,24 @@ const EditorCanvas = ({
     /** Initial HTML/content. When undefined, the editor opens empty (placeholder shows). */
     initialContent?: string;
 }) => {
+    const [aiBusy, setAiBusy] = useState(false);
+    const [aiError, setAiError] = useState<string | null>(null);
+    const [imgPicker, setImgPicker] = useState(false);
+
     const editor = useEditor({
         immediatelyRender: false,
-        extensions: [
-            StarterKit,
-            Placeholder.configure({ placeholder: "Write, or paste your content here…" }),
-        ],
+        extensions: richTextExtensions("Write, or paste your content here…"),
         content: initialContent ?? "",
         editorProps: {
             attributes: { class: "flow-prose min-h-[14rem] max-w-[44rem] mx-auto px-1 py-6 focus:outline-none" },
+            // Drag-and-drop and paste image files → upload to the asset library + insert.
+            ...imageUploadProps((msg) => {
+                setAiError(msg);
+                window.setTimeout(() => setAiError(null), 4500);
+            }),
         },
         onCreate: ({ editor }) => onReady?.(editor),
     });
-
-    const [aiBusy, setAiBusy] = useState(false);
-    const [aiError, setAiError] = useState<string | null>(null);
 
     // Reactive active-states for the toolbar (re-renders only when these change).
     const s = useEditorState({
@@ -51,12 +58,21 @@ const EditorCanvas = ({
                       underline: editor.isActive("underline"),
                       strike: editor.isActive("strike"),
                       code: editor.isActive("code"),
+                      codeBlock: editor.isActive("codeBlock"),
+                      highlight: editor.isActive("highlight"),
+                      sup: editor.isActive("superscript"),
+                      sub: editor.isActive("subscript"),
                       link: editor.isActive("link"),
                       bullet: editor.isActive("bulletList"),
                       ordered: editor.isActive("orderedList"),
+                      task: editor.isActive("taskList"),
                       quote: editor.isActive("blockquote"),
                       h2: editor.isActive("heading", { level: 2 }),
                       h3: editor.isActive("heading", { level: 3 }),
+                      alignLeft: editor.isActive({ textAlign: "left" }),
+                      alignCenter: editor.isActive({ textAlign: "center" }),
+                      alignRight: editor.isActive({ textAlign: "right" }),
+                      alignJustify: editor.isActive({ textAlign: "justify" }),
                   }
                 : null,
     });
@@ -107,6 +123,12 @@ const EditorCanvas = ({
         else editor.chain().focus().extendMarkRange("link").setLink({ href: url.trim() }).run();
     };
 
+    /** Insert an image from the asset library / a URL at the cursor (absolutized so
+     *  it loads in the editor across origins). */
+    const insertImage = (url: string) => {
+        if (url) editor.chain().focus().setImage({ src: mediaUrl(url) }).run();
+    };
+
     /** Strip all marks + reset nodes to plain paragraphs. Works on the selection, or
      *  the whole document when nothing is selected (paste → reset to plain text). */
     const clearFormatting = () => {
@@ -121,6 +143,9 @@ const EditorCanvas = ({
         <div className="flex flex-col">
             {/* Pinned toolbar */}
             <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-grey-light bg-white/80 px-1.5 py-1.5 backdrop-blur dark:border-grey-light/10 dark:bg-dark-1/80">
+                <TBtn title="Undo" onClick={() => editor.chain().focus().undo().run()}><span className="text-[1rem] leading-none">↺</span></TBtn>
+                <TBtn title="Redo" onClick={() => editor.chain().focus().redo().run()}><span className="text-[1rem] leading-none">↻</span></TBtn>
+                <Sep />
                 <BlockMenu
                     label={blockLabel}
                     onParagraph={() => editor.chain().focus().setParagraph().run()}
@@ -132,12 +157,27 @@ const EditorCanvas = ({
                 <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><span className="font-serif italic">i</span></TBtn>
                 {hasUnderline && <TBtn title="Underline" active={!!s?.underline} onClick={() => editor.chain().focus().toggleUnderline().run()}><span className="underline">U</span></TBtn>}
                 <TBtn title="Strikethrough" active={!!s?.strike} onClick={() => editor.chain().focus().toggleStrike().run()}><span className="line-through">S</span></TBtn>
+                <TBtn title="Highlight" active={!!s?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()}><Icon className="h-4 w-4 fill-current" name="edit" /></TBtn>
+                <ColorMenu editor={editor} />
                 <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><span className="font-mono text-[0.78em]">{"</>"}</span></TBtn>
                 {hasLink && <TBtn title="Link" active={!!s?.link} onClick={toggleLink}><Icon className="h-4 w-4 fill-current" name="external" /></TBtn>}
+                <TBtn title="Superscript" active={!!s?.sup} onClick={() => editor.chain().focus().toggleSuperscript().run()}><span className="text-[0.82em]">x<sup>2</sup></span></TBtn>
+                <TBtn title="Subscript" active={!!s?.sub} onClick={() => editor.chain().focus().toggleSubscript().run()}><span className="text-[0.82em]">x<sub>2</sub></span></TBtn>
                 <Sep />
                 <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><Icon className="h-4 w-4 fill-current" name="menu-collapse" /></TBtn>
                 <TBtn title="Numbered list" active={!!s?.ordered} onClick={() => editor.chain().focus().toggleOrderedList().run()}><span className="text-[0.72rem] font-bold">1.</span></TBtn>
+                <TBtn title="Checklist" active={!!s?.task} onClick={() => editor.chain().focus().toggleTaskList().run()}><span className="text-[0.9em] leading-none">☑</span></TBtn>
                 <TBtn title="Quote" active={!!s?.quote} onClick={() => editor.chain().focus().toggleBlockquote().run()}><span className="font-serif text-[1.15em] leading-none">&rdquo;</span></TBtn>
+                <TBtn title="Code block" active={!!s?.codeBlock} onClick={() => editor.chain().focus().toggleCodeBlock().run()}><span className="font-mono text-[0.7rem] font-bold">{"{}"}</span></TBtn>
+                <Sep />
+                <TBtn title="Align left" active={!!s?.alignLeft} onClick={() => editor.chain().focus().setTextAlign("left").run()}><AlignIcon dir="left" /></TBtn>
+                <TBtn title="Align center" active={!!s?.alignCenter} onClick={() => editor.chain().focus().setTextAlign("center").run()}><AlignIcon dir="center" /></TBtn>
+                <TBtn title="Align right" active={!!s?.alignRight} onClick={() => editor.chain().focus().setTextAlign("right").run()}><AlignIcon dir="right" /></TBtn>
+                <TBtn title="Justify" active={!!s?.alignJustify} onClick={() => editor.chain().focus().setTextAlign("justify").run()}><AlignIcon dir="justify" /></TBtn>
+                <Sep />
+                <EmojiMenu editor={editor} />
+                <TableMenu editor={editor} />
+                <TBtn title="Horizontal rule" onClick={() => editor.chain().focus().setHorizontalRule().run()}><span className="text-[1.1em] font-bold leading-none">―</span></TBtn>
                 <Sep />
                 <button
                     type="button"
@@ -150,6 +190,15 @@ const EditorCanvas = ({
                     Clear
                 </button>
                 <div className="ml-auto" />
+                <button
+                    type="button"
+                    onClick={() => setImgPicker(true)}
+                    title="Insert an image"
+                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-medium text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
+                >
+                    <Icon className="h-4 w-4 fill-current" name="image" />
+                    Add
+                </button>
                 <button
                     type="button"
                     onClick={() => void askAi()}
@@ -170,6 +219,7 @@ const EditorCanvas = ({
             >
                 <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><span className="font-bold">B</span></TBtn>
                 <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><span className="font-serif italic">i</span></TBtn>
+                <TBtn title="Highlight" active={!!s?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()}><Icon className="h-4 w-4 fill-current" name="edit" /></TBtn>
                 <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><span className="font-mono text-[0.78em]">{"</>"}</span></TBtn>
                 {hasLink && <TBtn title="Link" active={!!s?.link} onClick={toggleLink}><Icon className="h-4 w-4 fill-current" name="external" /></TBtn>}
                 <Sep />
@@ -192,6 +242,13 @@ const EditorCanvas = ({
 
             <EditorContent editor={editor} />
 
+            {imgPicker && (
+                <MediaPicker
+                    onSelect={(url) => insertImage(url)}
+                    onClose={() => setImgPicker(false)}
+                />
+            )}
+
             {aiError && (
                 <div role="alert" className="fixed bottom-6 left-1/2 z-50 flex max-w-[22rem] -translate-x-1/2 items-start gap-2 rounded-lg border border-error/20 bg-error/10 px-4 py-3 text-caption-1 text-error shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] backdrop-blur dark:bg-error/15">
                     <svg className="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -208,12 +265,31 @@ const EditorCanvas = ({
 
 const Sep = () => <span className="mx-0.5 h-5 w-px shrink-0 bg-grey-light dark:bg-grey-light/15" />;
 
-const TBtn = ({ active, onClick, title, children }: { active: boolean; onClick: () => void; title: string; children: React.ReactNode }) => (
+/** Four-line alignment glyph; the indented lines vary by direction. */
+const AlignIcon = ({ dir }: { dir: "left" | "center" | "right" | "justify" }) => {
+    const lines: Record<typeof dir, [string, string]> = {
+        left: ["M3 9h12", "M3 15h12"],
+        center: ["M6 9h12", "M6 15h12"],
+        right: ["M9 9h12", "M9 15h12"],
+        justify: ["M3 9h18", "M3 15h18"],
+    };
+    const [a, b] = lines[dir];
+    return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+            <path d="M3 6h18" />
+            <path d={a} />
+            <path d="M3 12h18" />
+            <path d={b} />
+        </svg>
+    );
+};
+
+const TBtn = ({ active, onClick, title, children }: { active?: boolean; onClick: () => void; title: string; children: React.ReactNode }) => (
     <button
         type="button"
         title={title}
         aria-label={title}
-        aria-pressed={active}
+        aria-pressed={!!active}
         onClick={onClick}
         className={cn(
             "inline-flex h-8 w-8 items-center justify-center rounded-lg text-body text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3",

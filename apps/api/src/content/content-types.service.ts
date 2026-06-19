@@ -4,30 +4,26 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
 import { isHomeType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
+import { normalizeSchemaFields, toCamelCase } from "./naming";
 
 @Injectable()
 export class ContentTypesService {
     constructor(private readonly prisma: PrismaService) {}
 
+    /** API IDs are camelCase machine names (e.g. "blogPost"), bounded to 40 chars. */
     private slug(name: string) {
-        return (
-            name
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "_")
-                .replace(/^_+|_+$/g, "")
-                .slice(0, 40) || "type"
-        );
+        return toCamelCase(name).slice(0, 40) || "type";
     }
 
     private async uniqueApiId(workspaceId: string, base: string) {
         let apiId = base;
-        let n = 1;
+        let n = 2;
         while (
             await this.prisma.contentType.findUnique({
                 where: { workspaceId_apiId: { workspaceId, apiId } },
             })
         ) {
-            apiId = `${base}_${n++}`;
+            apiId = `${base}${n++}`;
         }
         return apiId;
     }
@@ -154,7 +150,8 @@ export class ContentTypesService {
                 apiId,
                 pluralApiId: pluralize(apiId),
                 kind: dto.kind ?? "COLLECTION",
-                schema: dto.schema as object,
+                // Field keys are coerced to unique camelCase machine names before storage.
+                schema: normalizeSchemaFields(dto.schema) as object,
             },
         });
         return this.shape(t);
@@ -168,7 +165,7 @@ export class ContentTypesService {
         if (!existing) throw new NotFoundException("Content type not found.");
         const data: Record<string, unknown> = {};
         if (dto.name !== undefined) data.name = dto.name;
-        if (dto.schema !== undefined) data.schema = dto.schema as object;
+        if (dto.schema !== undefined) data.schema = normalizeSchemaFields(dto.schema) as object;
         if (dto.draftAndPublish !== undefined) data.draftAndPublish = dto.draftAndPublish;
 
         // Allow renaming the machine identifier only before any content exists —

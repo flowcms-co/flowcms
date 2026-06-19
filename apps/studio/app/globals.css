@@ -395,6 +395,62 @@ html.dark {
     .flow-prose strong {
         @apply font-semibold text-black dark:text-white;
     }
+    /* Fenced code block (distinct from the inline-code pill above). */
+    .flow-prose pre {
+        @apply overflow-x-auto rounded-xl bg-ink px-4 py-3 text-[0.85em] leading-relaxed text-lilac scrollbar-thin;
+    }
+    .flow-prose pre code {
+        @apply bg-transparent p-0 text-inherit dark:bg-transparent;
+    }
+    /* Highlight mark (TipTap Highlight extension). */
+    .flow-prose mark {
+        @apply rounded bg-warning/30 px-0.5 text-inherit dark:bg-warning/25;
+    }
+    /* Inline images inserted from the asset library / a URL. */
+    .flow-prose img {
+        @apply my-4 h-auto max-w-full rounded-xl;
+    }
+    /* The selected image node gets an outline so it's clearly editable/deletable. */
+    .flow-prose img.ProseMirror-selectednode {
+        @apply outline outline-2 outline-primary;
+    }
+    .flow-prose sub,
+    .flow-prose sup {
+        @apply text-[0.75em];
+    }
+    /* Task lists (TipTap TaskList/TaskItem) — checkbox + label, nestable. */
+    .flow-prose ul[data-type="taskList"] {
+        @apply list-none space-y-1.5 pl-0;
+    }
+    .flow-prose ul[data-type="taskList"] li {
+        @apply flex items-start gap-2;
+    }
+    .flow-prose ul[data-type="taskList"] li > label {
+        @apply mt-1 flex-shrink-0 select-none;
+    }
+    .flow-prose ul[data-type="taskList"] li > div {
+        @apply min-w-0 flex-1;
+    }
+    .flow-prose ul[data-type="taskList"] input[type="checkbox"] {
+        @apply h-4 w-4 cursor-pointer accent-primary;
+    }
+    /* Tables (TipTap Table) — bordered cells, shaded header, resizable columns. */
+    .flow-prose table {
+        @apply my-4 w-full table-fixed border-collapse overflow-hidden text-[0.95em];
+    }
+    .flow-prose table td,
+    .flow-prose table th {
+        @apply relative min-w-[3rem] border border-grey-light px-3 py-1.5 align-top dark:border-grey-light/20;
+    }
+    .flow-prose table th {
+        @apply bg-lavender-mist/60 text-left font-semibold dark:bg-dark-3/60;
+    }
+    .flow-prose table .selectedCell::after {
+        @apply pointer-events-none absolute inset-0 bg-primary/10 content-[''];
+    }
+    .flow-prose table .column-resize-handle {
+        @apply absolute -right-px top-0 bottom-0 w-1 cursor-col-resize bg-primary/40;
+    }
     /* Placeholder for empty editor (TipTap Placeholder extension) */
     .flow-prose p.is-editor-empty:first-child::before {
         @apply text-grey float-left h-0 pointer-events-none;

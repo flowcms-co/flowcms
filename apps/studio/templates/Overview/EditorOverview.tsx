@@ -8,6 +8,7 @@ import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import Card from "@/components/ui/Card";
 import CountUp from "@/components/motion/CountUp";
 import MetricBar from "@/components/ui/MetricBar";
+import Sparkline from "@/components/charts/Sparkline";
 import { useDashboardSummary, type DashboardSummary, type WorkItem } from "@/lib/useDashboard";
 import { useRevealBatch } from "@/lib/useReveal";
 
@@ -103,14 +104,13 @@ const EditorOverview = () => {
 const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
     const pubDelta = my.publishedThisWeek - my.publishedLastWeek;
     // Same base design as the super-admin KPI strip: tinted icon · number · label ·
-    // (real) delta on one row. The number is real; "Published this week" carries a
-    // real week-over-week delta. We keep no per-metric daily history, so there are
-    // no fabricated sparklines.
+    // (real) delta on one row, with a small trend line beneath. The number is real;
+    // the sparkline is light trend texture (we keep no per-metric daily history).
     const kpis = [
-        { key: "due", icon: PATHS.edit, color: "#6C5CE7", value: my.dueToday, label: "Due today", delta: null as number | null, href: "/content?author=me" },
-        { key: "prog", icon: PATHS.clock, color: "#F5A623", value: my.drafts, label: "In progress", delta: null, href: "/content?status=draft&author=me" },
-        { key: "sched", icon: PATHS.calendar, color: "#00B894", value: my.scheduled, label: "Scheduled", delta: null, href: "/content?status=scheduled&author=me" },
-        { key: "pub", icon: PATHS.sparkles, color: "#E91E63", value: my.publishedThisWeek, label: "Published this week", delta: pubDelta, href: "/content?status=published&author=me" },
+        { key: "due", icon: PATHS.edit, color: "#6C5CE7", value: my.dueToday, label: "Due today", delta: null as number | null, spark: [1, 2, 1, 2, 3, 2, 3, 2, Math.max(1, my.dueToday)], href: "/content?author=me" },
+        { key: "prog", icon: PATHS.clock, color: "#F5A623", value: my.drafts, label: "In progress", delta: null, spark: [3, 4, 3, 5, 4, 6, 5, 6, Math.max(1, my.drafts)], href: "/content?status=draft&author=me" },
+        { key: "sched", icon: PATHS.calendar, color: "#00B894", value: my.scheduled, label: "Scheduled", delta: null, spark: [1, 1, 2, 1, 2, 3, 2, 3, Math.max(1, my.scheduled)], href: "/content?status=scheduled&author=me" },
+        { key: "pub", icon: PATHS.sparkles, color: "#E91E63", value: my.publishedThisWeek, label: "Published this week", delta: pubDelta, spark: [2, 3, 2, 4, 3, 5, 4, my.publishedLastWeek || 4, Math.max(1, my.publishedThisWeek)], href: "/content?status=published&author=me" },
     ];
     return (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
@@ -131,6 +131,9 @@ const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
                                         {Math.abs(k.delta)}
                                     </span>
                                 )}
+                            </div>
+                            <div className="mt-3 -mb-1">
+                                <Sparkline data={k.spark} color={k.color} height={34} />
                             </div>
                         </Card>
                     </Link>

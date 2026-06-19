@@ -14,7 +14,9 @@ import FilterBar, { type Filters, type SortKey, type SortDir } from "@/templates
 import SeoScoreBadge from "@/templates/ContentPage/SeoScoreBadge";
 import BulkActionBar, { type BulkAction } from "@/templates/ContentPage/BulkActionBar";
 import VersionsModal from "@/templates/ContentPage/VersionsModal";
-import { api } from "@/lib/api";
+import ScheduleModal from "@/components/editor/ScheduleModal";
+import { api, ApiError } from "@/lib/api";
+import { useAuth } from "@/components/providers/AuthProvider";
 import { useJobs } from "@/components/providers/JobsProvider";
 import { formatDate } from "@/lib/format";
 import CountUp from "@/components/motion/CountUp";
@@ -134,6 +136,10 @@ const ContentTable = () => {
     const [historyId, setHistoryId] = useState<string | null>(null);
     const [translate, setTranslate] = useState<EntryRow | null>(null);
     const [bulkBusy, setBulkBusy] = useState(false);
+    // Ids awaiting a schedule date (a single row, or the current bulk selection).
+    const [scheduleIds, setScheduleIds] = useState<string[] | null>(null);
+    const { can } = useAuth();
+    const canSchedule = can("content.publish");
 
     const listTopRef = useRef<HTMLDivElement>(null);
     useScrollResetOnChange(listTopRef, `${filters.status}|${filters.type}|${localeFilter}`);
@@ -197,12 +203,52 @@ const ContentTable = () => {
     const bulkAction = async (action: BulkAction) => {
         const ids = [...selected];
         if (!ids.length) return;
+        // Scheduling needs a date/time, so it opens the calendar picker instead of
+        // running a background job. The rest are fire-and-forget bulk jobs.
+        if (action === "schedule") {
+            setScheduleIds(ids);
+            return;
+        }
+        // Duplicate has no bulk job endpoint; fan out the per-item duplicate.
+        if (action === "duplicate") {
+            setBulkBusy(true);
+            try {
+                await Promise.allSettled(ids.map((id) => api(`/entries/${id}/duplicate`, { method: "POST" })));
+                setSelected(new Set());
+                await load();
+            } finally {
+                setBulkBusy(false);
+            }
+            return;
+        }
         if (action === "delete" && !(await confirm({ title: `Delete ${ids.length} item${ids.length === 1 ? "" : "s"}?`, message: "This can't be undone.", confirmLabel: "Delete", tone: "danger" }))) return;
         setBulkBusy(true);
         try {
             await enqueue(`/entries/bulk/${action}`, { ids });
             setSelected(new Set());
             setTimeout(() => void load(), 1500);
+        } finally {
+            setBulkBusy(false);
+        }
+    };
+    /** Apply the chosen publish time to every queued id (a row or the bulk set). */
+    const doSchedule = async (iso: string) => {
+        const ids = scheduleIds ?? [];
+        setScheduleIds(null);
+        if (!ids.length) return;
+        setBulkBusy(true);
+        try {
+            const results = await Promise.allSettled(
+                ids.map((id) => api(`/entries/${id}`, { method: "PATCH", body: JSON.stringify({ status: "SCHEDULED", scheduledAt: iso }) })),
+            );
+            const failed = results.filter((r) => r.status === "rejected");
+            if (failed.length) {
+                const first = failed[0] as PromiseRejectedResult;
+                const msg = first.reason instanceof ApiError ? first.reason.message : "Some items couldn't be scheduled.";
+                window.alert(failed.length === ids.length ? msg : `${ids.length - failed.length} scheduled. ${failed.length} couldn't be: ${msg}`);
+            }
+            setSelected(new Set());
+            await load();
         } finally {
             setBulkBusy(false);
         }
@@ -351,6 +397,7 @@ const ContentTable = () => {
                                 onSelect={(c) => toggleOne(row.id, c)}
                                 onDuplicate={() => void duplicate(row.id)}
                                 onMoveToDraft={() => void moveToDraft(row.id)}
+                                onSchedule={canSchedule ? () => setScheduleIds([row.id]) : undefined}
                                 onDelete={() => void remove(row.id)}
                                 onHistory={() => setHistoryId(row.id)}
                                 onTranslate={multiLocale ? () => setTranslate(row) : undefined}
@@ -379,7 +426,9 @@ const ContentTable = () => {
                 </div>
             )}
 
-            <BulkActionBar count={selected.size} onClear={() => setSelected(new Set())} onAction={bulkAction} busy={bulkBusy} />
+            <BulkActionBar count={selected.size} onClear={() => setSelected(new Set())} onAction={bulkAction} busy={bulkBusy} canSchedule={canSchedule} />
+
+            <ScheduleModal open={!!scheduleIds} onClose={() => setScheduleIds(null)} onSchedule={(_label, iso) => void doSchedule(iso)} />
 
             <VersionsModal
                 entryId={historyId}
@@ -463,6 +512,7 @@ const Row = ({
     onSelect,
     onDuplicate,
     onMoveToDraft,
+    onSchedule,
     onDelete,
     onHistory,
     onTranslate,
@@ -472,6 +522,7 @@ const Row = ({
     onSelect: (checked: boolean) => void;
     onDuplicate: () => void;
     onMoveToDraft: () => void;
+    onSchedule?: () => void;
     onDelete: () => void;
     onHistory: () => void;
     onTranslate?: () => void;
@@ -551,6 +602,9 @@ const Row = ({
                         <RowMenuItem icon="clock" label="Version history" onClick={onHistory} />
                         {onTranslate && <RowMenuItem icon="grid" label="Add translation" onClick={onTranslate} />}
                         <RowMenuItem icon="copy" label="Duplicate" onClick={onDuplicate} />
+                        {onSchedule && row.status !== "live" && (
+                            <RowMenuItem icon="calendar" label={row.status === "scheduled" ? "Reschedule…" : "Schedule…"} onClick={onSchedule} />
+                        )}
                         <RowMenuItem icon="document" label="Move to draft" onClick={onMoveToDraft} />
                         <div className="my-1 h-px bg-grey-light dark:bg-grey-light/10" />
                         <RowMenuItem icon="trash" label="Delete" onClick={onDelete} danger />

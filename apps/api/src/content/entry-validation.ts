@@ -49,12 +49,15 @@ export type ComponentMap = Record<string, SchemaField[]>;
  * the exact key while still enforcing presence + type.
  */
 function candidateKeys(name: string): string[] {
-    const lower = name.trim().toLowerCase();
-    const parts = lower.split(/\s+/);
+    const raw = name.trim();
+    // Split camel humps too, so a camelCase field name ("coverImage") still resolves
+    // data keyed in any earlier convention ("Cover image", "cover_image", "cover").
+    const lower = raw.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+    const parts = lower.split(/[\s_-]+/).filter(Boolean);
     const camel = parts.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
     const snake = parts.join("_");
     const first = parts[0];
-    return [...new Set([name, lower, camel, snake, first])];
+    return [...new Set([raw, raw.toLowerCase(), lower, camel, snake, first].filter(Boolean))];
 }
 
 function valueFor(data: Record<string, unknown>, name: string): unknown {

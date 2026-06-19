@@ -43,14 +43,14 @@ export class DashboardService {
             this.prisma.contentType.findMany({ where: { workspaceId }, select: { id: true, name: true } }),
             this.prisma.membership.findMany({
                 where: { workspaceId },
-                include: { user: { select: { id: true, name: true, email: true } }, role: { select: { key: true, name: true } } },
+                include: { user: { select: { id: true, name: true, email: true, avatarUrl: true, avatarStyle: true } }, role: { select: { key: true, name: true } } },
             }),
             this.prisma.usageRecord.count({ where: { workspaceId, userId, createdAt: { gte: new Date(since(30)) } } }),
             this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { defaultWeeklyGoal: true } }),
         ]);
 
         const typeName = new Map(types.map((t) => [t.id, t.name]));
-        const member = new Map(memberships.map((m) => [m.user.id, { name: m.user.name || m.user.email, role: m.role.key }]));
+        const member = new Map(memberships.map((m) => [m.user.id, { name: m.user.name || m.user.email, role: m.role.key, avatarUrl: m.user.avatarUrl, avatarStyle: m.user.avatarStyle }]));
         const since30 = since(30);
 
         type LiteEntry = (typeof entries)[number];
@@ -88,15 +88,23 @@ export class DashboardService {
         const pipeline = { draft: by("DRAFT"), review: by("IN_REVIEW"), approved: by("APPROVED"), scheduled: by("SCHEDULED"), published: by("PUBLISHED") };
         const published30d = entries.filter((e) => e.status === "PUBLISHED" && e.publishedAt && +new Date(e.publishedAt) >= since30).length;
 
-        const activity = entries.slice(0, 8).map((e) => ({
-            id: e.id,
-            person: e.authorId ? member.get(e.authorId)?.name ?? "Someone" : "System",
-            role: e.authorId ? member.get(e.authorId)?.role ?? "editor" : "system",
-            action: ACTION[e.status] ?? "edited",
-            target: title(e),
-            type: typeName.get(e.contentTypeId) ?? "Content",
-            at: e.updatedAt,
-        }));
+        const activity = entries.slice(0, 8).map((e) => {
+            const m = e.authorId ? member.get(e.authorId) : undefined;
+            return {
+                id: e.id,
+                person: m?.name ?? (e.authorId ? "Someone" : "System"),
+                role: m?.role ?? (e.authorId ? "editor" : "system"),
+                // Carry the actor's identity so the activity feed renders their real
+                // avatar (uploaded image or chosen character), not just initials.
+                authorId: e.authorId,
+                avatarUrl: m?.avatarUrl ?? null,
+                avatarStyle: m?.avatarStyle ?? null,
+                action: ACTION[e.status] ?? "edited",
+                target: title(e),
+                type: typeName.get(e.contentTypeId) ?? "Content",
+                at: e.updatedAt,
+            };
+        });
 
         const reviewQueue = entries
             .filter((e) => e.status === "IN_REVIEW")

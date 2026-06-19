@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
+import Avatar from "@/components/ui/Avatar";
 import Checkbox from "@/components/ui/Checkbox";
 import EmptyState from "@/components/ui/EmptyState";
 import {
@@ -16,7 +17,7 @@ import {
 } from "@/mocks/dashboard";
 import { useDashboardSummary } from "@/lib/useDashboard";
 
-/** Card-local activity row shape (live data has no avatar; we show initials instead). */
+/** Card-local activity row shape (carries the actor's avatar identity). */
 type ActivityRow = {
     id: string;
     person: string;
@@ -25,6 +26,9 @@ type ActivityRow = {
     target: string;
     type: string;
     time: string;
+    authorId?: string | null;
+    avatarUrl?: string | null;
+    avatarStyle?: string | null;
 };
 
 const ROLE_BUCKET: Record<string, ActivityRole> = { super_admin: "super", admin: "admin", search_strategist: "seo", editor: "editor" };
@@ -50,7 +54,7 @@ const ActivityCard = () => {
     const summary = useDashboardSummary();
 
     // Map live audit-log activity into the card's row shape (role bucket, known
-    // action). Real activity carries no avatar, so we render an initials badge.
+    // action), carrying the actor's avatar identity so we show their real photo.
     const entries: ActivityRow[] = (summary?.activity ?? []).map((a) => {
         const action = (ACTIONS.has(a.action as ActivityAction) ? a.action : "edited") as ActivityAction;
         return {
@@ -61,6 +65,9 @@ const ActivityCard = () => {
             target: a.target,
             type: a.type,
             time: relTime(a.at),
+            authorId: a.authorId,
+            avatarUrl: a.avatarUrl,
+            avatarStyle: a.avatarStyle,
         };
     });
 
@@ -153,15 +160,15 @@ const ActivityCard = () => {
                                     transition={{ duration: 0.4, delay: i * 0.05 }}
                                     className="flex items-center gap-4 px-3 py-3.5 -mx-3 rounded-2xl transition-colors hover:bg-lavender-mist/70 dark:hover:bg-dark-3/60"
                                 >
-                                    {/* Initials badge + action badge (live activity has no photo) */}
+                                    {/* Actor avatar (uploaded photo or chosen character; initials fallback) + action badge */}
                                     <span className="relative shrink-0 w-11 h-11">
-                                        <span
-                                            className="flex h-11 w-11 items-center justify-center rounded-full text-title font-semibold uppercase"
-                                            style={{ backgroundColor: `${rm.color}1a`, color: rm.color }}
-                                            aria-hidden
-                                        >
-                                            {e.person.trim().charAt(0) || "?"}
-                                        </span>
+                                        <Avatar
+                                            userId={e.authorId}
+                                            src={e.avatarUrl}
+                                            character={e.avatarStyle}
+                                            name={e.person}
+                                            size={44}
+                                        />
                                         <span
                                             className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center w-5 h-5 rounded-full border-2 border-white dark:border-dark-1"
                                             style={{ backgroundColor: act.color }}

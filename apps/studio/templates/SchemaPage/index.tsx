@@ -11,7 +11,9 @@ import SaveStatus from "@/components/ui/SaveStatus";
 import {
     FIELD_TYPES,
     SCHEMA_JSONLD,
+    camelCaseKey,
     globalSchemaDefaults,
+    normalizeFieldKeys,
     type ContentTypeSchema,
     type FieldType,
     type SchemaField,
@@ -140,17 +142,23 @@ const SchemaPage = () => {
         if (!active) return;
         setSaving(true);
         try {
+            // Auto-fix field keys + API ID to unique camelCase before saving (the
+            // backend normalizes too; we mirror it so the UI shows the stored value).
+            const fields = normalizeFieldKeys(active.fields);
+            const apiId = active.apiId ? camelCaseKey(active.apiId) : active.apiId;
             const updated = await api<ContentTypeSchema>(`/content-types/${active.id}`, {
                 method: "PATCH",
                 body: JSON.stringify({
                     name: active.name,
                     // Only send apiId while the type is empty; the backend rejects a
                     // change once entries exist (or a component is referenced).
-                    ...((active.entryCount ?? 0) === 0 && active.apiId ? { apiId: active.apiId } : {}),
-                    schema: { icon: active.icon, color: active.color, jsonLd: active.jsonLd, fields: active.fields },
+                    ...((active.entryCount ?? 0) === 0 && apiId ? { apiId } : {}),
+                    schema: { icon: active.icon, color: active.color, jsonLd: active.jsonLd, fields },
                 }),
             });
-            setCollection((prev) => prev.map((t) => (t.id === active.id ? { ...t, apiId: updated.apiId } : t)));
+            setCollection((prev) =>
+                prev.map((t) => (t.id === active.id ? { ...t, apiId: updated.apiId, fields: updated.fields ?? fields } : t)),
+            );
             setDirty(false);
         } catch (e) {
             window.alert(e instanceof Error ? e.message : "Could not save.");
@@ -265,9 +273,14 @@ const SchemaPage = () => {
                                                 <input
                                                     value={active.apiId ?? ""}
                                                     onChange={(e) => patchActive({ apiId: e.target.value })}
+                                                    onBlur={(e) => {
+                                                        // Auto-fix the API ID to camelCase (silently).
+                                                        const c = camelCaseKey(e.target.value);
+                                                        if (c && c !== active.apiId) patchActive({ apiId: c });
+                                                    }}
                                                     spellCheck={false}
                                                     aria-label="API ID"
-                                                    title="Machine name used by the delivery API / referenced by other types."
+                                                    title="Machine name (camelCase) used by the delivery API / referenced by other types."
                                                     className="bg-transparent font-mono text-grey outline-none focus:text-primary dark:focus:text-lilac"
                                                 />
                                             ) : (
@@ -433,7 +446,18 @@ const FieldRow = ({
 
                 {(isComp || isZone) && <Icon className="w-4 h-4 fill-primary shrink-0" name={isZone ? "grid" : "copy"} />}
 
-                <input value={field.name} onChange={(e) => onUpdate({ name: e.target.value })} title="Field name (the data key). Add a friendly label below to change how it reads in the editor." className="flow-input !py-2 min-w-0 flex-1 basis-40" />
+                <input
+                    value={field.name}
+                    onChange={(e) => onUpdate({ name: e.target.value })}
+                    onBlur={(e) => {
+                        // Auto-fix the data key to camelCase (silently). Uniqueness across
+                        // siblings is resolved on save. Add a friendly label for display.
+                        const c = camelCaseKey(e.target.value);
+                        if (c && c !== field.name) onUpdate({ name: c });
+                    }}
+                    title="Field key (the data key, camelCase). Add a friendly label below to change how it reads in the editor."
+                    className="flow-input !py-2 min-w-0 flex-1 basis-40"
+                />
 
                 <Select
                     variant="field"

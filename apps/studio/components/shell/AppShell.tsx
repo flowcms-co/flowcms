@@ -108,7 +108,7 @@ const AppShell = ({ children }: { children: ReactNode }) => {
 
             <div className="flex min-w-0 flex-1 flex-col">
                 <Topbar onMenu={() => setMobileOpen(true)} />
-                <main className="mx-auto w-full max-w-[80rem] px-4 py-8 md:px-6 xl:px-8">
+                <main className="mx-auto w-full max-w-[90rem] px-4 py-8 md:px-6 xl:px-8">
                     {children}
                 </main>
             </div>

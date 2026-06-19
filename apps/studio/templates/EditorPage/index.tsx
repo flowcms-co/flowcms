@@ -11,6 +11,7 @@ import Select from "@/components/ui/Select";
 import EditorCanvas from "@/components/editor/EditorCanvas";
 import RightPanel from "@/components/editor/RightPanel";
 import FieldsForm from "@/components/editor/FieldsForm";
+import ScheduleModal from "@/components/editor/ScheduleModal";
 import SectionEditor, { EditorStatsBar, type ComponentDef, type Section } from "@/components/editor/SectionEditor";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
@@ -29,6 +30,7 @@ type ApiEntry = {
     title: string;
     slug: string | null;
     status: string;
+    locale?: string;
     contentType: { id: string; name: string };
     data: Record<string, unknown> | null;
     // Draft-over-published overlay: a live entry with pending, not-yet-published edits.
@@ -40,6 +42,14 @@ type ApiEntry = {
 type ApiType = { id: string; name: string; fields: SchemaField[] };
 /** Reusable component as returned by /content-types/components. */
 type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
+
+/** Turn a page title into a URL slug: "Storm Damage Restoration" → "storm-damage-restoration". */
+const slugify = (s: string) =>
+    s
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",
@@ -117,6 +127,13 @@ const EditorPage = () => {
     const [entryId, setEntryId] = useState<string | null>(idParam);
     const [title, setTitle] = useState("Untitled");
     const [slug, setSlug] = useState("");
+    const [locale, setLocale] = useState("en");
+    // Slug auto-tracks the title (like the meta title) until the user edits it; once
+    // they type their own slug it stops following the title. Clearing the slug
+    // re-enables auto-tracking.
+    const [slugEdited, setSlugEdited] = useState(false);
+    // Inline slug uniqueness: a slug is valid for only one page per type + locale.
+    const [slugCheck, setSlugCheck] = useState<{ status: "idle" | "checking" | "ok" | "taken"; suggestion?: string }>({ status: "idle" });
     const [status, setStatus] = useState("DRAFT");
     const [initialBody, setInitialBody] = useState<string>("");
     const [entryData, setEntryData] = useState<Record<string, unknown>>({});
@@ -132,6 +149,7 @@ const EditorPage = () => {
     const [draftApproved, setDraftApproved] = useState(false);
     // Approval state for the primary action button (Submit for approval → Approve → Publish).
     const [review, setReview] = useState<ReviewInfo | null>(null);
+    const [scheduleOpen, setScheduleOpen] = useState(false);
     const { can } = useAuth();
 
     // Two-way live link to the preview tab. `localEdits` ticks only on edits made
@@ -171,6 +189,8 @@ const EditorPage = () => {
                     if (cancelled) return;
                     setTitle(e.title || "Untitled");
                     setSlug(e.slug ?? "");
+                    setSlugEdited(!!(e.slug && e.slug.trim()));
+                    setLocale(e.locale || "en");
                     setStatus(e.status);
                     setTypeId(e.contentType.id);
                     setInitialBody(typeof e.data?.body === "string" ? (e.data.body as string) : "");
@@ -243,6 +263,12 @@ const EditorPage = () => {
     }, [sections, editor, initialBody, hasBody, rev]);
 
     const persist = useCallback(async (): Promise<string | null> => {
+        // Block saving a slug that already belongs to another page (the server also
+        // rejects it; this surfaces the conflict before the round-trip).
+        if (slugCheck.status === "taken") {
+            setError(`That slug is already in use${slugCheck.suggestion ? `. Try “${slugCheck.suggestion}”.` : "."}`);
+            return null;
+        }
         // Send the full field data (the backend merges it) plus the rich-text body
         // when the type has one, and the slug from its dedicated input.
         const data: Record<string, unknown> = { ...entryData };
@@ -267,7 +293,7 @@ const EditorPage = () => {
         setEntryId(created.id);
         router.replace(`/content/editor?id=${created.id}`);
         return created.id;
-    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router]);
+    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router, slugCheck]);
 
     /** Pull the approval summary so the primary button can show the right step. */
     const loadReview = useCallback(async () => {
@@ -285,6 +311,44 @@ const EditorPage = () => {
     useEffect(() => {
         void loadReview();
     }, [loadReview, status]);
+
+    // Inline slug uniqueness (debounced). A slug is valid for only one page within a
+    // content type + locale, so we ask the API as the user types and surface a
+    // conflict + a free suggestion before they try to save.
+    useEffect(() => {
+        const s = slug.trim();
+        if (!s || !typeId) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when the slug is cleared
+            setSlugCheck({ status: "idle" });
+            return;
+        }
+        setSlugCheck((c) => (c.status === "checking" ? c : { status: "checking" }));
+        let cancelled = false;
+        const t = setTimeout(async () => {
+            try {
+                const qs = new URLSearchParams({ typeId, slug: s, locale });
+                if (entryId) qs.set("excludeId", entryId);
+                const r = await api<{ available: boolean; suggestion?: string }>(`/entries/slug-available?${qs.toString()}`);
+                if (cancelled) return;
+                // Auto mode (slug tracking the title): silently adopt the next free slug
+                // (e.g. storm-damage-restoration-01) instead of asking the user. Manual
+                // mode keeps the inline "already used" prompt so they choose their own.
+                if (!r.available && !slugEdited && r.suggestion) {
+                    setSlug(r.suggestion);
+                    setSlugCheck({ status: "ok" });
+                    bump();
+                } else {
+                    setSlugCheck(r.available ? { status: "ok" } : { status: "taken", suggestion: r.suggestion });
+                }
+            } catch {
+                if (!cancelled) setSlugCheck({ status: "idle" }); // a transient failure shouldn't block saving
+            }
+        }, 400);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [slug, typeId, locale, entryId, slugEdited, bump]);
 
     /** Step 1 of a fresh page: save it and send it to a reviewer. */
     const submitForApproval = async () => {
@@ -322,6 +386,29 @@ const EditorPage = () => {
         }
     };
 
+    /** Schedule the entry to go live at `iso`: save the latest content, then move it
+     *  to SCHEDULED with the chosen timestamp (the content scheduler publishes it
+     *  when the time arrives). Requires publish rights + a complete, approved entry. */
+    const doSchedule = async (iso: string) => {
+        setScheduleOpen(false);
+        setSaveState("saving");
+        setError(null);
+        try {
+            const id = await persist();
+            if (!id) {
+                setSaveState("dirty");
+                return;
+            }
+            const e = await api<ApiEntry>(`/entries/${id}`, { method: "PATCH", body: JSON.stringify({ status: "SCHEDULED", scheduledAt: iso }) });
+            setStatus(e.status);
+            setSaveState("saved");
+            await loadReview();
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Couldn't schedule this content.");
+            setSaveState("dirty");
+        }
+    };
+
     /** Publish an already-approved entry (no re-save, which would clear approval). */
     const publishNow = async () => {
         if (!entryId) return;
@@ -345,6 +432,8 @@ const EditorPage = () => {
             const e = await api<ApiEntry>(`/entries/${entryId}`);
             setTitle(e.title || "Untitled");
             setSlug(e.slug ?? "");
+            setSlugEdited(!!(e.slug && e.slug.trim()));
+            setLocale(e.locale || "en");
             setStatus(e.status);
             setEntryData((e.data ?? {}) as Record<string, unknown>);
             setHasDraft(!!e.hasDraft);
@@ -506,7 +595,10 @@ const EditorPage = () => {
      *  in place). Updates fields without re-broadcasting; bumpRemote feeds autosave. */
     const applyRemoteDraft = useCallback((draft: PreviewDraft) => {
         if (draft.title !== undefined) setTitle(draft.title || "Untitled");
-        if (draft.slug !== undefined) setSlug(draft.slug ?? "");
+        if (draft.slug !== undefined) {
+            setSlug(draft.slug ?? "");
+            setSlugEdited(!!(draft.slug && draft.slug.trim()));
+        }
         if (draft.data) {
             const { body, ...rest } = draft.data as Record<string, unknown>;
             setEntryData(rest);
@@ -591,7 +683,10 @@ const EditorPage = () => {
                     <input
                         value={title}
                         onChange={(e) => {
-                            setTitle(e.target.value);
+                            const t = e.target.value;
+                            setTitle(t);
+                            // Auto-fill the slug from the title until the user customizes it.
+                            if (!slugEdited) setSlug(slugify(t));
                             bump();
                         }}
                         placeholder="Untitled"
@@ -710,12 +805,21 @@ const EditorPage = () => {
                             </button>
                         );
                     })()}
+                    {/* Schedule publish — available to publishers once the entry can go
+                        live (approved, already scheduled, or — when approvals aren't
+                        enforced — a draft). Sets the entry to SCHEDULED at the chosen time. */}
+                    {entryId && can("content.publish") && status !== "PUBLISHED" && (status === "APPROVED" || status === "SCHEDULED" || (status === "DRAFT" && review?.enforced === false)) && (
+                        <button type="button" onClick={() => setScheduleOpen(true)} className="btn-ghost btn-md" title="Schedule publish">
+                            <Icon className="h-4 w-4 fill-current" name="calendar" />
+                            <span className="hidden sm:inline">{status === "SCHEDULED" ? "Reschedule" : "Schedule"}</span>
+                        </button>
+                    )}
                     <button
                         type="button"
                         onClick={save}
-                        disabled={saveState !== "dirty"}
+                        disabled={saveState !== "dirty" || slugCheck.status === "taken"}
                         className="btn-primary btn-md min-w-[4.75rem] disabled:opacity-45"
-                        title={saveState === "saved" ? "All changes saved" : "Save changes"}
+                        title={slugCheck.status === "taken" ? "Fix the duplicate slug to save" : saveState === "saved" ? "All changes saved" : "Save changes"}
                     >
                         Save
                     </button>
@@ -744,19 +848,43 @@ const EditorPage = () => {
                     <div className="grow overflow-y-auto scrollbar-thin px-3 sm:px-5">
                     {ready ? (
                         <div className="flex w-full min-w-0 flex-col gap-4 py-6">
-                            {/* Slug — the page's URL path. */}
+                            {/* Slug — the page's URL path. Validated inline to be unique
+                                per content type + locale (one slug, one page). */}
                             <label className="flex flex-col gap-1.5">
                                 <span className="text-caption-1 text-grey">Slug</span>
                                 <input
                                     value={slug}
                                     onChange={(e) => {
-                                        setSlug(e.target.value);
+                                        const v = e.target.value;
+                                        setSlug(v);
+                                        // Editing the slug stops it tracking the title; clearing it resumes.
+                                        setSlugEdited(v.trim() !== "");
                                         bump();
                                     }}
                                     placeholder="page-url-slug"
                                     aria-label="Slug"
-                                    className="flow-input font-mono"
+                                    aria-invalid={slugCheck.status === "taken"}
+                                    className={cn("flow-input font-mono", slugCheck.status === "taken" && "!border-error focus:!border-error")}
                                 />
+                                {slugCheck.status === "checking" && <span className="text-caption-2 text-grey">Checking availability…</span>}
+                                {slugCheck.status === "ok" && <span className="text-caption-2 text-success">This slug is available.</span>}
+                                {slugCheck.status === "taken" && (
+                                    <span className="flex flex-wrap items-center gap-1.5 text-caption-2 text-error">
+                                        This slug is already used by another page. Choose a different one.
+                                        {slugCheck.suggestion && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSlug(slugCheck.suggestion!);
+                                                    bump();
+                                                }}
+                                                className="font-semibold text-primary underline-offset-2 hover:underline dark:text-lilac"
+                                            >
+                                                Use “{slugCheck.suggestion}”
+                                            </button>
+                                        )}
+                                    </span>
+                                )}
                             </label>
 
                             {/* Schema-driven fields (Text, Number, components…) — the
@@ -846,6 +974,8 @@ const EditorPage = () => {
                     </div>
                 </aside>
             </div>
+
+            <ScheduleModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} onSchedule={(_label, iso) => void doSchedule(iso)} />
         </div>
     );
 };

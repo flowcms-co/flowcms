@@ -4,7 +4,7 @@ import { Transition } from "@headlessui/react";
 import Icon from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
 
-export type BulkAction = "publish" | "unpublish" | "draft" | "delete";
+export type BulkAction = "publish" | "schedule" | "duplicate" | "unpublish" | "draft" | "delete";
 
 /**
  * Floating bulk-action bar. Slides up from the bottom when ≥1 row is selected.
@@ -17,11 +17,14 @@ const BulkActionBar = ({
     onClear,
     onAction,
     busy,
+    canSchedule = true,
 }: {
     count: number;
     onClear: () => void;
     onAction: (action: BulkAction) => void;
     busy?: boolean;
+    /** Hide the Schedule action for actors without publish rights. */
+    canSchedule?: boolean;
 }) => (
     <Transition
         show={count > 0}
@@ -44,6 +47,8 @@ const BulkActionBar = ({
                 <span className="h-7 w-px bg-white/15" />
 
                 <BulkButton icon="check" label="Publish" onClick={() => onAction("publish")} disabled={busy} />
+                {canSchedule && <BulkButton icon="calendar" label="Schedule" onClick={() => onAction("schedule")} disabled={busy} />}
+                <BulkButton icon="copy" label="Duplicate" onClick={() => onAction("duplicate")} disabled={busy} />
                 <BulkButton icon="document" label="Move to draft" onClick={() => onAction("draft")} disabled={busy} />
                 <BulkButton icon="trash" label="Delete" danger onClick={() => onAction("delete")} disabled={busy} />
 

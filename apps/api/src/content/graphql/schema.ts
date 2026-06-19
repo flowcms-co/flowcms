@@ -138,10 +138,13 @@ export type TypeDef = { apiId: string; pluralApiId: string; kind: string; fields
 
 /** Candidate data keys for a field name (mirrors entry-validation's leniency). */
 function candidateKeys(name: string): string[] {
-    const lower = name.trim().toLowerCase();
-    const parts = lower.split(/\s+/);
+    const raw = name.trim();
+    // Split camel humps too, so a camelCase field name resolves data keyed in any
+    // earlier convention (space / snake / first-word).
+    const lower = raw.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+    const parts = lower.split(/[\s_-]+/).filter(Boolean);
     const camel = parts.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
-    return [...new Set([name, camel, lower, parts.join("_"), parts[0]])];
+    return [...new Set([raw, camel, raw.toLowerCase(), lower, parts.join("_"), parts[0]].filter(Boolean))];
 }
 const fieldValue = (o: Record<string, unknown>, name: string) => {
     for (const k of candidateKeys(name)) if (k in o && o[k] != null && o[k] !== "") return o[k];

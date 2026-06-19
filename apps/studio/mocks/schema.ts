@@ -87,6 +87,37 @@ export type FieldValidation = {
     };
 };
 
+/** Coerce any human string into a camelCase machine key. Mirrors the API's
+ *  `toCamelCase` (apps/api/src/content/naming.ts) so a field key / API ID is
+ *  normalized identically whether the studio or the server does it.
+ *  "Cover image" / "cover_image" / "OG image" → "coverImage" / "ogImage". */
+export const camelCaseKey = (input: string): string => {
+    const words = String(input ?? "")
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[^A-Za-z0-9]+/g, " ")
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean);
+    if (!words.length) return "";
+    return words.map((w, i) => (i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1))).join("");
+};
+
+/** Camel-case every field name and de-duplicate siblings (coverImage, coverImage2,
+ *  …), recursing into inline component sub-fields. Used to auto-fix the schema
+ *  before save so stored keys are always unique camelCase. */
+export const normalizeFieldKeys = (fields: SchemaField[]): SchemaField[] => {
+    const used = new Set<string>();
+    return fields.map((f) => {
+        const base = camelCaseKey(f.name) || "field";
+        let name = base;
+        let n = 2;
+        while (used.has(name)) name = `${base}${n++}`;
+        used.add(name);
+        return f.fields ? { ...f, name, fields: normalizeFieldKeys(f.fields) } : { ...f, name };
+    });
+};
+
 /** The display label for a field in the block editor: the editor-friendly `label`
  *  when set, otherwise the field's machine `name`. */
 export const fieldLabel = (f: { label?: string; name: string }): string => {

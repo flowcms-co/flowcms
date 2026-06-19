@@ -367,11 +367,80 @@ export class ContentEntriesService {
         return this.shape(e);
     }
 
+    /** Is `slug` already taken by another entry of the same type + locale? A page's
+     *  public URL is /<type>/<slug>, so a slug only collides within its own content
+     *  type and locale (the same slug under a different type is a different URL, and
+     *  a localized twin legitimately shares it). Empty/absent slugs never collide. */
+    private async slugConflict(
+        workspaceId: string,
+        contentTypeId: string,
+        slug: string | null | undefined,
+        locale: string,
+        excludeId?: string,
+    ): Promise<boolean> {
+        const s = (slug ?? "").trim();
+        if (!s) return false;
+        const hit = await this.prisma.contentEntry.findFirst({
+            where: { workspaceId, contentTypeId, locale, slug: s, ...(excludeId ? { id: { not: excludeId } } : {}) },
+            select: { id: true },
+        });
+        return !!hit;
+    }
+
+    /** Reject a write whose slug is already used by a sibling entry. */
+    private async assertSlugFree(
+        workspaceId: string,
+        contentTypeId: string,
+        slug: string | null | undefined,
+        locale: string,
+        excludeId?: string,
+    ): Promise<void> {
+        if (await this.slugConflict(workspaceId, contentTypeId, slug, locale, excludeId)) {
+            throw new BadRequestException(
+                `The slug “${(slug ?? "").trim()}” is already used by another page. Choose a different one.`,
+            );
+        }
+    }
+
+    /** Find the first free slug at or after `base` by appending -2, -3, … (used to
+     *  suggest an alternative inline, and to keep duplicated pages unique). */
+    private async uniqueSlug(
+        workspaceId: string,
+        contentTypeId: string,
+        base: string,
+        locale: string,
+        excludeId?: string,
+    ): Promise<string> {
+        const root = (base ?? "").trim();
+        if (!root) return root;
+        // Append a zero-padded counter on collision: foo, foo-01, foo-02, …
+        let candidate = root;
+        let n = 1;
+        while (await this.slugConflict(workspaceId, contentTypeId, candidate, locale, excludeId)) {
+            candidate = `${root}-${String(n).padStart(2, "0")}`;
+            n++;
+        }
+        return candidate;
+    }
+
+    /** Inline availability check for the studio's slug input: returns whether the
+     *  slug is free for the given type + locale and, if not, a free suggestion. */
+    async slugAvailability(workspaceId: string, contentTypeId: string, slug: string, locale: string, excludeId?: string) {
+        const s = (slug ?? "").trim();
+        if (!contentTypeId || !s) return { available: true as const };
+        const taken = await this.slugConflict(workspaceId, contentTypeId, s, locale, excludeId);
+        if (!taken) return { available: true as const };
+        return { available: false as const, suggestion: await this.uniqueSlug(workspaceId, contentTypeId, s, locale, excludeId) };
+    }
+
     async create(workspaceId: string, userId: string | null, dto: CreateEntryDto, role?: RoleRules) {
         const type = await this.prisma.contentType.findFirst({
             where: { id: dto.contentTypeId, workspaceId },
         });
         if (!type) throw new BadRequestException("Unknown content type.");
+        const locale = dto.locale || "en";
+        // One slug per page: reject a slug already taken within this type + locale.
+        await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
         let data: Record<string, unknown> = { ...(dto.data ?? {}), title: dto.title ?? "Untitled" };
         // advanced_rbac (Pro): block disallowed types + drop fields the role can't edit.
         if (this.rbac && role) {
@@ -391,7 +460,7 @@ export class ContentEntriesService {
                 contentTypeId: type.id,
                 data: data as Prisma.InputJsonValue,
                 slug: dto.slug ?? null,
-                locale: dto.locale || "en",
+                locale,
                 status: "DRAFT",
                 authorId: userId ?? null,
             },
@@ -409,6 +478,11 @@ export class ContentEntriesService {
             include: { contentType: { select: { schema: true } } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
+
+        // One slug per page: a changed slug must be free within this type + locale.
+        if (dto.slug !== undefined) {
+            await this.assertSlugFree(workspaceId, existing.contentTypeId, dto.slug, existing.locale, id);
+        }
 
         // Authorization: only a publisher may move an entry INTO a sign-off / live
         // state. Editors reach these only through the reviewer flow (submit → a
@@ -648,12 +722,16 @@ export class ContentEntriesService {
         if (!src) throw new NotFoundException("Entry not found.");
         const data = { ...((src.data ?? {}) as { title?: string }) };
         data.title = `${data.title ?? "Untitled"} (Copy)`;
+        // Keep the copy's slug unique within the type + locale: "-copy", then
+        // "-copy-2", "-copy-3", … so two duplicates never collide.
+        const slug = src.slug ? await this.uniqueSlug(workspaceId, src.contentTypeId, `${src.slug}-copy`, src.locale) : null;
         const e = await this.prisma.contentEntry.create({
             data: {
                 workspaceId,
                 contentTypeId: src.contentTypeId,
                 data,
-                slug: src.slug ? `${src.slug}-copy` : null,
+                slug,
+                locale: src.locale,
                 status: "DRAFT",
                 authorId: userId,
             },

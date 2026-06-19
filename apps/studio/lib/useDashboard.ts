@@ -9,7 +9,7 @@ export type DashboardSummary = {
     hasData: boolean;
     pipeline: { draft: number; review: number; approved: number; scheduled: number; published: number };
     totals: { published30d: number; entries: number };
-    activity: { id: string; person: string; role: string; action: string; target: string; type: string; at: string }[];
+    activity: { id: string; person: string; role: string; action: string; target: string; type: string; at: string; authorId?: string | null; avatarUrl?: string | null; avatarStyle?: string | null }[];
     reviewQueue: { id: string; title: string; author: string; type: string; submittedAt: string }[];
     team: { userId: string; name: string; role: string; drafts: number; inReview: number; published: number }[];
     my: {
