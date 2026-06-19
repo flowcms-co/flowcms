@@ -3,6 +3,7 @@ import { ContentStatus } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { safeFetch } from "../common/ssrf";
 import { pluralize } from "../content/pluralize";
+import { toLowerId, normalizeFieldsWithData } from "../content/naming";
 
 /** A normalized item ready to become a ContentEntry. */
 type ImportItem = {
@@ -445,6 +446,14 @@ export class ImportService {
         // Title/Slug/Body type with the rest hidden in the data blob.
         for (const g of groups) {
             if (!g.fields?.length) g.fields = this.inferSchema(g.items.map((i) => i.data));
+            // Keep the content-type id lowercase (it doubles as a URL slug), and
+            // coerce every field key to camelCase, rewriting each item's data keys in
+            // lockstep so the stored entries match their schema. This keeps imports
+            // from introducing snake_case / kebab-case / spaced / mixed-case keys.
+            g.apiId = toLowerId(g.apiId) || g.apiId;
+            const { fields, remap } = normalizeFieldsWithData(g.fields);
+            g.fields = fields as typeof g.fields;
+            for (const it of g.items) it.data = (remap(it.data) ?? {}) as Record<string, unknown>;
         }
         return groups;
     }
@@ -473,9 +482,9 @@ export class ImportService {
         const schemaFields = fields?.length
             ? fields
             : [
-                  { id: "f1", name: "Title", type: "Text", required: true },
-                  { id: "f2", name: "Slug", type: "Slug", required: false },
-                  { id: "f3", name: "Body", type: "Rich text", required: false },
+                  { id: "f1", name: "title", type: "Text", required: true },
+                  { id: "f2", name: "slug", type: "Slug", required: false },
+                  { id: "f3", name: "body", type: "Rich text", required: false },
               ];
         return this.prisma.contentType.create({
             data: {

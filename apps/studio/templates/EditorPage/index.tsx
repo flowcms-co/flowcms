@@ -158,6 +158,9 @@ const EditorPage = () => {
     const [localEdits, setLocalEdits] = useState(0);
     const syncRef = useRef<PreviewSyncHandle | null>(null);
     const draftRef = useRef<PreviewDraft>({});
+    // The entry id we've already loaded into state, so the load effect can skip the
+    // reload that the create flow's navigation (?id=<new id>) would otherwise trigger.
+    const loadedIdRef = useRef<string | null>(null);
 
     /** Mark the doc dirty + tick the autosave debounce (called on every local edit). */
     const bump = useCallback(() => {
@@ -174,7 +177,13 @@ const EditorPage = () => {
     }, []);
 
     useEffect(() => {
+        // The create flow navigates to ?id=<new id> right after POSTing, and we
+        // already hold that entry in state, so skip the reload (reloading here would
+        // flash the canvas and fight autosave mid-typing). Any genuine id change, or
+        // going to "New Content" (no id), falls through and resets the editor.
+        if (idParam && idParam === loadedIdRef.current) return;
         let cancelled = false;
+        setReady(false); // unmount the canvas so it remounts with the right content
         (async () => {
             const [cts, comps] = await Promise.all([
                 api<ApiType[]>("/content-types").catch(() => []),
@@ -187,6 +196,7 @@ const EditorPage = () => {
                 try {
                     const e = await api<ApiEntry>(`/entries/${idParam}`);
                     if (cancelled) return;
+                    setEntryId(e.id);
                     setTitle(e.title || "Untitled");
                     setSlug(e.slug ?? "");
                     setSlugEdited(!!(e.slug && e.slug.trim()));
@@ -197,18 +207,35 @@ const EditorPage = () => {
                     setEntryData((e.data ?? {}) as Record<string, unknown>);
                     setHasDraft(!!e.hasDraft);
                     setDraftApproved(!!e.draftApproved);
+                    loadedIdRef.current = e.id;
                 } catch (err) {
                     if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load this entry.");
                 }
-            } else if (cts[0]) {
-                setTypeId((cur) => cur ?? cts[0].id);
+            } else {
+                // New Content: clear everything so a fresh, blank entry is started,
+                // even when navigating here from an entry already open in the editor.
+                setEntryId(null);
+                setTitle("Untitled");
+                setSlug("");
+                setSlugEdited(false);
+                setSlugCheck({ status: "idle" });
+                setLocale("en");
+                setStatus("DRAFT");
+                setInitialBody("");
+                setEntryData({});
+                setHasDraft(false);
+                setDraftApproved(false);
+                setReview(null);
+                setError(null);
+                setTypeId(typeParam ?? cts[0]?.id);
+                loadedIdRef.current = null;
             }
             if (!cancelled) setReady(true);
         })();
         return () => {
             cancelled = true;
         };
-    }, [idParam]);
+    }, [idParam, typeParam]);
 
     const onEditorReady = useCallback((e: Editor) => {
         setEditor(e);
@@ -291,6 +318,7 @@ const EditorPage = () => {
             body: JSON.stringify({ contentTypeId: typeId, ...payload }),
         });
         setEntryId(created.id);
+        loadedIdRef.current = created.id; // we hold this entry; skip the reload on the ?id= navigation
         router.replace(`/content/editor?id=${created.id}`);
         return created.id;
     }, [editor, entryId, title, slug, typeId, entryData, hasBody, router, slugCheck]);

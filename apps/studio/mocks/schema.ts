@@ -103,6 +103,11 @@ export const camelCaseKey = (input: string): string => {
     return words.map((w, i) => (i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1))).join("");
 };
 
+/** Coerce a content-type API ID. Unlike field keys / component IDs, a content-type
+ *  ID doubles as a public URL slug (site.com/<pluralApiId>/…), so it stays lowercase
+ *  rather than camelCase. Mirrors the API's `toLowerId`. "Blog Post" → "blogpost". */
+export const lowerKey = (input: string): string => camelCaseKey(input).toLowerCase();
+
 /** Camel-case every field name and de-duplicate siblings (coverImage, coverImage2,
  *  …), recursing into inline component sub-fields. Used to auto-fix the schema
  *  before save so stored keys are always unique camelCase. */

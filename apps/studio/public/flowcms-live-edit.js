@@ -47,6 +47,7 @@
     var mapBindings = []; // last selector map received from the studio
     var arrayGroups = []; // active repeating-list groups while editing (see array module)
     var addedCounter = 0; // unique suffix for items added live
+    var placeholderKeys = {}; // fieldPath -> true while a field shows an instructive placeholder (template preview)
 
     function attrTargets() {
         return Array.prototype.slice
@@ -124,9 +125,33 @@
             // Repeating-list items are reported separately, under `arrays`, so the
             // studio can rebuild the whole list (incl. added / removed items).
             if (parsePath(t.key)) return;
-            m[t.key] = readValue(t.el, t.mode);
+            // A field still showing its placeholder hint has no real value yet.
+            m[t.key] = placeholderKeys[t.key] ? "" : readValue(t.el, t.mode);
         });
         return m;
+    }
+
+    // Instructive placeholders shown on a borrowed template for fields this page
+    // hasn't filled. The hint clears the first time the field is focused, and
+    // `snapshot()` reports the field as empty until then, so a hint never saves.
+    function applyPlaceholder(t, hint) {
+        if (!isInline(t.mode)) return;
+        placeholderKeys[t.key] = true;
+        writeValue(t.el, t.mode, hint);
+        t.el.classList.add("flowcms-placeholder");
+        if (!t.el.getAttribute("data-flowcms-ph-bound")) {
+            t.el.setAttribute("data-flowcms-ph-bound", "1");
+            t.el.addEventListener("focus", function () {
+                if (!placeholderKeys[t.key]) return;
+                clearPlaceholder(t);
+                writeValue(t.el, t.mode, "");
+            });
+        }
+    }
+    function clearPlaceholder(t) {
+        if (!placeholderKeys[t.key]) return;
+        delete placeholderKeys[t.key];
+        t.el.classList.remove("flowcms-placeholder");
     }
 
     var baseline = {};
@@ -532,13 +557,59 @@
     function stampItem(it) {
         if (it.root) it.root.setAttribute("data-flowcms-item", it.key);
     }
+    // Native <details>/<summary> accordions (a common FAQ pattern) hijack Space,
+    // Enter and clicks on the summary to open/close the panel, which makes a field
+    // inside the summary impossible to type into. Keep the item's panel open while
+    // editing and let the field own its keys/clicks, so a question edits like any
+    // other field and a freshly added item shows both question and answer.
+    function keepDetailsOpen(it) {
+        var d = null;
+        var keys = it ? Object.keys(it.fields) : [];
+        for (var i = 0; i < keys.length && !d; i++) {
+            var el = it.fields[keys[i]].el;
+            if (el && el.closest) d = el.closest("details");
+        }
+        if (!d && it.root && it.root.tagName === "DETAILS") d = it.root;
+        if (!d) return;
+        d.open = true;
+        if (!d.getAttribute("data-flowcms-open-lock")) {
+            d.setAttribute("data-flowcms-open-lock", "1");
+            d.addEventListener("toggle", function () {
+                if (editing && !d.open) d.open = true;
+            });
+        }
+    }
+    function guardSummaryEditing(el) {
+        if (!el.closest || !el.closest("summary")) return;
+        if (el.getAttribute("data-flowcms-sum-guard")) return;
+        el.setAttribute("data-flowcms-sum-guard", "1");
+        el.addEventListener("keydown", function (e) {
+            // Space/Enter on a summary toggle the panel; type a space, ignore Enter.
+            if (e.key === " " || e.code === "Space") {
+                e.preventDefault();
+                e.stopPropagation();
+                document.execCommand("insertText", false, " ");
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+        el.addEventListener("click", function (e) {
+            // Place the caret without toggling the panel.
+            e.preventDefault();
+            e.stopPropagation();
+        });
+    }
+
     function makeItemEditable(it) {
+        keepDetailsOpen(it);
         Object.keys(it.fields).forEach(function (s) {
             var f = it.fields[s];
             if (!f.el || (f.mode !== "text" && f.mode !== "rich")) return;
             f.el.setAttribute("contenteditable", f.mode === "rich" ? "true" : "plaintext-only");
             f.el.classList.add("flowcms-edit-on");
             f.el.addEventListener("input", onInput);
+            guardSummaryEditing(f.el);
         });
     }
     function makeItemReadonly(it) {
@@ -764,10 +835,17 @@
             return;
         }
         if (d.type === "set") {
-            // Studio pushes updated values (e.g. media picked in the panel).
+            // Studio pushes updated values (e.g. media picked in the panel), plus
+            // optional `placeholders` for empty fields when previewing on a template.
             var fields = d.fields && typeof d.fields === "object" ? d.fields : {};
+            var ph = d.placeholders && typeof d.placeholders === "object" ? d.placeholders : {};
             targets().forEach(function (t) {
-                if (t.key in fields) writeValue(t.el, t.mode, fields[t.key]);
+                if (t.key in ph) {
+                    applyPlaceholder(t, ph[t.key]);
+                } else if (t.key in fields) {
+                    clearPlaceholder(t);
+                    writeValue(t.el, t.mode, fields[t.key]);
+                }
             });
             return;
         }
@@ -792,7 +870,8 @@
         ".flowcms-arr-add{display:inline-flex;align-items:center;gap:.375rem;margin:.75rem 0;padding:.4375rem .875rem;font:600 .8125rem/1 system-ui,-apple-system,sans-serif;color:#fff;background:#6c5ce7;border:0;border-radius:.5rem;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.18)}" +
         ".flowcms-arr-add:hover{background:#5a4bd4}" +
         ".flowcms-arr-remove{position:absolute;top:.375rem;right:.375rem;z-index:9;width:1.375rem;height:1.375rem;display:inline-flex;align-items:center;justify-content:center;padding:0;font:700 .9375rem/1 system-ui,sans-serif;color:#fff;background:rgba(214,48,49,.94);border:0;border-radius:999px;cursor:pointer;opacity:0;transition:opacity .12s}" +
-        "[data-flowcms-item]:hover>.flowcms-arr-remove,.flowcms-arr-remove:focus{opacity:1}";
+        "[data-flowcms-item]:hover>.flowcms-arr-remove,.flowcms-arr-remove:focus{opacity:1}" +
+        ".flowcms-placeholder{opacity:.5;font-style:italic}";
     document.head.appendChild(style);
 
     baseline = snapshot();

@@ -111,7 +111,9 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
         timer = setTimeout(() => post({ type: "fields", fields: snapshot(), arrays: arraysSnapshot() }), 200);
     };
 
+    let editing = false;
     const toggle = (on: boolean): void => {
+        editing = on;
         for (const el of nodes()) {
             if (parsePath(fieldName(el))) continue; // repeating-list items wire their own editing
             if (on) {
@@ -232,12 +234,57 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
     };
 
     const stampItem = (it: ArrItem): void => it.root.setAttribute("data-flowcms-item", it.key);
+    // Native <details>/<summary> accordions (a common FAQ pattern) hijack Space,
+    // Enter and clicks on the summary to toggle the panel, making a field inside the
+    // summary impossible to type into. Keep the item's panel open while editing and
+    // let the field own its keys/clicks, so a question edits like any other field and
+    // a freshly added item shows both question and answer.
+    const keepDetailsOpen = (it: ArrItem): void => {
+        let d: HTMLDetailsElement | null = null;
+        for (const sub of Object.keys(it.fields)) {
+            const el = it.fields[sub].el;
+            const found = el?.closest?.("details") as HTMLDetailsElement | null;
+            if (found) { d = found; break; }
+        }
+        if (!d && it.root && it.root.tagName === "DETAILS") d = it.root as HTMLDetailsElement;
+        if (!d) return;
+        const det = d;
+        det.open = true;
+        if (!det.getAttribute("data-flowcms-open-lock")) {
+            det.setAttribute("data-flowcms-open-lock", "1");
+            det.addEventListener("toggle", () => {
+                if (editing && !det.open) det.open = true;
+            });
+        }
+    };
+    const guardSummaryEditing = (el: HTMLElement): void => {
+        if (!el.closest?.("summary")) return;
+        if (el.getAttribute("data-flowcms-sum-guard")) return;
+        el.setAttribute("data-flowcms-sum-guard", "1");
+        el.addEventListener("keydown", (e: KeyboardEvent) => {
+            if (e.key === " " || e.code === "Space") {
+                e.preventDefault();
+                e.stopPropagation();
+                document.execCommand("insertText", false, " ");
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+        el.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+    };
+
     const makeItemEditable = (it: ArrItem): void => {
+        keepDetailsOpen(it);
         for (const sub of Object.keys(it.fields)) {
             const f = it.fields[sub];
             f.el.setAttribute("contenteditable", f.mode === "rich" ? "true" : "plaintext-only");
             f.el.classList.add(editClassName);
             f.el.addEventListener("input", onInput);
+            guardSummaryEditing(f.el);
         }
     };
     const makeItemReadonly = (it: ArrItem): void => {

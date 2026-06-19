@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 import { PageTemplate } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { ContentEntriesService } from "../content/content-entries.service";
+import { toLowerId, normalizeFieldNames } from "../content/naming";
+import { pluralize } from "../content/pluralize";
 
 type FieldDef = { id: string; name: string; type: string; required?: boolean };
 export type UpsertTemplate = {
@@ -152,16 +154,19 @@ export class PageTemplatesService {
         const t = await this.prisma.pageTemplate.findFirst({ where: { id, workspaceId } });
         if (!t) throw new NotFoundException("Template not found.");
 
-        let type = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId, apiId: t.typeApiId } } });
+        // Content-type ids stay lowercase (URL slugs); field keys are camelCased. The
+        // lookup uses the same coerced id so we don't create a duplicate type.
+        const apiId = toLowerId(t.typeApiId) || t.typeApiId;
+        let type = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId, apiId } } });
         if (!type) {
             type = await this.prisma.contentType.create({
                 data: {
                     workspaceId,
                     name: t.typeName,
-                    apiId: t.typeApiId,
-                    pluralApiId: `${t.typeApiId}s`,
+                    apiId,
+                    pluralApiId: pluralize(apiId),
                     kind: "COLLECTION",
-                    schema: { icon: t.icon, color: t.color, jsonLd: t.jsonLd, fields: (t.fields as FieldDef[]) ?? [] },
+                    schema: { icon: t.icon, color: t.color, jsonLd: t.jsonLd, fields: normalizeFieldNames((t.fields as FieldDef[]) ?? []) as FieldDef[] },
                 },
             });
         }

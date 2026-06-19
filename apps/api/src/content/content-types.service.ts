@@ -4,15 +4,18 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
 import { isHomeType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
-import { normalizeSchemaFields, toCamelCase } from "./naming";
+import { normalizeSchemaFields, toCamelCase, toLowerId } from "./naming";
 
 @Injectable()
 export class ContentTypesService {
     constructor(private readonly prisma: PrismaService) {}
 
-    /** API IDs are camelCase machine names (e.g. "blogPost"), bounded to 40 chars. */
-    private slug(name: string) {
-        return toCamelCase(name).slice(0, 40) || "type";
+    /** Machine API IDs, bounded to 40 chars. Components and field keys are camelCase
+     *  (e.g. "heroSection"); content types stay lowercase because they double as
+     *  public URL slugs (site.com/<pluralApiId>/…). */
+    private slug(name: string, kind?: string) {
+        const coerce = kind === "COMPONENT" ? toCamelCase : toLowerId;
+        return coerce(name).slice(0, 40) || "type";
     }
 
     private async uniqueApiId(workspaceId: string, base: string) {
@@ -141,7 +144,7 @@ export class ContentTypesService {
     async create(workspaceId: string, dto: CreateContentTypeDto) {
         // Respect a caller-supplied apiId (slugified + de-duplicated); otherwise
         // derive one from the display name.
-        const base = this.slug(dto.apiId?.trim() || dto.name);
+        const base = this.slug(dto.apiId?.trim() || dto.name, dto.kind ?? "COLLECTION");
         const apiId = await this.uniqueApiId(workspaceId, base);
         const t = await this.prisma.contentType.create({
             data: {
@@ -172,7 +175,7 @@ export class ContentTypesService {
         // changing it afterwards would break the delivery-API URLs of live entries.
         const wantsApiId = dto.apiId?.trim();
         if (wantsApiId) {
-            const next = this.slug(wantsApiId);
+            const next = this.slug(wantsApiId, existing.kind);
             if (next !== existing.apiId) {
                 if (existing._count.entries > 0) {
                     throw new BadRequestException("The API ID can't be changed once the type has content. Create a new type instead.");

@@ -19,6 +19,15 @@ export function toCamelCase(input: string): string {
     return words.map((w, i) => (i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1))).join("");
 }
 
+/** Content-type API IDs double as public URL path segments (site.com/<pluralApiId>/…),
+ *  so they stay lowercase rather than camelCase, while remaining valid identifiers
+ *  (letters/digits only, no separators) for the REST/GraphQL layer. "Blog Post" →
+ *  "blogpost", "services" → "services". Use this for content TYPES; components and
+ *  field keys use {@link toCamelCase}. */
+export function toLowerId(input: string): string {
+    return toCamelCase(input).toLowerCase();
+}
+
 type AnyField = { name?: string; fields?: AnyField[]; [k: string]: unknown };
 
 /** Recursively coerce every field name to camelCase and make sibling names unique
@@ -38,6 +47,51 @@ export function normalizeFieldNames(fields: AnyField[] | undefined): AnyField[] 
         if (Array.isArray(f?.fields)) next.fields = normalizeFieldNames(f.fields);
         return next;
     });
+}
+
+/** Like {@link normalizeFieldNames}, but also returns a `remap` that rewrites a
+ *  data object's keys (recursively, through Component sub-fields and repeatable
+ *  item arrays) to the coerced field names. Use it when the data was authored
+ *  against the original keys (imports, templates) so the stored entry data stays
+ *  aligned with its now-camelCased schema. Keys with no matching field are kept. */
+export function normalizeFieldsWithData(fields: AnyField[] | undefined): {
+    fields: AnyField[];
+    remap: (data: unknown) => unknown;
+} {
+    const list = Array.isArray(fields) ? fields : [];
+    const used = new Set<string>();
+    const steps: { oldKey: string; newKey: string; child?: (data: unknown) => unknown }[] = [];
+    const outFields = list.map((f) => {
+        const base = toCamelCase(String(f?.name ?? "")) || "field";
+        let name = base;
+        let n = 2;
+        while (used.has(name)) name = `${base}${n++}`;
+        used.add(name);
+        const next: AnyField = { ...f, name };
+        let child: ((data: unknown) => unknown) | undefined;
+        if (Array.isArray(f?.fields)) {
+            const r = normalizeFieldsWithData(f.fields);
+            next.fields = r.fields;
+            child = r.remap;
+        }
+        steps.push({ oldKey: String(f?.name ?? ""), newKey: name, child });
+        return next;
+    });
+    const remap = (data: unknown): unknown => {
+        if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+        const src = data as Record<string, unknown>;
+        const out: Record<string, unknown> = {};
+        const handled = new Set<string>();
+        for (const s of steps) {
+            if (!(s.oldKey in src)) continue;
+            handled.add(s.oldKey);
+            const v = src[s.oldKey];
+            out[s.newKey] = s.child ? (Array.isArray(v) ? v.map(s.child) : s.child(v)) : v;
+        }
+        for (const k of Object.keys(src)) if (!handled.has(k)) out[k] = src[k];
+        return out;
+    };
+    return { fields: outFields, remap };
 }
 
 /** Normalize the `fields` array inside a stored content-type schema blob, leaving

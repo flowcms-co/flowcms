@@ -12,6 +12,7 @@ import {
     FIELD_TYPES,
     SCHEMA_JSONLD,
     camelCaseKey,
+    lowerKey,
     globalSchemaDefaults,
     normalizeFieldKeys,
     type ContentTypeSchema,
@@ -145,7 +146,9 @@ const SchemaPage = () => {
             // Auto-fix field keys + API ID to unique camelCase before saving (the
             // backend normalizes too; we mirror it so the UI shows the stored value).
             const fields = normalizeFieldKeys(active.fields);
-            const apiId = active.apiId ? camelCaseKey(active.apiId) : active.apiId;
+            // Components use camelCase IDs; content types stay lowercase (URL slugs).
+            const coerceId = tab === "components" ? camelCaseKey : lowerKey;
+            const apiId = active.apiId ? coerceId(active.apiId) : active.apiId;
             const updated = await api<ContentTypeSchema>(`/content-types/${active.id}`, {
                 method: "PATCH",
                 body: JSON.stringify({
@@ -274,13 +277,14 @@ const SchemaPage = () => {
                                                     value={active.apiId ?? ""}
                                                     onChange={(e) => patchActive({ apiId: e.target.value })}
                                                     onBlur={(e) => {
-                                                        // Auto-fix the API ID to camelCase (silently).
-                                                        const c = camelCaseKey(e.target.value);
+                                                        // Auto-fix the API ID silently: components camelCase,
+                                                        // content types lowercase (they double as URL slugs).
+                                                        const c = (tab === "components" ? camelCaseKey : lowerKey)(e.target.value);
                                                         if (c && c !== active.apiId) patchActive({ apiId: c });
                                                     }}
                                                     spellCheck={false}
                                                     aria-label="API ID"
-                                                    title="Machine name (camelCase) used by the delivery API / referenced by other types."
+                                                    title={tab === "components" ? "Machine name (camelCase) used by the delivery API / referenced by other types." : "URL slug (lowercase) used by the delivery API, e.g. site.com/<apiId>/…"}
                                                     className="bg-transparent font-mono text-grey outline-none focus:text-primary dark:focus:text-lilac"
                                                 />
                                             ) : (

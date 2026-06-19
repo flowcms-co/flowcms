@@ -119,6 +119,20 @@ const getPath = (obj: Record<string, unknown>, path: string): unknown => {
     return cur;
 };
 
+// Turn a field path into an instructive placeholder shown on a borrowed template
+// when this page hasn't filled the field yet, e.g. "heroBanner.title" -> "Your title",
+// "ctaLine" -> "Your cta line". Keeps the donor page's real copy from looking like
+// this page's content.
+const placeholderHint = (path: string): string => {
+    const leaf = path.split(".").pop() ?? path;
+    const words = leaf
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[._-]+/g, " ")
+        .trim()
+        .toLowerCase();
+    return `Your ${words || "content"}`;
+};
+
 let liveIdSeq = 0;
 const ID_KEY_RE = /(^|_)(id|key|uid|slug)$/i;
 /** Give a cloned item fresh id-like keys so a live-added item doesn't duplicate the
@@ -434,12 +448,19 @@ const PreviewClient = () => {
         if (!(siteEditable && mode === "site" && liveBindings.length)) return;
         postToSite({ type: "map", bindings: liveBindings });
         if (templateTarget) {
+            // On a borrowed template, show this page's own values where it has them.
+            // Empty text fields get an instructive placeholder (so the donor's copy
+            // doesn't read as this page's content); empty media/links are cleared.
             const vals: Record<string, string> = {};
+            const placeholders: Record<string, string> = {};
             for (const b of liveBindings) {
-                const v = b.fieldPath === "title" ? entry?.title ?? "" : getPath((entry?.data ?? {}) as Record<string, unknown>, b.fieldPath);
-                vals[b.fieldPath] = typeof v === "string" ? v : "";
+                const raw = b.fieldPath === "title" ? entry?.title ?? "" : getPath((entry?.data ?? {}) as Record<string, unknown>, b.fieldPath);
+                const v = typeof raw === "string" ? raw : "";
+                if (v.trim()) vals[b.fieldPath] = v;
+                else if (b.mode === "text" || b.mode === "rich") placeholders[b.fieldPath] = placeholderHint(b.fieldPath);
+                else vals[b.fieldPath] = "";
             }
-            postToSite({ type: "set", fields: vals });
+            postToSite({ type: "set", fields: vals, placeholders });
         } else {
             postToSite({ type: "probe" });
         }
@@ -796,10 +817,11 @@ const PreviewClient = () => {
                    Desktop = full-bleed; Tablet / Mobile = a centered device frame. */
                 <div className="flex min-h-0 flex-1 flex-col">
                     {usingTemplate && (
-                        <div className="flex items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-caption-2 text-warning">
-                            <Icon className="h-4 w-4 shrink-0 fill-warning" name="info" />
+                        <div className="flex items-start gap-2 border-b border-warning/40 bg-warning/15 px-4 py-2.5 text-caption-2 text-ink dark:text-white">
+                            <Icon className="mt-px h-4 w-4 shrink-0 fill-warning" name="info" />
                             <span>
-                                Previewing on your <strong className="font-semibold">{type?.name ?? "page"}</strong> template because this page isn&apos;t published yet. Fields you fill save to this page.
+                                This page isn&apos;t published yet, so you&apos;re previewing it on your{" "}
+                                <strong className="font-semibold">{type?.name ?? "page"}</strong> template. Anything you edit here saves to this page.
                             </span>
                         </div>
                     )}

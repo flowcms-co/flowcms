@@ -4,6 +4,8 @@ import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { PrismaService } from "../prisma/prisma.service";
+import { toLowerId, normalizeFieldNames } from "../content/naming";
+import { pluralize } from "../content/pluralize";
 
 class UpdateWorkspaceDto {
     @IsOptional() @IsString() name?: string;
@@ -101,20 +103,23 @@ export class WorkspaceController {
         if (!types) throw new BadRequestException("Unknown starter.");
         let created = 0;
         for (const t of types) {
-            const existing = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId: user.workspaceId, apiId: t.apiId } } });
+            // Content-type ids stay lowercase (they double as URL slugs); field keys
+            // are coerced to camelCase, so starters can never seed a non-conforming id.
+            const apiId = toLowerId(t.apiId) || t.apiId;
+            const existing = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId: user.workspaceId, apiId } } });
             if (existing) continue;
             await this.prisma.contentType.create({
                 data: {
                     workspaceId: user.workspaceId,
                     name: t.name,
-                    apiId: t.apiId,
-                    pluralApiId: `${t.apiId}s`,
+                    apiId,
+                    pluralApiId: pluralize(apiId),
                     kind: "COLLECTION",
-                    schema: { icon: t.icon, color: "#6C5CE7", jsonLd: t.jsonLd, fields: t.fields },
+                    schema: { icon: t.icon, color: "#6C5CE7", jsonLd: t.jsonLd, fields: normalizeFieldNames(t.fields) as typeof t.fields },
                 },
             });
             created++;
         }
-        return { ok: true, created, types: types.map((t) => ({ apiId: t.apiId, name: t.name })) };
+        return { ok: true, created, types: types.map((t) => ({ apiId: toLowerId(t.apiId) || t.apiId, name: t.name })) };
     }
 }

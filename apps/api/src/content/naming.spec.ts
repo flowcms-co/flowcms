@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeFieldNames, normalizeSchemaFields, toCamelCase } from "./naming";
+import { normalizeFieldNames, normalizeSchemaFields, normalizeFieldsWithData, toCamelCase, toLowerId } from "./naming";
 
 describe("toCamelCase", () => {
     it("coerces human strings into camelCase keys", () => {
@@ -48,6 +48,47 @@ describe("normalizeFieldNames", () => {
 
     it("falls back to 'field' for an unusable name", () => {
         expect(normalizeFieldNames([{ name: "!!!" }])[0].name).toBe("field");
+    });
+});
+
+describe("toLowerId", () => {
+    it("keeps content-type ids lowercase (they double as URL slugs), not camelCase", () => {
+        expect(toLowerId("services")).toBe("services");
+        expect(toLowerId("Blog")).toBe("blog");
+        expect(toLowerId("Blog Post")).toBe("blogpost");
+        expect(toLowerId("case-study")).toBe("casestudy");
+    });
+
+    it("strips separators so the id stays a valid identifier", () => {
+        expect(toLowerId("Case Study")).toBe("casestudy");
+        expect(toLowerId("knowledge_base")).toBe("knowledgebase");
+    });
+});
+
+describe("normalizeFieldsWithData", () => {
+    it("camelCases field keys and rewrites matching data keys in lockstep", () => {
+        const { fields, remap } = normalizeFieldsWithData([{ name: "Hero Image" }, { name: "meta_title" }]);
+        expect(fields.map((f) => f.name)).toEqual(["heroImage", "metaTitle"]);
+        expect(remap({ "Hero Image": "/x.jpg", meta_title: "Hi" })).toEqual({ heroImage: "/x.jpg", metaTitle: "Hi" });
+    });
+
+    it("recurses through component sub-fields and repeatable item arrays", () => {
+        const { remap } = normalizeFieldsWithData([
+            {
+                name: "FAQ Section",
+                type: "Component",
+                repeatable: true,
+                fields: [{ name: "Question Text" }, { name: "answer_body" }],
+            },
+        ]);
+        expect(
+            remap({ "FAQ Section": [{ "Question Text": "Q1", answer_body: "A1" }, { "Question Text": "Q2", answer_body: "A2" }] }),
+        ).toEqual({ faqSection: [{ questionText: "Q1", answerBody: "A1" }, { questionText: "Q2", answerBody: "A2" }] });
+    });
+
+    it("preserves data keys that have no matching field", () => {
+        const { remap } = normalizeFieldsWithData([{ name: "Title" }]);
+        expect(remap({ Title: "Hi", extra: 1 })).toEqual({ title: "Hi", extra: 1 });
     });
 });
 

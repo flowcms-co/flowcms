@@ -8,9 +8,13 @@
  *     description, canonical, OG image, robots, JSON-LD, …) — i.e. <meta>/head tags
  *     that have no relevance in visual editing
  *   - any id / uuid / guid / key (e.g. "items.0.id", "userId", "block_key")
+ *   - image alt text (accessibility text, never rendered as on-page copy)
+ *   - icon identifiers (an icon key like "wrench", not editable as text)
+ *   - link / URL targets (a destination, not visible copy you can click and type)
  *
- * Nested content headings (e.g. "heroSection.title", "faqSection.title") stay
- * editable: those are visible page content, not metadata.
+ * Nested content headings (e.g. "heroSection.title", "faqSection.title") and media
+ * fields (images you can swap) stay editable: those are visible page content. Only
+ * the fields you can't actually point at and edit on the page are dropped.
  */
 
 // A path segment naming a metadata container — its whole subtree is hidden.
@@ -49,5 +53,20 @@ export function isHiddenFieldPath(path: string): boolean {
     // (userId, blockUuid, item_key) — but not innocent words like "grid" or "valid".
     if (ID_EXACT.has(leaf.toLowerCase())) return true;
     if (/(id|uuid|guid|key)$/i.test(leaf) && /[A-Z_]/.test(leaf)) return true;
+
+    // Non-visual fields you can't point at and edit on the page. We look at the
+    // leaf's last word (camelCase / snake_case / kebab aware) so "imageAlt",
+    // "background_image_alt_text", "ctaUrl" and "buttonLink" all match, while plain
+    // words like "salt", "default" or "label" don't.
+    const words = leaf
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .split(/[^A-Za-z0-9]+/)
+        .filter(Boolean)
+        .map((w) => w.toLowerCase());
+    const last = words[words.length - 1] ?? "";
+    if (last === "alt" || nleaf === "alttext" || nleaf.endsWith("alttext")) return true; // image alt text
+    if (last === "icon" || nleaf === "icon") return true; // icon identifier (e.g. "wrench")
+    if (["url", "uri", "href", "link"].includes(last)) return true; // link / URL target
+
     return false;
 }
