@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Reorder, useDragControls } from "framer-motion";
+import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "framer-motion";
 import type { Editor } from "@tiptap/react";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
@@ -40,6 +40,19 @@ const limitFor = (name: string): number => {
 const blankSection = (def: ComponentDef): Section => ({ __component: def.apiId, __uid: newUid() });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** A short preview of a section's content — its first non-empty text-ish field —
+ *  shown on the header when the section is collapsed so it's identifiable folded. */
+const sectionSummary = (def: ComponentDef, section: Section): string => {
+    for (const f of def.fields) {
+        if (f.type !== "Text" && f.type !== "URL" && f.type !== "Rich text") continue;
+        const v = str(section[f.name]);
+        if (!v.trim()) continue;
+        const text = f.type === "Rich text" ? v.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : v.trim();
+        if (text) return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+    }
+    return "";
+};
 
 /* ── single field control with label + char counter / media preview ── */
 const SectionField = ({ field, value, onChange }: { field: SchemaField; value: unknown; onChange: (v: unknown) => void }) => {
@@ -200,6 +213,8 @@ const SectionCard = ({
     section,
     index,
     count,
+    open,
+    onToggle,
     onChange,
     onRemove,
     onDuplicate,
@@ -209,14 +224,18 @@ const SectionCard = ({
     section: Section;
     index: number;
     count: number;
+    open: boolean;
+    onToggle: () => void;
     onChange: (next: Section) => void;
     onRemove: () => void;
     onDuplicate: () => void;
     onMove: (dir: -1 | 1) => void;
 }) => {
     const controls = useDragControls();
+    const reduce = useReducedMotion();
     const [menu, setMenu] = useState(false);
     const [ai, setAi] = useState(false);
+    const preview = sectionSummary(def, section);
     const set = (name: string, v: unknown) => onChange({ ...section, [name]: v });
     /** Merge AI-generated values (keyed by field name, lenient) into this section. */
     const applyAi = (json: Record<string, unknown>) => {
@@ -244,10 +263,23 @@ const SectionCard = ({
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                     <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name={def.icon} />
                 </span>
-                <div className="min-w-0 grow">
-                    <div className="truncate text-title font-semibold text-black dark:text-white">{def.name}</div>
-                    <div className="truncate text-caption-2 text-grey">Section {index + 1} of {count}</div>
-                </div>
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    aria-expanded={open}
+                    className="group flex min-w-0 grow items-center gap-2 text-left"
+                >
+                    <span className="min-w-0 grow">
+                        <span className="block truncate text-title font-semibold text-black dark:text-white">{def.name}</span>
+                        <span className="block truncate text-caption-2 text-grey">
+                            {open || !preview ? `Section ${index + 1} of ${count}` : preview}
+                        </span>
+                    </span>
+                    <Icon
+                        name="arrow-down"
+                        className={`h-4 w-4 shrink-0 fill-grey transition-transform duration-200 group-hover:fill-primary ${open ? "rotate-0" : "-rotate-90"}`}
+                    />
+                </button>
                 <button type="button" onClick={() => setAi(true)} title={`Write ${def.name} with AI`} className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist dark:text-lilac dark:hover:bg-dark-3">
                     <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name="sparkles" />
                     <span className="hidden sm:inline">AI</span>
@@ -271,13 +303,26 @@ const SectionCard = ({
             </div>
 
             {/* body */}
-            <div className="flex flex-col gap-5 p-4">
-                {richOnly ? (
-                    <RichTextBody value={str(section[def.fields[0].name])} onChange={(html) => set(def.fields[0].name, html)} />
-                ) : (
-                    def.fields.map((f) => <SectionField key={f.id ?? f.name} field={f} value={section[f.name]} onChange={(v) => set(f.name, v)} />)
+            <AnimatePresence initial={false}>
+                {open && (
+                    <motion.div
+                        key="body"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={reduce ? { duration: 0 } : { duration: 0.22, ease: "easeInOut" }}
+                        className="overflow-hidden"
+                    >
+                        <div className="flex flex-col gap-5 p-4">
+                            {richOnly ? (
+                                <RichTextBody value={str(section[def.fields[0].name])} onChange={(html) => set(def.fields[0].name, html)} />
+                            ) : (
+                                def.fields.map((f) => <SectionField key={f.id ?? f.name} field={f} value={section[f.name]} onChange={(v) => set(f.name, v)} />)
+                            )}
+                        </div>
+                    </motion.div>
                 )}
-            </div>
+            </AnimatePresence>
             {ai && <SectionAiModal def={def} onApply={applyAi} onClose={() => setAi(false)} />}
         </Reorder.Item>
     );
@@ -365,6 +410,19 @@ const SectionEditor = ({
     onChange: (next: Section[]) => void;
 }) => {
     const options = (allowed?.length ? allowed.map((id) => components[id]).filter(Boolean) : Object.values(components)) as ComponentDef[];
+    // Folded sections are tracked by their stable __uid, so collapse state survives
+    // reorder/duplicate/delete instead of shifting with array indices.
+    const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+    const toggle = (uid: string) =>
+        setCollapsed((prev) => {
+            const next = new Set(prev);
+            if (next.has(uid)) next.delete(uid);
+            else next.add(uid);
+            return next;
+        });
+    const allCollapsed = sections.length > 0 && sections.every((s) => collapsed.has(s.__uid));
+    const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(sections.map((s) => s.__uid)));
+
     const setAt = (i: number, next: Section) => onChange(sections.map((s, j) => (j === i ? next : s)));
     const removeAt = (i: number) => onChange(sections.filter((_, j) => j !== i));
     const duplicateAt = (i: number) => {
@@ -381,6 +439,18 @@ const SectionEditor = ({
 
     return (
         <div className="flex flex-col gap-3">
+            {sections.length > 1 && (
+                <div className="flex items-center justify-between px-0.5">
+                    <span className="text-caption-2 text-grey/70">{sections.length} sections</span>
+                    <button
+                        type="button"
+                        onClick={toggleAll}
+                        className="text-caption-2 font-semibold text-primary transition-colors hover:text-primary/80 dark:text-lilac"
+                    >
+                        {allCollapsed ? "Expand all" : "Collapse all"}
+                    </button>
+                </div>
+            )}
             <Reorder.Group as="div" axis="y" values={sections} onReorder={onChange} className="flex flex-col gap-3">
                 {sections.map((s, i) => {
                     const def = components[s.__component];
@@ -398,6 +468,8 @@ const SectionEditor = ({
                             section={s}
                             index={i}
                             count={sections.length}
+                            open={!collapsed.has(s.__uid)}
+                            onToggle={() => toggle(s.__uid)}
                             onChange={(next) => setAt(i, next)}
                             onRemove={() => removeAt(i)}
                             onDuplicate={() => duplicateAt(i)}
