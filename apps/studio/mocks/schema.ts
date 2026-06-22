@@ -31,7 +31,9 @@ export const FIELD_TYPES: FieldType[] = [
     "DynamicZone",
 ];
 
-/** schema.org types offered as the default for a content type. */
+/** schema.org types offered as the default for a content type. Kept for reference /
+ *  back-compat; the content-type's schema.org type is now derived from its page
+ *  type (see PAGE_TYPES) rather than picked directly. */
 export const SCHEMA_JSONLD = [
     "Article",
     "BlogPosting",
@@ -41,6 +43,32 @@ export const SCHEMA_JSONLD = [
     "Product",
     "Event",
 ];
+
+/** The four page types a content type can be. The page type drives three things at
+ *  once: the public route shape, whether the type is a single page or a collection,
+ *  and the default schema.org (JSON-LD) type for SEO.
+ *
+ *  - blog / service: a collection served under its own prefix, /<apiId>/<slug>
+ *    (e.g. /blog/spring-tips, /services/water-damage).
+ *  - home: the single site root, served at / with no prefix.
+ *  - static: a collection of top-level pages served at the root slug, /<slug>
+ *    (e.g. /about-us, /legal) with no prefix. */
+export type PageType = "blog" | "service" | "home" | "static";
+
+export const PAGE_TYPES: { value: PageType; label: string; jsonLd: string; hint: string }[] = [
+    { value: "blog", label: "Blog Page", jsonLd: "BlogPosting", hint: "Collection at /<apiId>/<slug>" },
+    { value: "service", label: "Service or Product Page", jsonLd: "Product", hint: "Collection at /<apiId>/<slug>" },
+    { value: "home", label: "Home Page", jsonLd: "WebPage", hint: "Single page at /" },
+    { value: "static", label: "Static Page", jsonLd: "WebPage", hint: "Top-level pages like /about-us, /legal" },
+];
+
+/** Default page type for a brand-new content type. */
+export const DEFAULT_PAGE_TYPE: PageType = "blog";
+
+/** The schema.org JSON-LD type a page type maps to (used as the content type's
+ *  default structured-data type). Falls back to WebPage for anything unknown. */
+export const jsonLdForPageType = (pageType?: string): string =>
+    PAGE_TYPES.find((p) => p.value === pageType)?.jsonLd ?? "WebPage";
 
 export type SchemaField = {
     id: string;
@@ -140,6 +168,13 @@ export type ContentTypeSchema = {
     icon: string;
     color: string;
     jsonLd: string;
+    /** Page type preset that drives routing, single-vs-collection, and the default
+     *  JSON-LD type. Absent on legacy types (the API derives a sensible default). */
+    pageType?: PageType;
+    /** Fallback live-preview URL for this type: a representative published page (or a
+     *  {slug}/{id}/{type}/{locale} template) the editor + live preview render when a
+     *  new, unpublished entry has no published sibling to borrow. Empty = none. */
+    previewUrl?: string;
     fields: SchemaField[];
 };
 

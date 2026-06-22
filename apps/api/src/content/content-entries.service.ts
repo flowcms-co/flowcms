@@ -13,7 +13,15 @@ import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
 import { fieldsOf, validateEntryData, type ComponentMap } from "./entry-validation";
 import { entryPath } from "./route-path";
 
-type EntryWithType = ContentEntry & { contentType: { id: string; name: string; apiId: string; pluralApiId?: string } };
+/** The content-type columns every entry read needs: identity + the schema JSON,
+ *  which carries the page type that `entryPath` uses to build the public path
+ *  (a "static" type routes to /<slug>, not /<apiId>/<slug>). `schema` is used only
+ *  to compute the path — it is never returned in the entry response (see shape()). */
+const CT_SELECT = { id: true, name: true, apiId: true, pluralApiId: true, schema: true } as const;
+
+type EntryWithType = ContentEntry & {
+    contentType: { id: string; name: string; apiId: string; pluralApiId?: string | null; schema?: Prisma.JsonValue };
+};
 type Shaped = ReturnType<ContentEntriesService["shape"]>;
 
 /** Statuses for which all required fields must be present. */
@@ -113,7 +121,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id: entryId },
             data: { data: version.data as Prisma.InputJsonValue },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         await this.snapshot(entryId, version.data, e.status, actorId);
         const shaped = this.shape(e);
@@ -152,7 +160,7 @@ export class ContentEntriesService {
     async recordReview(workspaceId: string, entryId: string, reviewerId: string, decision: "approve" | "request_changes", note?: string) {
         const entry = await this.prisma.contentEntry.findFirst({
             where: { id: entryId, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (!entry) throw new NotFoundException("Entry not found.");
         const d: ReviewDecision = decision === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
@@ -190,7 +198,7 @@ export class ContentEntriesService {
             const e = await this.prisma.contentEntry.update({
                 where: { id: entryId },
                 data: { status: "APPROVED" },
-                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+                include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(entryId, entry.data, "APPROVED", reviewerId);
             await this.notifyTransition(workspaceId, reviewerId, entry, this.title(e), "IN_REVIEW", "APPROVED");
@@ -278,7 +286,9 @@ export class ContentEntriesService {
             slug: e.slug,
             status: e.status,
             locale: e.locale,
-            contentType: e.contentType,
+            // Identity only — the type's `schema` is selected for path derivation
+            // (entryPath, below) but intentionally not exposed in the entry payload.
+            contentType: { id: e.contentType.id, name: e.contentType.name, apiId: e.contentType.apiId, pluralApiId: e.contentType.pluralApiId },
             // Site-relative path the entry lives at on the public frontend, derived
             // from the content type's route prefix: "/services/<slug>", "/blogs/<slug>",
             // or "/" for a homepage type. Lets the studio preview the right page and
@@ -316,7 +326,7 @@ export class ContentEntriesService {
         const skip = opts.offset != null ? Math.max(0, Math.floor(opts.offset)) : 0;
         const rows = await this.prisma.contentEntry.findMany({
             where,
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
             orderBy: { updatedAt: "desc" },
             take,
             skip,
@@ -354,7 +364,7 @@ export class ContentEntriesService {
     async get(workspaceId: string, id: string) {
         const e = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (!e) throw new NotFoundException("Entry not found.");
         // The editor edits the draft overlay when one exists (a published entry with
@@ -464,7 +474,7 @@ export class ContentEntriesService {
                 status: "DRAFT",
                 authorId: userId ?? null,
             },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         await this.snapshot(e.id, data, "DRAFT", userId);
         const shaped = this.shape(e);
@@ -527,7 +537,7 @@ export class ContentEntriesService {
             const updated = await this.prisma.contentEntry.update({
                 where: { id },
                 data: patch,
-                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+                include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(updated.id, draft, existing.status, actorId);
             const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
@@ -574,7 +584,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data,
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (actorId && targetStatus !== existing.status) {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, targetStatus);
@@ -613,7 +623,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { status, publishedAt },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (actorId && status !== existing.status) {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, status);
@@ -653,7 +663,7 @@ export class ContentEntriesService {
             const e = await this.prisma.contentEntry.update({
                 where: { id },
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date() },
-                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+                include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(e.id, promoted, "PUBLISHED", actorId);
             const shaped = this.shape(e);
@@ -672,7 +682,7 @@ export class ContentEntriesService {
             const e = await this.prisma.contentEntry.update({
                 where: { id },
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "DRAFT", publishedAt: null },
-                include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+                include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(e.id, e.data, "DRAFT", actorId);
             const shaped = this.shape(e);
@@ -687,7 +697,7 @@ export class ContentEntriesService {
     async approveDraft(workspaceId: string, id: string, actorId?: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true, schema: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         if (existing.draftData == null) throw new BadRequestException("No draft changes to approve.");
@@ -695,7 +705,7 @@ export class ContentEntriesService {
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { draftApproved: true },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         const draft = (e.draftData ?? {}) as { title?: string };
         return { ...this.shape(e), data: e.draftData, title: draft.title ?? "Untitled" };
@@ -705,14 +715,14 @@ export class ContentEntriesService {
     async discardDraft(workspaceId: string, id: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         if (existing.draftData == null) return this.shape(existing);
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { draftData: Prisma.DbNull, draftApproved: false },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         return this.shape(e);
     }
@@ -735,7 +745,7 @@ export class ContentEntriesService {
                 status: "DRAFT",
                 authorId: userId,
             },
-            include: { contentType: { select: { id: true, name: true, apiId: true, pluralApiId: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         return this.shape(e);
     }
@@ -743,7 +753,7 @@ export class ContentEntriesService {
     async remove(workspaceId: string, id: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
-            include: { contentType: { select: { apiId: true, pluralApiId: true, name: true } } },
+            include: { contentType: { select: CT_SELECT } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         // deleteMany with workspaceId is defence-in-depth: even if the ownership

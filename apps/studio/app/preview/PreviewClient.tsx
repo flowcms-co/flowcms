@@ -55,6 +55,10 @@ type ApiType = {
     // /<urlPrefix>/<slug>, or the site root when isHome is true.
     urlPrefix?: string;
     isHome?: boolean;
+    // Fallback live-preview URL configured for this type (Schema Builder): a
+    // representative published page, or a {slug}/{id}/{type}/{locale} template,
+    // rendered when an unpublished entry has no published sibling to borrow.
+    previewUrl?: string | null;
 };
 
 /** Reusable component (block) definition, for the in-preview section builder. */
@@ -188,6 +192,17 @@ const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
     const root = tpl.replace(/\/+$/, "");
     const path = segs.map(encodeURIComponent).join("/");
     return path ? `${root}/${path}` : root;
+};
+
+/** Resolve a content type's configured fallback preview URL. A template (with
+ *  {slug}/{id}/{type}/{locale}/… placeholders) is filled in like the workspace URL;
+ *  a plain URL is used verbatim, since it points at a representative, already
+ *  published page of this type rather than this (unpublished) entry. */
+const resolveTypePreviewUrl = (raw: string | null | undefined, e: Entry, type?: ApiType | null): string => {
+    const tpl = (raw ?? "").trim();
+    if (!tpl) return "";
+    if (/\{(slug|id|type|locale|status|path)\}/.test(tpl)) return buildTarget(tpl, e, type);
+    return tpl;
 };
 
 /**
@@ -427,6 +442,15 @@ const PreviewClient = () => {
             const sibs = await api<Array<{ id: string; slug?: string | null }>>(`/entries?typeId=${encodeURIComponent(type.id)}&status=PUBLISHED`);
             const donor = sibs.find((s) => s.id !== entry.id && !!(s.slug ?? "").trim());
             if (!donor) {
+                // No published sibling to borrow: fall back to the type's configured
+                // preview URL (a representative page) so the live preview + editor still
+                // render the template, with the same "previewing on your template" notice.
+                const typeUrl = resolveTypePreviewUrl(type.previewUrl, entry, type);
+                if (typeUrl) {
+                    setSiteEditable(false);
+                    setTemplateTarget(typeUrl);
+                    return;
+                }
                 setUserMode("content");
                 setEditNote(`This page isn't published yet and there's no published ${type.name} to preview it on. Showing the content view; your edits still save to this page.`);
                 return;

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime";
+import { useRevalidateOnFocus } from "@/lib/useRevalidate";
 
 export type Notif = {
     id: string;
@@ -57,6 +58,9 @@ export function useNotifications(pollMs = 20000) {
         const t = setInterval(refresh, pollMs);
         return () => clearInterval(t);
     }, [refresh, pollMs]);
+
+    // Refresh the moment the tab is focused again (background timers are throttled).
+    useRevalidateOnFocus(refresh);
 
     // Realtime: a new notification arrives instantly (prepend + bump unread).
     useRealtime<Notif>("notification:new", (n) => {

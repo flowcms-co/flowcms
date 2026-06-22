@@ -10,13 +10,16 @@ import Select from "@/components/ui/Select";
 import SaveStatus from "@/components/ui/SaveStatus";
 import {
     FIELD_TYPES,
-    SCHEMA_JSONLD,
+    PAGE_TYPES,
+    DEFAULT_PAGE_TYPE,
+    jsonLdForPageType,
     camelCaseKey,
     lowerKey,
     globalSchemaDefaults,
     normalizeFieldKeys,
     type ContentTypeSchema,
     type FieldType,
+    type PageType,
     type SchemaField,
 } from "@/mocks/schema";
 import { api } from "@/lib/api";
@@ -122,7 +125,9 @@ const SchemaPage = () => {
         setDirty(true);
     };
     const setActiveFields = (fields: SchemaField[]) => patchActive({ fields });
-    const setJsonLd = (jsonLd: string) => patchActive({ jsonLd });
+    // Page type drives routing + single/collection on the server and sets the default
+    // schema.org (JSON-LD) type, so we keep jsonLd in lock-step with the choice.
+    const setPageType = (pageType: string) => patchActive({ pageType: pageType as PageType, jsonLd: jsonLdForPageType(pageType) });
 
     const add = async () => {
         const isComp = tab === "components";
@@ -131,7 +136,14 @@ const SchemaPage = () => {
             body: JSON.stringify({
                 name: isComp ? "New component" : "New type",
                 ...(isComp ? { kind: "COMPONENT" } : {}),
-                schema: { icon: isComp ? "copy" : "document", color: "#6C5CE7", jsonLd: "Article", fields: [] },
+                schema: {
+                    icon: isComp ? "copy" : "document",
+                    color: "#6C5CE7",
+                    // New content types start as a Blog Page (a prefixed collection); the
+                    // server reads schema.pageType to set kind + routing. Components don't route.
+                    ...(isComp ? { jsonLd: "WebPage" } : { pageType: DEFAULT_PAGE_TYPE, jsonLd: jsonLdForPageType(DEFAULT_PAGE_TYPE) }),
+                    fields: [],
+                },
             }),
         });
         setCollection((prev) => [...prev, created]);
@@ -156,7 +168,21 @@ const SchemaPage = () => {
                     // Only send apiId while the type is empty; the backend rejects a
                     // change once entries exist (or a component is referenced).
                     ...((active.entryCount ?? 0) === 0 && apiId ? { apiId } : {}),
-                    schema: { icon: active.icon, color: active.color, jsonLd: active.jsonLd, fields },
+                    schema: {
+                        icon: active.icon,
+                        color: active.color,
+                        // Content types carry a page type (routing + kind + JSON-LD default);
+                        // components have no route, so they keep a plain jsonLd.
+                        ...(tab === "types"
+                            ? {
+                                  pageType: active.pageType ?? DEFAULT_PAGE_TYPE,
+                                  jsonLd: jsonLdForPageType(active.pageType ?? DEFAULT_PAGE_TYPE),
+                                  // Omit when blank so the stored schema stays clean.
+                                  previewUrl: active.previewUrl?.trim() || undefined,
+                              }
+                            : { jsonLd: active.jsonLd }),
+                        fields,
+                    },
                 }),
             });
             setCollection((prev) =>
@@ -297,8 +323,15 @@ const SchemaPage = () => {
                                 <div className="flex items-center gap-2">
                                     {tab === "types" && (
                                         <label className="flex items-center gap-2">
-                                            <span className="text-caption-1 text-grey">Schema</span>
-                                            <Select variant="field" className="!w-auto" ariaLabel="Schema type" value={active.jsonLd} onChange={setJsonLd} options={SCHEMA_JSONLD.map((s) => ({ value: s, label: s }))} />
+                                            <span className="text-caption-1 text-grey">Page type</span>
+                                            <Select
+                                                variant="field"
+                                                className="!w-auto"
+                                                ariaLabel="Page type"
+                                                value={active.pageType ?? DEFAULT_PAGE_TYPE}
+                                                onChange={setPageType}
+                                                options={PAGE_TYPES.map((p) => ({ value: p.value, label: p.label }))}
+                                            />
                                         </label>
                                     )}
                                     <button type="button" onClick={deleteActive} aria-label="Delete" className="flex items-center justify-center w-10 h-10 rounded-xl text-grey transition-colors hover:bg-error/10 hover:text-error">
@@ -310,6 +343,28 @@ const SchemaPage = () => {
                                     </button>
                                 </div>
                             </div>
+
+                            {tab === "types" && (
+                                <label className="mb-5 flex flex-col gap-1.5">
+                                    <span className="text-caption-1 text-grey">Fallback preview URL <span className="text-grey/70">(optional)</span></span>
+                                    <input
+                                        value={active.previewUrl ?? ""}
+                                        onChange={(e) => patchActive({ previewUrl: e.target.value })}
+                                        placeholder="https://yoursite.com/services/example  ·  or  /services/{slug}"
+                                        spellCheck={false}
+                                        className="flow-input font-mono text-caption-1"
+                                    />
+                                    <span className="text-caption-2 leading-relaxed text-grey">
+                                        Shown in the live preview and editor when a new entry has no published{" "}
+                                        <span className="font-medium text-black dark:text-white">{active.name}</span> page to borrow. Use a full page URL, or a
+                                        template with{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{slug}"}</code>{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{id}"}</code>{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{type}"}</code>{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{locale}"}</code> placeholders.
+                                    </span>
+                                </label>
+                            )}
 
                             <FieldList fields={active.fields} onChange={setActiveFields} components={componentRefs} allowZones={tab === "types"} />
                         </>

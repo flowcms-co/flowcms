@@ -6,6 +6,7 @@ import Avatar from "@/components/ui/Avatar";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { api } from "@/lib/api";
 import { useRealtime, rtEmit } from "@/lib/realtime";
+import { useRevalidateOnFocus } from "@/lib/useRevalidate";
 import { relTime } from "@/lib/useNotifications";
 import { cn } from "@/lib/cn";
 
@@ -107,6 +108,13 @@ const ChatPage = () => {
         const t = setInterval(() => loadMessages(activeId), 8000);
         return () => clearInterval(t);
     }, [activeId, loadMessages]);
+
+    // Switching back to the tab refreshes channels + the open thread immediately,
+    // rather than waiting on the next (throttled-in-background) poll tick.
+    useRevalidateOnFocus(() => {
+        void loadChannels();
+        if (activeId) void loadMessages(activeId);
+    });
 
     // Join the active channel's realtime room + append live messages (deduped).
     useEffect(() => {

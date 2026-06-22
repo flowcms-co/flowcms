@@ -40,4 +40,37 @@ describe("route-path", () => {
         expect(entryUrl("https://example.com/", { apiId: "services" }, "water-damage")).toBe("https://example.com/services/water-damage");
         expect(entryUrl("https://example.com", { apiId: "home" }, "x")).toBe("https://example.com");
     });
+
+    describe("page types (schema.pageType)", () => {
+        it("static types route at root-level slugs with no prefix", () => {
+            const t = { apiId: "pages", schema: { pageType: "static" } };
+            expect(routePrefixForType(t)).toBe("");
+            expect(isHomeType(t)).toBe(false);
+            expect(entryPath(t, "about-us")).toBe("/about-us");
+            expect(entryPath(t, "legal")).toBe("/legal");
+        });
+
+        it("home page type is the slug-less root", () => {
+            const t = { apiId: "landing", schema: { pageType: "home" } };
+            expect(isHomeType(t)).toBe(true);
+            expect(entryPath(t, "ignored")).toBe("/");
+        });
+
+        it("blog / service types are prefixed collections", () => {
+            expect(entryPath({ apiId: "blog", schema: { pageType: "blog" } }, "spring-tips")).toBe("/blog/spring-tips");
+            expect(entryPath({ apiId: "services", schema: { pageType: "service" } }, "water-damage")).toBe("/services/water-damage");
+        });
+
+        it("an explicit page type overrides home-name heuristics", () => {
+            // A type named "home" but explicitly a blog stays a prefixed collection.
+            const t = { apiId: "home", schema: { pageType: "blog" } };
+            expect(isHomeType(t)).toBe(false);
+            expect(entryPath(t, "post")).toBe("/home/post");
+        });
+
+        it("reads the page type from a pageType column too", () => {
+            expect(entryPath({ apiId: "pages", pageType: "static" }, "about-us")).toBe("/about-us");
+            expect(isHomeType({ apiId: "x", pageType: "home" })).toBe(true);
+        });
+    });
 });

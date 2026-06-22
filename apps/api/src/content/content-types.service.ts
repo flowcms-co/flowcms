@@ -37,8 +37,14 @@ export class ContentTypesService {
             icon?: string;
             color?: string;
             jsonLd?: string;
+            pageType?: string;
+            previewUrl?: string;
             fields?: unknown[];
         };
+        // Page type drives routing/kind/JSON-LD. Legacy types (no stored pageType)
+        // surface a sensible default so the builder dropdown always has a value:
+        // home-named types read as "home", everything else as a prefixed "blog".
+        const pageType = s.pageType ?? (isHomeType(t) ? "home" : "blog");
         return {
             id: t.id,
             name: t.name,
@@ -49,6 +55,9 @@ export class ContentTypesService {
             icon: s.icon ?? "document",
             color: s.color ?? "#6C5CE7",
             jsonLd: s.jsonLd ?? "Article",
+            pageType,
+            // Per-type fallback live-preview URL (empty/unset → null).
+            previewUrl: s.previewUrl ?? null,
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at
@@ -141,20 +150,33 @@ export class ContentTypesService {
         return refs;
     }
 
+    /** Single vs collection follows the page type: a Home page is the site's single
+     *  root entry; blog / service / static are collections. Reusable components are
+     *  never routed, so they always stay COMPONENT. Returns the fallback when the
+     *  schema carries no explicit page type (legacy types). */
+    private kindForSchema(schema: unknown, fallback: "COLLECTION" | "SINGLE" | "COMPONENT"): "COLLECTION" | "SINGLE" | "COMPONENT" {
+        if (fallback === "COMPONENT") return "COMPONENT";
+        const pageType = schema && typeof schema === "object" ? (schema as { pageType?: unknown }).pageType : undefined;
+        if (pageType === "home") return "SINGLE";
+        if (typeof pageType === "string" && pageType) return "COLLECTION";
+        return fallback;
+    }
+
     async create(workspaceId: string, dto: CreateContentTypeDto) {
         // Respect a caller-supplied apiId (slugified + de-duplicated); otherwise
         // derive one from the display name.
         const base = this.slug(dto.apiId?.trim() || dto.name, dto.kind ?? "COLLECTION");
         const apiId = await this.uniqueApiId(workspaceId, base);
+        // Field keys are coerced to unique camelCase machine names before storage.
+        const schema = normalizeSchemaFields(dto.schema) as object;
         const t = await this.prisma.contentType.create({
             data: {
                 workspaceId,
                 name: dto.name,
                 apiId,
                 pluralApiId: pluralize(apiId),
-                kind: dto.kind ?? "COLLECTION",
-                // Field keys are coerced to unique camelCase machine names before storage.
-                schema: normalizeSchemaFields(dto.schema) as object,
+                kind: this.kindForSchema(schema, dto.kind ?? "COLLECTION"),
+                schema,
             },
         });
         return this.shape(t);
@@ -168,7 +190,16 @@ export class ContentTypesService {
         if (!existing) throw new NotFoundException("Content type not found.");
         const data: Record<string, unknown> = {};
         if (dto.name !== undefined) data.name = dto.name;
-        if (dto.schema !== undefined) data.schema = normalizeSchemaFields(dto.schema) as object;
+        if (dto.schema !== undefined) {
+            const schema = normalizeSchemaFields(dto.schema) as object;
+            data.schema = schema;
+            // Keep kind in step with the page type (Home = single, others = collection).
+            // Never reclassify a reusable component.
+            if (existing.kind !== "COMPONENT") {
+                const nextKind = this.kindForSchema(schema, existing.kind);
+                if (nextKind !== existing.kind) data.kind = nextKind;
+            }
+        }
         if (dto.draftAndPublish !== undefined) data.draftAndPublish = dto.draftAndPublish;
 
         // Allow renaming the machine identifier only before any content exists —
