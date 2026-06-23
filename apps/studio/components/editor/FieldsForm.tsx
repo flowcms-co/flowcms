@@ -9,7 +9,8 @@
  * "title" field by the editor's title input; those three are skipped here.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
@@ -164,6 +165,37 @@ const ReferenceField = ({
     const [open, setOpen] = useState(false);
     const selected = asIdArray(value);
 
+    // The results list is rendered in a portal pinned under the input, so it can't be
+    // clipped by the editor's scrolling/overflow containers or hidden behind other UI.
+    const inputRef = useRef<HTMLInputElement>(null);
+    const [menuRect, setMenuRect] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null);
+    const reposition = useCallback(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const MENU_MAX = 232; // ~max-h-56 + padding
+        const spaceBelow = window.innerHeight - r.bottom;
+        // Flip the menu above the input when there isn't room below it (e.g. a field
+        // near the bottom of the editor) and there's more room above.
+        const flipUp = spaceBelow < MENU_MAX && r.top > spaceBelow;
+        setMenuRect(
+            flipUp
+                ? { bottom: window.innerHeight - r.top + 4, left: r.left, width: r.width }
+                : { top: r.bottom + 4, left: r.left, width: r.width },
+        );
+    }, []);
+    useEffect(() => {
+        if (!open) return;
+        reposition();
+        // Follow the input as the editor scrolls / the window resizes.
+        window.addEventListener("scroll", reposition, true);
+        window.addEventListener("resize", reposition);
+        return () => {
+            window.removeEventListener("scroll", reposition, true);
+            window.removeEventListener("resize", reposition);
+        };
+    }, [open, reposition]);
+
     useEffect(() => {
         const ids = typeIdsKey ? typeIdsKey.split(",") : [];
         if (!ids.length) return;
@@ -184,9 +216,17 @@ const ReferenceField = ({
     }
 
     const entryFor = (id: string) => entries.find((e) => e.id === id);
-    const titleFor = (id: string) => entryFor(id)?.title ?? id;
+    // Display label: the entry title, or its slug when the target type has no title
+    // field (e.g. a Geo Library city keyed by city_name/slug → title is "Untitled").
+    const labelOf = (e?: RefEntry) => {
+        const t = (e?.title ?? "").trim();
+        return t && t.toLowerCase() !== "untitled" ? t : (e?.slug ?? "");
+    };
+    const titleFor = (id: string) => labelOf(entryFor(id)) || id;
     const q = query.trim().toLowerCase();
-    const available = entries.filter((e) => !selected.includes(e.id) && (!q || e.title.toLowerCase().includes(q)));
+    const available = entries.filter(
+        (e) => !selected.includes(e.id) && (!q || e.title.toLowerCase().includes(q) || (e.slug ?? "").toLowerCase().includes(q)),
+    );
 
     const add = (id: string) => {
         onChange(multiple ? [...selected, id] : id);
@@ -225,8 +265,9 @@ const ReferenceField = ({
             )}
 
             {showPicker && (
-                <div className="relative">
+                <div>
                     <input
+                        ref={inputRef}
                         className={INPUT}
                         value={query}
                         onChange={(e) => {
@@ -234,31 +275,36 @@ const ReferenceField = ({
                             setOpen(true);
                         }}
                         onFocus={() => setOpen(true)}
-                        onBlur={() => setTimeout(() => setOpen(false), 120)}
+                        onBlur={() => setTimeout(() => setOpen(false), 150)}
                         placeholder={entries.length ? "Search entries to link…" : "No entries to link yet"}
                     />
-                    {open && available.length > 0 && (
-                        <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-grey-light bg-white py-1 shadow-lg dark:border-grey-light/10 dark:bg-dark-1">
-                            {available.slice(0, 50).map((e) => (
-                                <li key={e.id}>
-                                    <button
-                                        type="button"
-                                        onMouseDown={(ev) => ev.preventDefault()}
-                                        onClick={() => add(e.id)}
-                                        className="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-lavender-mist/60 dark:hover:bg-dark-3/60"
-                                    >
-                                        <span className="flex items-center gap-1.5 text-caption-1 text-dark-1 dark:text-white">
-                                            {poly && e.typeName && (
-                                                <span className="rounded bg-lavender-mist px-1 text-[0.625rem] font-medium uppercase tracking-wide text-grey dark:bg-dark-3">{e.typeName}</span>
-                                            )}
-                                            {e.title}
-                                        </span>
-                                        {e.slug && <span className="text-caption-2 text-grey/70">/{e.slug}</span>}
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
+                    {open && available.length > 0 && menuRect && typeof document !== "undefined" &&
+                        createPortal(
+                            <ul
+                                style={{ position: "fixed", top: menuRect.top, bottom: menuRect.bottom, left: menuRect.left, width: menuRect.width, zIndex: 1000 }}
+                                className="max-h-56 overflow-auto rounded-xl border border-grey-light bg-white py-1 shadow-[0_1.25rem_2.5rem_rgba(26,26,46,0.18)] dark:border-grey-light/10 dark:bg-dark-1"
+                            >
+                                {available.slice(0, 50).map((e) => (
+                                    <li key={e.id}>
+                                        <button
+                                            type="button"
+                                            onMouseDown={(ev) => ev.preventDefault()}
+                                            onClick={() => add(e.id)}
+                                            className="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-lavender-mist/60 dark:hover:bg-dark-3/60"
+                                        >
+                                            <span className="flex items-center gap-1.5 text-caption-1 text-dark-1 dark:text-white">
+                                                {poly && e.typeName && (
+                                                    <span className="rounded bg-lavender-mist px-1 text-[0.625rem] font-medium uppercase tracking-wide text-grey dark:bg-dark-3">{e.typeName}</span>
+                                                )}
+                                                {labelOf(e) || e.id}
+                                            </span>
+                                            {e.slug && labelOf(e) !== e.slug && <span className="text-caption-2 text-grey/70">/{e.slug}</span>}
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>,
+                            document.body,
+                        )}
                 </div>
             )}
         </div>
