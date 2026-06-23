@@ -42,6 +42,7 @@ const FilterBar = ({
     onLocaleChange,
     sort,
     onSortChange,
+    hideTypeFilter = false,
 }: {
     filters: Filters;
     onChange: (next: Filters) => void;
@@ -52,6 +53,9 @@ const FilterBar = ({
     onLocaleChange: (l: string) => void;
     sort: { key: SortKey; dir: SortDir };
     onSortChange: (key: SortKey) => void;
+    /** Hide the content-type selector (used when the view is already scoped to one
+     *  type, e.g. a Reference sub-tab). */
+    hideTypeFilter?: boolean;
 }) => {
     const typeOptions: SelectOption[] = [
         { value: "all", label: "All types" },
@@ -76,14 +80,16 @@ const FilterBar = ({
                     />
                 </label>
 
-                <Select
-                    value={filters.type}
-                    onChange={(v) => onChange({ ...filters, type: v })}
-                    options={typeOptions}
-                    ariaLabel="Filter by type"
-                    active={filters.type !== "all"}
-                    className="!h-10"
-                />
+                {!hideTypeFilter && (
+                    <Select
+                        value={filters.type}
+                        onChange={(v) => onChange({ ...filters, type: v })}
+                        options={typeOptions}
+                        ariaLabel="Filter by type"
+                        active={filters.type !== "all"}
+                        className="!h-10"
+                    />
+                )}
 
                 {localeOptions.length > 1 && (
                     <Select

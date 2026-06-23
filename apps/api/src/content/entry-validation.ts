@@ -13,6 +13,19 @@ export type SchemaField = {
     componentApiId?: string;
     /** DynamicZone: the component apiIds allowed in this ordered list of sections. */
     allowedComponents?: string[];
+    /** Reference (relation) field: the id of the content type this points at. The
+     *  entry stores the referenced entry id(s); the delivery API expands them. */
+    referencedTypeId?: string;
+    /** Polymorphic reference: content type ids this field may point at. When set, the
+     *  relation can link any of these types; populated entries carry a `__type`. */
+    referencedTypeIds?: string[];
+    /** Reverse (mapped) side of a relation: the forward Reference field name on the
+     *  owner type (`referencedTypeId`) that points back here. When set, this field is
+     *  derived — never stored or validated — and the delivery API fills it by querying
+     *  the join table for entries whose forward field links to this entry. */
+    mappedByField?: string;
+    /** Reference cardinality: false/undefined = one entry, true = many entries. */
+    multiple?: boolean;
     /** Richer validation rules + custom messages. Length rules apply to text values;
      *  min/max to numbers; pattern is a regex source string. Only checked when a
      *  value is present (except required). */
@@ -67,8 +80,6 @@ function valueFor(data: Record<string, unknown>, name: string): unknown {
     return undefined;
 }
 
-const isPresent = (data: Record<string, unknown>, name: string) => valueFor(data, name) !== undefined;
-
 /** Type-check a present value. Lenient: only flags clearly-wrong types. A custom
  *  `validation.messages.type` overrides the default message. */
 function typeError(field: SchemaField, value: unknown): string | null {
@@ -89,8 +100,17 @@ function typeError(field: SchemaField, value: unknown): string | null {
         case "URL":
             if (typeof value === "string" && /^https?:\/\/|^\//.test(value.trim())) return null;
             return custom ?? `“${field.name}” must be a URL.`;
+        case "Reference":
+            // A relation stores the referenced entry's id (single) or a list of ids
+            // (multiple). The delivery API expands these into full entries.
+            if (field.multiple) {
+                if (Array.isArray(value) && value.every((x) => typeof x === "string")) return null;
+                return custom ?? `“${field.name}” must be a list of references.`;
+            }
+            if (typeof value === "string") return null;
+            return custom ?? `“${field.name}” must be a reference.`;
         default:
-            return null; // Text / Rich text / Media / Reference / Component / Slug — accept as-is
+            return null; // Text / Rich text / Media / Component / Slug — accept as-is
     }
 }
 
@@ -176,12 +196,19 @@ function validateFields(
 ): void {
     for (const field of fields) {
         if (!field?.name || !field.type) continue;
+        // Reverse relation fields hold no stored value — they're derived from the
+        // other side's links at delivery time — so they're never validated or stored.
+        if (field.type === "Reference" && field.mappedByField) continue;
         const path = prefix ? `${prefix}.${field.name}` : field.name;
         const isSlug = field.type === "Slug";
 
-        // Required-presence check (only enforced on publish/schedule/approve).
+        // Required-presence check (only enforced on publish/schedule/approve). An
+        // empty list (e.g. no tags selected, no repeatable items) counts as absent.
         if (opts.enforceRequired && field.required) {
-            const present = isSlug && topLevel ? !!(opts.slug && opts.slug.trim()) : isPresent(data, field.name);
+            const raw = valueFor(data, field.name);
+            const present = isSlug && topLevel
+                ? !!(opts.slug && opts.slug.trim())
+                : raw !== undefined && !(Array.isArray(raw) && raw.length === 0);
             if (!present) {
                 errors[path] = field.validation?.messages?.required ?? `“${field.name}” is required.`;
                 continue;

@@ -11,6 +11,7 @@ import { ApiTokensController } from "./api-tokens.controller";
 import { ApiTokensService } from "./api-tokens.service";
 import { PublicController } from "./public.controller";
 import { PublicQueryService } from "./public-query.service";
+import { RelationSyncService } from "./relation-sync.service";
 import { ContentSchedulerService } from "./content-scheduler.service";
 import { GraphqlController } from "./graphql/graphql.controller";
 import { AgentController } from "./agent.controller";
@@ -38,6 +39,7 @@ import { ContentJobHandlers } from "./content-job.handlers";
         ContentEntriesService,
         ApiTokensService,
         PublicQueryService,
+        RelationSyncService,
         ContentSchedulerService,
         SelectorMapsService,
         ApiTokenGuard,

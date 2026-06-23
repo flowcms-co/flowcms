@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { entryPath, entryUrl, isHomeType, routePrefixForType } from "./route-path";
+import { entryPath, entryUrl, isHomeType, isReferenceType, routePrefixForType } from "./route-path";
 
 describe("route-path", () => {
     it("derives the prefix from the type's apiId (the URL segment the user named)", () => {
@@ -71,6 +71,41 @@ describe("route-path", () => {
         it("reads the page type from a pageType column too", () => {
             expect(entryPath({ apiId: "pages", pageType: "static" }, "about-us")).toBe("/about-us");
             expect(isHomeType({ apiId: "x", pageType: "home" })).toBe(true);
+        });
+
+        describe("reference types (custom URL template)", () => {
+            it("fills the {slug} placeholder from the template", () => {
+                const tags = { apiId: "tag", schema: { pageType: "reference", routePattern: "/blogs/tags/{slug}" } };
+                expect(entryPath(tags, "common-problems")).toBe("/blogs/tags/common-problems");
+                const cities = { apiId: "city", schema: { pageType: "reference", routePattern: "/appliance-repair/{slug}" } };
+                expect(entryPath(cities, "bridgeport-ct")).toBe("/appliance-repair/bridgeport-ct");
+            });
+
+            it("fills the {locale} placeholder when provided", () => {
+                const t = { apiId: "city", schema: { pageType: "reference", routePattern: "/{locale}/cities/{slug}" } };
+                expect(entryPath(t, "bridgeport-ct", { locale: "en" })).toBe("/en/cities/bridgeport-ct");
+            });
+
+            it("treats a placeholder-less template as a prefix and appends the slug", () => {
+                const t = { apiId: "tag", schema: { pageType: "reference", routePattern: "/blogs/tags" } };
+                expect(entryPath(t, "common-problems")).toBe("/blogs/tags/common-problems");
+            });
+
+            it("yields the collection root for an empty slug", () => {
+                const t = { apiId: "tag", schema: { pageType: "reference", routePattern: "/blogs/tags/{slug}" } };
+                expect(entryPath(t, "")).toBe("/blogs/tags");
+            });
+
+            it("exposes the static prefix as the route prefix", () => {
+                const t = { apiId: "tag", schema: { pageType: "reference", routePattern: "/blogs/tags/{slug}" } };
+                expect(isReferenceType(t)).toBe(true);
+                expect(routePrefixForType(t)).toBe("blogs/tags");
+            });
+
+            it("falls back to a prefixed collection when no template is set", () => {
+                const t = { apiId: "tag", schema: { pageType: "reference" } };
+                expect(entryPath(t, "common-problems")).toBe("/tag/common-problems");
+            });
         });
     });
 });

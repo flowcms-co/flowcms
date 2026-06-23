@@ -9,11 +9,12 @@
  * "title" field by the editor's title input; those three are skipped here.
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { MediaField } from "@/components/ui/MediaPicker";
+import { api } from "@/lib/api";
 import RichTextField from "./RichTextField";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
 
@@ -122,6 +123,148 @@ const CollapsibleCard = ({
     );
 };
 
+/** A selectable entry of a referenced content type. `typeName` labels which type it
+ *  belongs to, shown as a badge for polymorphic (multi-type) relations. */
+type RefEntry = { id: string; title: string; slug: string | null; typeName: string };
+
+/** Shape of an entry row from GET /entries (only the bits the picker needs). */
+type ApiListEntry = { id: string; title: string; slug: string | null; contentType?: { name?: string } };
+
+/** Coerce a stored reference value into an id list (single refs store a string,
+ *  multiple store an array). Drops anything that isn't a non-empty string. */
+const asIdArray = (v: unknown): string[] =>
+    Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string" && x.length > 0)
+        : typeof v === "string" && v
+          ? [v]
+          : [];
+
+/**
+ * Relation picker for a Reference field. Loads the published+draft entries of the
+ * field's target content type and lets the editor pick one (single) or many
+ * (multiple) by title; what's stored is the referenced entry id(s). The delivery
+ * API expands these ids back into the full referenced entries.
+ */
+const ReferenceField = ({
+    field,
+    value,
+    onChange,
+}: {
+    field: SchemaField;
+    value: unknown;
+    onChange: (v: unknown) => void;
+}) => {
+    const multiple = !!field.multiple;
+    // Single-target relations carry `referencedTypeId`; polymorphic ones carry a list.
+    const typeIds = field.referencedTypeIds?.length ? field.referencedTypeIds : field.referencedTypeId ? [field.referencedTypeId] : [];
+    const poly = typeIds.length > 1;
+    const typeIdsKey = typeIds.join(",");
+    const [entries, setEntries] = useState<RefEntry[]>([]);
+    const [query, setQuery] = useState("");
+    const [open, setOpen] = useState(false);
+    const selected = asIdArray(value);
+
+    useEffect(() => {
+        const ids = typeIdsKey ? typeIdsKey.split(",") : [];
+        if (!ids.length) return;
+        let cancelled = false;
+        Promise.all(
+            ids.map((tid) => api<ApiListEntry[]>(`/entries?typeId=${encodeURIComponent(tid)}`).catch(() => [] as ApiListEntry[])),
+        ).then((lists) => {
+            if (cancelled) return;
+            setEntries(lists.flat().map((r) => ({ id: r.id, title: r.title, slug: r.slug, typeName: r.contentType?.name ?? "" })));
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [typeIdsKey]);
+
+    if (!typeIds.length) {
+        return <p className="text-caption-2 text-grey">Pick the referenced content type for this field in the Schema Builder.</p>;
+    }
+
+    const entryFor = (id: string) => entries.find((e) => e.id === id);
+    const titleFor = (id: string) => entryFor(id)?.title ?? id;
+    const q = query.trim().toLowerCase();
+    const available = entries.filter((e) => !selected.includes(e.id) && (!q || e.title.toLowerCase().includes(q)));
+
+    const add = (id: string) => {
+        onChange(multiple ? [...selected, id] : id);
+        setQuery("");
+        setOpen(false);
+    };
+    const remove = (id: string) => onChange(multiple ? selected.filter((x) => x !== id) : null);
+
+    // Single ref already chosen: show the chip; clearing it reopens the picker.
+    const showPicker = multiple || selected.length === 0;
+
+    return (
+        <div className="flex flex-col gap-2">
+            {selected.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                    {selected.map((id) => (
+                        <span
+                            key={id}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-primary bg-primary/10 px-2.5 h-8 text-caption-2 text-primary dark:text-lilac"
+                        >
+                            {poly && entryFor(id)?.typeName && (
+                                <span className="rounded bg-primary/15 px-1 text-[0.625rem] font-medium uppercase tracking-wide">{entryFor(id)!.typeName}</span>
+                            )}
+                            {titleFor(id)}
+                            <button
+                                type="button"
+                                onClick={() => remove(id)}
+                                aria-label={`Remove ${titleFor(id)}`}
+                                className="flex items-center justify-center rounded-md text-current/70 transition-colors hover:text-error"
+                            >
+                                <Icon className="h-3.5 w-3.5 fill-current" name="close" />
+                            </button>
+                        </span>
+                    ))}
+                </div>
+            )}
+
+            {showPicker && (
+                <div className="relative">
+                    <input
+                        className={INPUT}
+                        value={query}
+                        onChange={(e) => {
+                            setQuery(e.target.value);
+                            setOpen(true);
+                        }}
+                        onFocus={() => setOpen(true)}
+                        onBlur={() => setTimeout(() => setOpen(false), 120)}
+                        placeholder={entries.length ? "Search entries to link…" : "No entries to link yet"}
+                    />
+                    {open && available.length > 0 && (
+                        <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-grey-light bg-white py-1 shadow-lg dark:border-grey-light/10 dark:bg-dark-1">
+                            {available.slice(0, 50).map((e) => (
+                                <li key={e.id}>
+                                    <button
+                                        type="button"
+                                        onMouseDown={(ev) => ev.preventDefault()}
+                                        onClick={() => add(e.id)}
+                                        className="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-lavender-mist/60 dark:hover:bg-dark-3/60"
+                                    >
+                                        <span className="flex items-center gap-1.5 text-caption-1 text-dark-1 dark:text-white">
+                                            {poly && e.typeName && (
+                                                <span className="rounded bg-lavender-mist px-1 text-[0.625rem] font-medium uppercase tracking-wide text-grey dark:bg-dark-3">{e.typeName}</span>
+                                            )}
+                                            {e.title}
+                                        </span>
+                                        {e.slug && <span className="text-caption-2 text-grey/70">/{e.slug}</span>}
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
 export const FieldControl = ({
     field,
     value,
@@ -173,8 +316,13 @@ export const FieldControl = ({
             return <MediaField value={value} alt={fieldLabel(field)} onChange={onChange} />;
         case "Component":
             return <ComponentControl field={field} value={value} onChange={onChange} errors={errors} errorPath={errorPath} depth={depth} />;
+        case "Reference":
+            // Both sides of a relation are editable: a forward field stores the picked
+            // ids on this entry; a reverse field (mappedByField) is round-tripped by the
+            // API, which propagates picks onto the owning entries' forward field.
+            return <ReferenceField field={field} value={value} onChange={onChange} />;
         default:
-            // Text / URL / Reference / Slug (when nested)
+            // Text / URL / Slug (when nested)
             return (
                 <input
                     className={INPUT}
@@ -215,7 +363,7 @@ const FieldGroup = ({
                 // Media, Rich text and Component render interactive content (picker
                 // buttons, the TipTap editor, nested labelled fields); wrapping those
                 // in a <label> nests labels / steals focus, so use a plain <div>.
-                const Wrap = f.type === "Media" || f.type === "Rich text" || f.type === "Component" ? "div" : "label";
+                const Wrap = f.type === "Media" || f.type === "Rich text" || f.type === "Component" || f.type === "Reference" ? "div" : "label";
                 const path = errorPrefix ? `${errorPrefix}.${f.name}` : f.name;
                 const error = errors[path];
                 return (

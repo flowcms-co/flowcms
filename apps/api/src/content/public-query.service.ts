@@ -2,6 +2,16 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { ContentEntry, ContentType, Prisma } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { entryToCanonicalContent, buildJsonLd } from "./canonical-content";
+import { fieldsOf, type SchemaField } from "./entry-validation";
+
+/** Coerce a stored reference value into an id list (single refs store a string,
+ *  multiple store an array of ids). */
+const refIds = (v: unknown): string[] =>
+    Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string" && x.length > 0)
+        : typeof v === "string" && v
+          ? [v]
+          : [];
 
 export type QueryOpts = {
     limit?: number;
@@ -97,6 +107,130 @@ export class PublicQueryService {
         return MEDIA_BASE ? (absolutizeMedia(base) as Record<string, unknown>) : base;
     }
 
+    /** Fetch + shape entries by id, keyed by id, each tagged with its content type
+     *  (`__type`) so polymorphic relation targets can be told apart. Shaped shallowly:
+     *  their own relations are NOT expanded, so a relation cycle can't recurse. */
+    private async shapedByIds(workspaceId: string, ids: string[], preview?: boolean): Promise<Map<string, Record<string, unknown>>> {
+        if (!ids.length) return new Map();
+        const rows = await this.prisma.contentEntry.findMany({
+            where: { workspaceId, id: { in: ids }, ...(preview ? {} : { status: "PUBLISHED" }) },
+            include: { contentType: { select: { apiId: true } } },
+        });
+        return new Map(
+            rows.map((e) => {
+                const shaped = this.shape(e);
+                shaped.__type = e.contentType.apiId;
+                return [e.id, shaped] as const;
+            }),
+        );
+    }
+
+    /** Map of reusable-component apiId → its field defs, for resolving relation fields
+     *  nested inside components / dynamic zones. */
+    private async componentFieldMap(workspaceId: string): Promise<Map<string, SchemaField[]>> {
+        const comps = await this.prisma.contentType.findMany({ where: { workspaceId, kind: "COMPONENT" }, select: { apiId: true, schema: true } });
+        return new Map(comps.map((c) => [c.apiId, fieldsOf(c.schema)] as const));
+    }
+
+    /** Walk a field set against a data object, recursing into components / dynamic
+     *  zones, and for every forward Reference field either collect its ids (mode
+     *  "collect") or replace them with the shaped entries (mode "replace"). Covers
+     *  relations at any depth, so component relations populate like top-level ones. */
+    private walkForwardRefs(
+        fields: SchemaField[],
+        data: Record<string, unknown>,
+        components: Map<string, SchemaField[]>,
+        mode: "collect" | "replace",
+        ids: Set<string>,
+        byId: Map<string, Record<string, unknown>>,
+    ): void {
+        for (const f of fields) {
+            if (f.type === "Reference" && !f.mappedByField && (f.referencedTypeId || f.referencedTypeIds?.length)) {
+                if (!(f.name in data)) continue;
+                if (mode === "collect") {
+                    for (const id of refIds(data[f.name])) ids.add(id);
+                } else if (f.multiple) {
+                    data[f.name] = refIds(data[f.name])
+                        .map((id) => byId.get(id))
+                        .filter((e): e is Record<string, unknown> => !!e);
+                } else {
+                    const id = typeof data[f.name] === "string" ? (data[f.name] as string) : null;
+                    data[f.name] = id ? (byId.get(id) ?? null) : null;
+                }
+            } else if (f.type === "Component") {
+                const sub = f.componentApiId ? (components.get(f.componentApiId) ?? []) : (f.fields ?? []);
+                const v = data[f.name];
+                if (f.repeatable && Array.isArray(v)) {
+                    for (const it of v) if (it && typeof it === "object" && !Array.isArray(it)) this.walkForwardRefs(sub, it as Record<string, unknown>, components, mode, ids, byId);
+                } else if (v && typeof v === "object" && !Array.isArray(v)) {
+                    this.walkForwardRefs(sub, v as Record<string, unknown>, components, mode, ids, byId);
+                }
+            } else if (f.type === "DynamicZone" && Array.isArray(data[f.name])) {
+                for (const it of data[f.name] as unknown[]) {
+                    if (!it || typeof it !== "object" || Array.isArray(it)) continue;
+                    const comp = (it as Record<string, unknown>).__component;
+                    const sub = typeof comp === "string" ? components.get(comp) : undefined;
+                    if (sub) this.walkForwardRefs(sub, it as Record<string, unknown>, components, mode, ids, byId);
+                }
+            }
+        }
+    }
+
+    /**
+     * Expand Reference (relation) fields in place, both directions:
+     *  - Forward: the stored entry id(s) become the full referenced entries
+     *    (single → object|null, multiple → array), at any depth — including relations
+     *    nested inside components and dynamic zones.
+     *  - Reverse (mappedByField): the field is filled from the join table with the
+     *    entries whose forward field points at this entry ("posts by this author").
+     *    Reverse fields are top-level only (components hold one-way relations).
+     * Everything resolves to published entries only (or any status under a preview
+     * token), and missing/unpublished refs are dropped.
+     */
+    private async populateRefs(ct: ContentType, items: Record<string, unknown>[], opts: QueryOpts): Promise<void> {
+        if (!items.length) return;
+        const schemaFields = fieldsOf(ct.schema);
+        const refFields = schemaFields.filter((f) => f.type === "Reference");
+        const hasNesting = schemaFields.some((f) => f.type === "Component" || f.type === "DynamicZone");
+        const reverse = (opts.fields?.length ? refFields.filter((f) => opts.fields!.includes(f.name)) : refFields).filter((f) => f.mappedByField && f.referencedTypeId);
+        const hasForward = refFields.some((f) => !f.mappedByField && (f.referencedTypeId || f.referencedTypeIds?.length)) || hasNesting;
+        if (!hasForward && !reverse.length) return;
+
+        // ── Forward: ids stored in the entry data, at any depth ─────────────────────
+        if (hasForward) {
+            const components = hasNesting ? await this.componentFieldMap(ct.workspaceId) : new Map<string, SchemaField[]>();
+            const ids = new Set<string>();
+            const empty = new Map<string, Record<string, unknown>>();
+            for (const item of items) this.walkForwardRefs(schemaFields, item, components, "collect", ids, empty);
+            const byId = await this.shapedByIds(ct.workspaceId, [...ids], opts.preview);
+            for (const item of items) this.walkForwardRefs(schemaFields, item, components, "replace", new Set(), byId);
+        }
+
+        // ── Reverse: derived from the join table (entries that link here) ───────────
+        if (reverse.length) {
+            const entryIds = items.map((it) => it.id).filter((x): x is string => typeof x === "string");
+            for (const f of reverse) {
+                const rels = await this.prisma.entryRelation.findMany({
+                    where: { workspaceId: ct.workspaceId, toId: { in: entryIds }, fromTypeId: f.referencedTypeId, fromField: f.mappedByField },
+                    orderBy: { order: "asc" },
+                });
+                const byTo = new Map<string, string[]>();
+                for (const r of rels) {
+                    const arr = byTo.get(r.toId) ?? [];
+                    arr.push(r.fromId);
+                    byTo.set(r.toId, arr);
+                }
+                const byId = await this.shapedByIds(ct.workspaceId, [...new Set(rels.map((r) => r.fromId))], opts.preview);
+                for (const item of items) {
+                    const linked = (byTo.get(item.id as string) ?? [])
+                        .map((id) => byId.get(id))
+                        .filter((e): e is Record<string, unknown> => !!e);
+                    item[f.name] = f.multiple ? linked : (linked[0] ?? null);
+                }
+            }
+        }
+    }
+
     private where(ct: ContentType, opts: QueryOpts): Prisma.ContentEntryWhereInput {
         const AND: Prisma.ContentEntryWhereInput[] = [];
         if (opts.locale) AND.push({ locale: opts.locale });
@@ -128,7 +262,9 @@ export class PublicQueryService {
             this.prisma.contentEntry.findMany({ where, orderBy: this.orderBy(opts.sort), take, skip }),
             this.prisma.contentEntry.count({ where }),
         ]);
-        return { data: rows.map((e) => this.shape(e, opts.fields)), meta: { total, limit: take, offset: skip } };
+        const data = rows.map((e) => this.shape(e, opts.fields));
+        await this.populateRefs(ct, data, opts);
+        return { data, meta: { total, limit: take, offset: skip } };
     }
 
     async oneForType(ct: ContentType, idOrSlug: string, opts: QueryOpts) {
@@ -136,7 +272,9 @@ export class PublicQueryService {
             where: { ...this.where(ct, { ...opts, filters: {} }), OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
         });
         if (!entry) throw new NotFoundException("Not found.");
-        return { data: this.shape(entry, opts.fields) };
+        const data = this.shape(entry, opts.fields);
+        await this.populateRefs(ct, [data], opts);
+        return { data };
     }
 
     async singleForType(ct: ContentType, opts: QueryOpts) {
@@ -144,7 +282,9 @@ export class PublicQueryService {
             where: this.where(ct, { ...opts, filters: {} }),
             orderBy: this.orderBy(opts.sort),
         });
-        return { data: entry ? this.shape(entry, opts.fields) : null };
+        const data = entry ? this.shape(entry, opts.fields) : null;
+        if (data) await this.populateRefs(ct, [data], opts);
+        return { data };
     }
 
     /** REST entry point: resolves the type and dispatches collection vs single. */

@@ -361,12 +361,40 @@ model ContentEntry {
   updatedAt     DateTime         @updatedAt
   versions      ContentVersion[]
   reviews       ContentReview[]
+  // Relation (Reference field) links where this entry is the owner / the target.
+  // Maintained by RelationSyncService from the entry's Reference field values; the
+  // delivery API reads them to populate forward + reverse relations.
+  relationsFrom EntryRelation[]  @relation("RelationFrom")
+  relationsTo   EntryRelation[]  @relation("RelationTo")
 
   @@index([workspaceId, contentTypeId, status])
   @@index([workspaceId, slug])
   @@index([workspaceId, status, updatedAt])
   @@index([workspaceId, authorId])
   @@index([workspaceId, locale])
+}
+
+// A single directed relation link: owning entry `from` references target entry `to`
+// through the Reference field `fromField` (on content type `fromTypeId`). One row per
+// link, queried from either side: forward (by fromId+fromField) for the owner's own
+// relation values, reverse (by toId+fromTypeId+fromField) for "entries that link here".
+// Rows are recomputed from the owner's authoritative `data` on every write; both FKs
+// cascade so links vanish when either endpoint entry is deleted.
+model EntryRelation {
+  id          String       @id @default(cuid())
+  workspaceId String
+  fromId      String
+  fromField   String
+  fromTypeId  String
+  toId        String
+  order       Int          @default(0)
+  createdAt   DateTime     @default(now())
+  from        ContentEntry @relation("RelationFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to          ContentEntry @relation("RelationTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, fromField, toId])
+  @@index([workspaceId, toId, fromTypeId, fromField])
+  @@index([workspaceId, fromId, fromField])
 }
 
 model ContentVersion {

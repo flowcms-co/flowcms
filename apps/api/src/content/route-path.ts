@@ -24,8 +24,12 @@ type TypeIds = {
     /** Explicit page-type preset (column, if present) — takes precedence over the
      *  name-based heuristics below. */
     pageType?: string | null;
-    /** Stored schema JSON; the page type is persisted at schema.pageType. */
+    /** Stored schema JSON; the page type is persisted at schema.pageType, and a
+     *  reference type's custom URL template at schema.routePattern. */
     schema?: unknown;
+    /** Custom URL template for a "reference" page type, e.g. "/blogs/tags/{slug}".
+     *  Read from a column if present, else from schema.routePattern. */
+    routePattern?: string | null;
 };
 
 /** Content-type identifiers that resolve to the site root (no slug appended).
@@ -34,17 +38,50 @@ type TypeIds = {
  *  homepage names. Used only for legacy types that predate the explicit page type. */
 const HOME_IDS = new Set(["home", "homepage", "index", "root", "frontpage", "front-page"]);
 
-const PAGE_TYPE_KEYS = new Set(["blog", "service", "home", "static"]);
+const PAGE_TYPE_KEYS = new Set(["blog", "service", "home", "static", "reference"]);
 
 /** The explicit page type for a content type: "blog" | "service" | "home" |
- *  "static", or null when unset (legacy types). Read from a `pageType` column if one
- *  exists, otherwise from the persisted schema JSON (schema.pageType). */
+ *  "static" | "reference", or null when unset (legacy types). Read from a `pageType`
+ *  column if one exists, otherwise from the persisted schema JSON (schema.pageType). */
 function pageTypeOf(t: TypeIds): string | null {
     const fromCol = typeof t.pageType === "string" ? t.pageType : undefined;
     const schema = t.schema && typeof t.schema === "object" ? (t.schema as { pageType?: unknown }) : undefined;
     const fromSchema = typeof schema?.pageType === "string" ? schema.pageType : undefined;
     const pt = (fromCol ?? fromSchema)?.toLowerCase();
     return pt && PAGE_TYPE_KEYS.has(pt) ? pt : null;
+}
+
+/** Whether a type is a "reference" page (e.g. tags, cities) — a collection whose
+ *  public URL is a custom template rather than the fixed /<apiId>/<slug> shape. */
+export function isReferenceType(t: TypeIds): boolean {
+    return pageTypeOf(t) === "reference";
+}
+
+/** The custom URL template for a reference type ("/blogs/tags/{slug}"), or "". Read
+ *  from a `routePattern` column if present, else from schema.routePattern. */
+function routePatternOf(t: TypeIds): string {
+    const fromCol = typeof t.routePattern === "string" ? t.routePattern : undefined;
+    const schema = t.schema && typeof t.schema === "object" ? (t.schema as { routePattern?: unknown }) : undefined;
+    const fromSchema = typeof schema?.routePattern === "string" ? schema.routePattern : undefined;
+    return (fromCol ?? fromSchema ?? "").trim();
+}
+
+/** Build a reference type's path from its template + the entry slug/locale. A
+ *  template with {slug}/{locale} placeholders is filled; one without is treated as a
+ *  prefix and the slug is appended. Double slashes collapse and trailing ones trim,
+ *  so an empty slug yields the collection root ("/blogs/tags"). */
+function buildReferencePath(pattern: string, slug?: string | null, locale?: string | null): string {
+    const s = (slug ?? "").replace(/^\/+/, "");
+    let p = pattern.trim();
+    if (!p.startsWith("/")) p = `/${p}`;
+    const map: Record<string, string> = { slug: s, locale: locale ?? "" };
+    if (/\{(slug|locale)\}/.test(p)) {
+        p = p.replace(/\{(\w+)\}/g, (_, k: string) => map[k] ?? "");
+    } else {
+        p = s ? `${p.replace(/\/+$/, "")}/${s}` : p;
+    }
+    p = p.replace(/\/{2,}/g, "/").replace(/(.)\/+$/, "$1");
+    return p || "/";
 }
 
 const slugify = (s: string): string =>
@@ -77,13 +114,24 @@ export function isRootSlugType(t: TypeIds): boolean {
  *  apiId / name. */
 export function routePrefixForType(t: TypeIds): string {
     if (isHomeType(t) || isRootSlugType(t)) return "";
+    // A reference type's prefix is the static part of its template (before {slug}).
+    if (isReferenceType(t)) {
+        const pattern = routePatternOf(t);
+        if (pattern) return pattern.split("{")[0].replace(/^\/+|\/+$/g, "");
+    }
     return slugify(String(t.apiId || t.name || t.pluralApiId || ""));
 }
 
-/** The site-relative path for an entry: "/services/<slug>", "/" (homepage), or
- *  "/<slug>" when the type has no resolvable prefix. */
-export function entryPath(t: TypeIds, slug?: string | null): string {
+/** The site-relative path for an entry: "/services/<slug>", "/" (homepage),
+ *  "/<slug>" (static), or a reference type's custom template path
+ *  ("/blogs/tags/common-problems"). A reference type with no template falls back to
+ *  the prefixed-collection shape so it's never broken. */
+export function entryPath(t: TypeIds, slug?: string | null, opts?: { locale?: string | null }): string {
     if (isHomeType(t)) return "/";
+    if (isReferenceType(t)) {
+        const pattern = routePatternOf(t);
+        if (pattern) return buildReferencePath(pattern, slug, opts?.locale);
+    }
     const prefix = routePrefixForType(t);
     const s = (slug ?? "").replace(/^\/+/, "");
     if (!prefix) return s ? `/${s}` : "/";
@@ -92,8 +140,8 @@ export function entryPath(t: TypeIds, slug?: string | null): string {
 
 /** Join a site base URL (e.g. https://example.com) with an entry's site path.
  *  Trailing slashes on the base are trimmed; the homepage resolves to the base. */
-export function entryUrl(base: string, t: TypeIds, slug?: string | null): string {
+export function entryUrl(base: string, t: TypeIds, slug?: string | null, opts?: { locale?: string | null }): string {
     const root = base.replace(/\/+$/, "");
-    const path = entryPath(t, slug);
+    const path = entryPath(t, slug, opts);
     return path === "/" ? root || "/" : `${root}${path}`;
 }

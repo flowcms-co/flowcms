@@ -116,12 +116,12 @@ const STAT_PATHS = {
 
 /* ─── main component ─────────────────────────────────────── */
 
-const ContentTable = () => {
+const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const ws = useWorkspace();
     const searchParams = useSearchParams();
 
     const [items, setItems] = useState<EntryRow[]>([]);
-    const [types, setTypes] = useState<{ id: string; name: string }[]>([]);
+    const [types, setTypes] = useState<{ id: string; name: string; pageType?: string }[]>([]);
     const [loading, setLoading] = useState(true);
     const [filters, setFilters] = useState<Filters>({
         query: "",
@@ -159,10 +159,10 @@ const ContentTable = () => {
         try {
             const [entries, cts] = await Promise.all([
                 api<ApiEntry[]>(`/entries${mineOnly ? "?author=me" : ""}`),
-                api<{ id: string; name: string }[]>("/content-types"),
+                api<{ id: string; name: string; pageType?: string }[]>("/content-types"),
             ]);
             setItems(entries.map(mapEntry));
-            setTypes(cts.map((t) => ({ id: t.id, name: t.name })));
+            setTypes(cts.map((t) => ({ id: t.id, name: t.name, pageType: t.pageType })));
         } catch {
             /* content.read required */
         } finally {
@@ -265,7 +265,20 @@ const ContentTable = () => {
 
     /* ─── derived data ────────────────────────────────────── */
 
-    const all = useMemo(() => items, [items]);
+    // Reference-page types (tags, cities, …) are managed under the dedicated Reference
+    // tab, so their entries are kept out of the general "All Content" view.
+    const referenceTypeIds = useMemo(() => new Set(types.filter((t) => t.pageType === "reference").map((t) => t.id)), [types]);
+
+    // When scoped to a single type (a Reference sub-tab), restrict the dataset to that
+    // type; otherwise show everything except reference-type entries.
+    const all = useMemo(
+        () => (lockedTypeId ? items.filter((i) => i.typeId === lockedTypeId) : items.filter((i) => !referenceTypeIds.has(i.typeId))),
+        [items, lockedTypeId, referenceTypeIds],
+    );
+
+    // Type-filter dropdown lists only the types shown in this view (reference types are
+    // excluded from the All Content view, since they live under the Reference tab).
+    const filterableTypes = useMemo(() => types.filter((t) => !referenceTypeIds.has(t.id)), [types, referenceTypeIds]);
 
     const rows = useMemo(() => {
         const q = filters.query.trim().toLowerCase();
@@ -341,27 +354,30 @@ const ContentTable = () => {
                 </div>
             )}
 
-            {/* Stat bar */}
-            <Card className="!p-5">
-                <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
-                    <StatTile icon={STAT_PATHS.all} color="var(--color-primary)" value={all.length} label="All content" />
-                    <StatTile icon={STAT_PATHS.live} color="#00B894" value={statLive} label="Live" />
-                    <StatTile icon={STAT_PATHS.calendar} color="#3B82F6" value={statScheduled} label="Publishing this week" />
-                    <StatTile icon={STAT_PATHS.clock} color="#F5A623" value={statDraftReview} label="Draft and review" />
-                </div>
-            </Card>
+            {/* Stat bar (hidden in a single-type scoped view, e.g. a Reference sub-tab) */}
+            {!lockedTypeId && (
+                <Card className="!p-5">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
+                        <StatTile icon={STAT_PATHS.all} color="var(--color-primary)" value={all.length} label="All content" />
+                        <StatTile icon={STAT_PATHS.live} color="#00B894" value={statLive} label="Live" />
+                        <StatTile icon={STAT_PATHS.calendar} color="#3B82F6" value={statScheduled} label="Publishing this week" />
+                        <StatTile icon={STAT_PATHS.clock} color="#F5A623" value={statDraftReview} label="Draft and review" />
+                    </div>
+                </Card>
+            )}
 
             {/* Filters */}
             <FilterBar
                 filters={filters}
                 onChange={(next) => { setFilters(next); setPage(1); }}
                 total={rows.length}
-                types={types}
+                types={filterableTypes}
                 localeOptions={multiLocale ? localeOptions : []}
                 localeFilter={localeFilter}
                 onLocaleChange={(l) => { setLocaleFilter(l); setPage(1); }}
                 sort={sort}
                 onSortChange={(key) => { setSortKey(key); }}
+                hideTypeFilter={!!lockedTypeId}
             />
 
             {/* Table */}

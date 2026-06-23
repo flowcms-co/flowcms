@@ -53,13 +53,14 @@ export const SCHEMA_JSONLD = [
  *  - home: the single site root, served at / with no prefix.
  *  - static: a collection of top-level pages served at the root slug, /<slug>
  *    (e.g. /about-us, /legal) with no prefix. */
-export type PageType = "blog" | "service" | "home" | "static";
+export type PageType = "blog" | "service" | "home" | "static" | "reference";
 
 export const PAGE_TYPES: { value: PageType; label: string; jsonLd: string; hint: string }[] = [
     { value: "blog", label: "Blog Page", jsonLd: "BlogPosting", hint: "Collection at /<apiId>/<slug>" },
     { value: "service", label: "Service or Product Page", jsonLd: "Product", hint: "Collection at /<apiId>/<slug>" },
     { value: "home", label: "Home Page", jsonLd: "WebPage", hint: "Single page at /" },
     { value: "static", label: "Static Page", jsonLd: "WebPage", hint: "Top-level pages like /about-us, /legal" },
+    { value: "reference", label: "Reference Page", jsonLd: "WebPage", hint: "Custom URL, e.g. /blogs/tags/{slug} or /appliance-repair/{slug}" },
 ];
 
 /** Default page type for a brand-new content type. */
@@ -88,6 +89,22 @@ export type SchemaField = {
     componentApiId?: string;
     /** DynamicZone: component apiIds allowed as sections in this ordered list. */
     allowedComponents?: string[];
+    /** Reference (relation) field: the id of the content type this field points at.
+     *  The entry stores the referenced entry's id (single) or ids (multiple); the
+     *  delivery API expands these into the full referenced entries. */
+    referencedTypeId?: string;
+    /** Polymorphic reference: the content type ids this field may point at (more than
+     *  one). When set, the relation can link entries of any of these types; each
+     *  populated entry carries a `__type` (its content type apiId) so consumers can
+     *  tell them apart. Takes precedence over `referencedTypeId`. */
+    referencedTypeIds?: string[];
+    /** Reverse (mapped) side of a relation: the forward Reference field name on the
+     *  referenced (owner) type that points back here. When set, this field is derived
+     *  and read-only in the editor; the delivery API fills it from the join table. */
+    mappedByField?: string;
+    /** Reference field cardinality. false / undefined = a single entry (e.g. an
+     *  author); true = many entries (e.g. tags). */
+    multiple?: boolean;
     /** Richer validation rules + custom, user-friendly messages. The top-level
      *  `required` flag stays for backward compat; `messages.required` overrides the
      *  default required message. Rules other than required are only checked when a
@@ -175,6 +192,10 @@ export type ContentTypeSchema = {
      *  {slug}/{id}/{type}/{locale} template) the editor + live preview render when a
      *  new, unpublished entry has no published sibling to borrow. Empty = none. */
     previewUrl?: string;
+    /** Reference page type only: the custom public URL template for this type's
+     *  entries, e.g. "/blogs/tags/{slug}" or "/appliance-repair/{slug}". Supports
+     *  {slug} and {locale}; a template with no placeholder appends the slug. */
+    routePattern?: string;
     fields: SchemaField[];
 };
 

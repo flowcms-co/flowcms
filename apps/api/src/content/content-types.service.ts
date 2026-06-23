@@ -39,6 +39,7 @@ export class ContentTypesService {
             jsonLd?: string;
             pageType?: string;
             previewUrl?: string;
+            routePattern?: string;
             fields?: unknown[];
         };
         // Page type drives routing/kind/JSON-LD. Legacy types (no stored pageType)
@@ -58,6 +59,8 @@ export class ContentTypesService {
             pageType,
             // Per-type fallback live-preview URL (empty/unset → null).
             previewUrl: s.previewUrl ?? null,
+            // Custom URL template for a "reference" page type (e.g. "/blogs/tags/{slug}").
+            routePattern: s.routePattern ?? null,
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at

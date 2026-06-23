@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { ContentEntry, ContentStatus, Prisma, ReviewDecision } from "@flowcms/db";
 import { PERMISSIONS } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -10,7 +10,8 @@ import { PluginsService } from "../plugins/plugins.service";
 import { APPROVAL_PORT, type ApprovalPort } from "./approval.port";
 import { RBAC_PORT, type RbacPort, type RoleRules } from "./rbac.port";
 import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
-import { fieldsOf, validateEntryData, type ComponentMap } from "./entry-validation";
+import { fieldsOf, validateEntryData, type ComponentMap, type SchemaField } from "./entry-validation";
+import { RelationSyncService, refIds, reverseDelta, applyForwardValue } from "./relation-sync.service";
 import { entryPath } from "./route-path";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
@@ -47,12 +48,98 @@ export class ContentEntriesService {
         private readonly webhooks: WebhooksService,
         private readonly connectors: ConnectorsService,
         private readonly plugins: PluginsService,
+        private readonly relations: RelationSyncService,
         // Provided by the EE `approval_workflows` module when present; absent (and
         // so unenforced) in Community.
         @Optional() @Inject(APPROVAL_PORT) private readonly approvals?: ApprovalPort,
         // EE `advanced_rbac` field-level rules; absent (unenforced) in Community.
         @Optional() @Inject(RBAC_PORT) private readonly rbac?: RbacPort,
     ) {}
+
+    private readonly logger = new Logger(ContentEntriesService.name);
+
+    // ── Reverse (bidirectional) relation helpers ───────────────────────────────────
+    // A reverse Reference field (mappedByField set) is derived from the other side, so
+    // it's never stored on the entry. These helpers keep it out of the data blob, fill
+    // it in for the editor, and propagate edits made from the reverse side onto the
+    // owning entries' forward field (reusing update() so all the usual rules apply).
+
+    /** Reverse Reference fields declared on a content type's schema. */
+    private reverseFields(schema: unknown): SchemaField[] {
+        return fieldsOf(schema).filter((f) => f.type === "Reference" && !!f.mappedByField && !!f.referencedTypeId);
+    }
+
+    /** A copy of `data` with every reverse-field key removed (they're derived). */
+    private stripReverse(schema: unknown, data: Record<string, unknown>): Record<string, unknown> {
+        const reverse = this.reverseFields(schema);
+        if (!reverse.length) return data;
+        const out = { ...data };
+        for (const f of reverse) delete out[f.name];
+        return out;
+    }
+
+    /** Fill an entry's reverse fields with their current linked ids (from the join
+     *  table) so the editor can show + round-trip them. Best-effort. */
+    private async withReverseIds(workspaceId: string, entryId: string, schema: unknown, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+        const reverse = this.reverseFields(schema);
+        if (!reverse.length) return data;
+        const out = { ...data };
+        try {
+            for (const f of reverse) {
+                const rels = await this.prisma.entryRelation.findMany({
+                    where: { workspaceId, toId: entryId, fromTypeId: f.referencedTypeId!, fromField: f.mappedByField! },
+                    orderBy: { order: "asc" },
+                    select: { fromId: true },
+                });
+                const ids = rels.map((r) => r.fromId);
+                out[f.name] = f.multiple ? ids : (ids[0] ?? null);
+            }
+        } catch (err) {
+            this.logger.warn(`Reverse-id fill failed for entry ${entryId}: ${(err as Error).message}`);
+        }
+        return out;
+    }
+
+    /** Propagate a reverse-side relation edit onto the owning entries: for each owner
+     *  newly linked / unlinked, set its forward field via update() (so draft overlay,
+     *  validation, RBAC and join-table sync all apply). Best-effort: an owner that
+     *  can't be edited is logged and skipped, never failing the originating save. */
+    private async propagateReverse(
+        workspaceId: string,
+        entryId: string,
+        schema: unknown,
+        submitted: Record<string, unknown>,
+        ctx: { actorId?: string; role?: RoleRules; actorPermissions?: string[] },
+    ): Promise<void> {
+        for (const f of this.reverseFields(schema)) {
+            if (!(f.name in submitted)) continue; // not submitted → leave links untouched
+            const ownerTypeId = f.referencedTypeId!;
+            const forwardField = f.mappedByField!;
+            const desired = refIds(submitted[f.name]);
+            const prev = await this.prisma.entryRelation.findMany({
+                where: { workspaceId, toId: entryId, fromTypeId: ownerTypeId, fromField: forwardField },
+                select: { fromId: true },
+            });
+            const { add, remove } = reverseDelta(prev.map((r) => r.fromId), desired);
+            if (!add.length && !remove.length) continue;
+
+            const ownerType = await this.prisma.contentType.findFirst({ where: { id: ownerTypeId, workspaceId }, select: { schema: true } });
+            const forwardMultiple = !!fieldsOf(ownerType?.schema).find((x) => x.name === forwardField)?.multiple;
+
+            const ops: [string, "add" | "remove"][] = [...add.map((id) => [id, "add"] as [string, "add"]), ...remove.map((id) => [id, "remove"] as [string, "remove"])];
+            for (const [ownerId, op] of ops) {
+                try {
+                    const owner = await this.prisma.contentEntry.findFirst({ where: { id: ownerId, workspaceId }, select: { data: true, draftData: true } });
+                    if (!owner) continue;
+                    const cur = (owner.draftData ?? owner.data ?? {}) as Record<string, unknown>;
+                    const next = applyForwardValue(cur[forwardField], entryId, op, forwardMultiple);
+                    await this.update(workspaceId, ownerId, { data: { [forwardField]: next } } as UpdateEntryDto, ctx.actorId, ctx.role, ctx.actorPermissions);
+                } catch (err) {
+                    this.logger.warn(`Reverse propagation to owner ${ownerId} failed: ${(err as Error).message}`);
+                }
+            }
+        }
+    }
 
     /** Best-effort outbound fan-out for a content event: webhooks + Slack/Zapier connectors. */
     private fire(workspaceId: string, event: WebhookEvent, entry: Shaped) {
@@ -293,7 +380,7 @@ export class ContentEntriesService {
             // from the content type's route prefix: "/services/<slug>", "/blogs/<slug>",
             // or "/" for a homepage type. Lets the studio preview the right page and
             // gives webhook consumers the URL to revalidate.
-            path: entryPath(e.contentType, e.slug),
+            path: entryPath(e.contentType, e.slug, { locale: e.locale }),
             author: authorName ? { name: authorName } : null,
             publishedAt: e.publishedAt,
             scheduledAt: e.scheduledAt,
@@ -369,12 +456,16 @@ export class ContentEntriesService {
         if (!e) throw new NotFoundException("Entry not found.");
         // The editor edits the draft overlay when one exists (a published entry with
         // pending changes); otherwise it edits the live data directly. The public
-        // delivery API still reads `data`, so the last-published copy stays live.
+        // delivery API still reads `data`, so the last-published copy stays live. Either
+        // way, fill reverse-relation fields with their current linked ids so the editor
+        // can show + round-trip them (they're not stored in the data blob).
         if (e.draftData != null) {
             const draft = (e.draftData ?? {}) as { title?: string };
-            return { ...this.shape(e), data: e.draftData, title: draft.title ?? "Untitled" };
+            const data = await this.withReverseIds(workspaceId, e.id, e.contentType.schema, (e.draftData ?? {}) as Record<string, unknown>);
+            return { ...this.shape(e), data, title: draft.title ?? "Untitled" };
         }
-        return this.shape(e);
+        const data = await this.withReverseIds(workspaceId, e.id, e.contentType.schema, (e.data ?? {}) as Record<string, unknown>);
+        return { ...this.shape(e), data };
     }
 
     /** Is `slug` already taken by another entry of the same type + locale? A page's
@@ -451,7 +542,10 @@ export class ContentEntriesService {
         const locale = dto.locale || "en";
         // One slug per page: reject a slug already taken within this type + locale.
         await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
-        let data: Record<string, unknown> = { ...(dto.data ?? {}), title: dto.title ?? "Untitled" };
+        // Reverse-relation fields are derived, not stored: keep the submitted values
+        // to propagate onto the owning entries after save, but strip them from the blob.
+        const submittedReverse = { ...(dto.data ?? {}) };
+        let data: Record<string, unknown> = this.stripReverse(type.schema, { ...(dto.data ?? {}), title: dto.title ?? "Untitled" });
         // advanced_rbac (Pro): block disallowed types + drop fields the role can't edit.
         if (this.rbac && role) {
             const allowed = await this.rbac.allowedTypeIds(role);
@@ -477,6 +571,8 @@ export class ContentEntriesService {
             include: { contentType: { select: CT_SELECT } },
         });
         await this.snapshot(e.id, data, "DRAFT", userId);
+        await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, data);
+        await this.propagateReverse(workspaceId, e.id, e.contentType.schema, submittedReverse, { actorId: userId ?? undefined, role });
         const shaped = this.shape(e);
         this.fire(workspaceId, "content.created", shaped);
         return shaped;
@@ -506,6 +602,10 @@ export class ContentEntriesService {
         // advanced_rbac (Pro): block editing disallowed types + ignore writes to
         // fields the role can't edit (existing values are preserved).
         let incoming = (dto.data ?? {}) as Record<string, unknown>;
+        // Reverse-relation fields are derived, not stored: keep the submitted values to
+        // propagate onto the owning entries after save, but strip them from the blob.
+        const submittedReverse = { ...(dto.data ?? {}) };
+        incoming = this.stripReverse(existing.contentType.schema, incoming);
         if (this.rbac && role) {
             const allowed = await this.rbac.allowedTypeIds(role);
             if (allowed && !allowed.includes(existing.contentTypeId)) throw new ForbiddenException("Your role can't edit content of this type.");
@@ -540,6 +640,7 @@ export class ContentEntriesService {
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(updated.id, draft, existing.status, actorId);
+            await this.propagateReverse(workspaceId, updated.id, existing.contentType.schema, submittedReverse, { actorId, role, actorPermissions });
             const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
             this.fire(workspaceId, "content.updated", shaped);
             return shaped;
@@ -586,6 +687,10 @@ export class ContentEntriesService {
             data,
             include: { contentType: { select: CT_SELECT } },
         });
+        if (dataChanged) {
+            await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, merged);
+        }
+        await this.propagateReverse(workspaceId, e.id, e.contentType.schema, submittedReverse, { actorId, role, actorPermissions });
         if (actorId && targetStatus !== existing.status) {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, targetStatus);
         }
@@ -666,6 +771,7 @@ export class ContentEntriesService {
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(e.id, promoted, "PUBLISHED", actorId);
+            await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, promoted);
             const shaped = this.shape(e);
             this.fire(workspaceId, "content.published", shaped);
             return shaped;
@@ -685,6 +791,7 @@ export class ContentEntriesService {
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(e.id, e.data, "DRAFT", actorId);
+            await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, (e.data ?? {}) as Record<string, unknown>);
             const shaped = this.shape(e);
             this.fire(workspaceId, "content.unpublished", shaped);
             return shaped;
@@ -747,6 +854,7 @@ export class ContentEntriesService {
             },
             include: { contentType: { select: CT_SELECT } },
         });
+        await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, data);
         return this.shape(e);
     }
 

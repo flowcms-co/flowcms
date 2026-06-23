@@ -15,6 +15,7 @@ import {
     jsonLdForPageType,
     camelCaseKey,
     lowerKey,
+    fieldLabel,
     globalSchemaDefaults,
     normalizeFieldKeys,
     type ContentTypeSchema,
@@ -69,6 +70,12 @@ const blankComponent = (): SchemaField => ({
 /** A reusable component the schema can reference (apiId + display name). */
 type ComponentRef = { apiId: string; name: string };
 
+/** A content type a Reference field can point at (id + display name). The id is the
+ *  content type's database id — what the entry editor queries entries by. `refFields`
+ *  lists this type's forward Reference fields, offered as the "mapped by" target when
+ *  configuring a reverse relation that points back from this type. */
+type TypeRef = { id: string; name: string; refFields: { name: string; label: string }[] };
+
 /**
  * Schema Builder (Content Model) — Strapi-style content-type builder. Define
  * content types and their fields, including inline + **reusable** components and
@@ -110,6 +117,16 @@ const SchemaPage = () => {
     const setCollection = tab === "types" ? setTypes : setComponents;
     const active = collection.find((t) => t.id === activeId) ?? null;
     const componentRefs: ComponentRef[] = components.map((c) => ({ apiId: c.apiId ?? "", name: c.name })).filter((c) => c.apiId);
+    // Content types a Reference field can target (always the full type list, so a
+    // type can even reference itself, e.g. "related posts"). Each carries its forward
+    // Reference fields for configuring the reverse (mapped-by) side.
+    const typeRefs: TypeRef[] = types.map((t) => ({
+        id: t.id,
+        name: t.name,
+        refFields: (t.fields ?? [])
+            .filter((f) => f.type === "Reference" && !f.mappedByField)
+            .map((f) => ({ name: f.name, label: fieldLabel(f) })),
+    }));
 
     const switchTab = (next: "types" | "components") => {
         if (next === tab) return;
@@ -179,6 +196,8 @@ const SchemaPage = () => {
                                   jsonLd: jsonLdForPageType(active.pageType ?? DEFAULT_PAGE_TYPE),
                                   // Omit when blank so the stored schema stays clean.
                                   previewUrl: active.previewUrl?.trim() || undefined,
+                                  // Reference types carry a custom URL template; cleared for others.
+                                  routePattern: active.pageType === "reference" ? active.routePattern?.trim() || undefined : undefined,
                               }
                             : { jsonLd: active.jsonLd }),
                         fields,
@@ -344,6 +363,27 @@ const SchemaPage = () => {
                                 </div>
                             </div>
 
+                            {tab === "types" && active.pageType === "reference" && (
+                                <label className="mb-5 flex flex-col gap-1.5">
+                                    <span className="text-caption-1 text-grey">URL pattern <span className="text-error">*</span></span>
+                                    <input
+                                        value={active.routePattern ?? ""}
+                                        onChange={(e) => patchActive({ routePattern: e.target.value })}
+                                        placeholder="/blogs/tags/{slug}  ·  or  /appliance-repair/{slug}"
+                                        spellCheck={false}
+                                        className="flow-input font-mono text-caption-1"
+                                    />
+                                    <span className="text-caption-2 leading-relaxed text-grey">
+                                        The public URL for this reference type&rsquo;s entries. Put{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{slug}"}</code>{" "}
+                                        where the entry slug goes (e.g.{" "}
+                                        <span className="font-medium text-black dark:text-white">/blogs/tags/{"{slug}"}</span> &rarr; /blogs/tags/common-problems). Also supports{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{locale}"}</code>. If you omit{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{slug}"}</code>, it&rsquo;s appended to the end.
+                                    </span>
+                                </label>
+                            )}
+
                             {tab === "types" && (
                                 <label className="mb-5 flex flex-col gap-1.5">
                                     <span className="text-caption-1 text-grey">Fallback preview URL <span className="text-grey/70">(optional)</span></span>
@@ -366,7 +406,7 @@ const SchemaPage = () => {
                                 </label>
                             )}
 
-                            <FieldList fields={active.fields} onChange={setActiveFields} components={componentRefs} allowZones={tab === "types"} />
+                            <FieldList fields={active.fields} onChange={setActiveFields} components={componentRefs} contentTypes={typeRefs} allowZones={tab === "types"} />
                         </>
                     )}
                 </Card>
@@ -382,12 +422,14 @@ const FieldList = ({
     fields,
     onChange,
     components,
+    contentTypes,
     allowZones,
     depth = 0,
 }: {
     fields: SchemaField[];
     onChange: (next: SchemaField[]) => void;
     components: ComponentRef[];
+    contentTypes: TypeRef[];
     allowZones: boolean;
     depth?: number;
 }) => {
@@ -403,6 +445,7 @@ const FieldList = ({
                         field={f}
                         depth={depth}
                         components={components}
+                        contentTypes={contentTypes}
                         allowZones={allowZones}
                         onUpdate={(patch) => update(f.id, patch)}
                         onUpdateChildren={(nf) => update(f.id, { fields: nf })}
@@ -445,6 +488,7 @@ const FieldRow = ({
     field,
     depth,
     components,
+    contentTypes,
     allowZones,
     onUpdate,
     onUpdateChildren,
@@ -453,6 +497,7 @@ const FieldRow = ({
     field: SchemaField;
     depth: number;
     components: ComponentRef[];
+    contentTypes: TypeRef[];
     allowZones: boolean;
     onUpdate: (patch: Partial<SchemaField>) => void;
     onUpdateChildren: (next: SchemaField[]) => void;
@@ -465,6 +510,11 @@ const FieldRow = ({
     const isComp = field.type === "Component";
     const isZone = field.type === "DynamicZone";
     const isRef = isComp && !!field.componentApiId;
+    const isReference = field.type === "Reference";
+    const isPoly = isReference && Array.isArray(field.referencedTypeIds);
+    const isReverse = isReference && field.mappedByField !== undefined;
+    // The forward Reference fields available on the owner type a reverse field maps by.
+    const reverseOwner = isReverse ? contentTypes.find((t) => t.id === field.referencedTypeId) : undefined;
     // Validation rules apply to plain value fields (not components / zones / toggles).
     const isNumberField = field.type === "Number";
     const canValidate = !isComp && !isZone && ["Text", "Rich text", "URL", "Slug", "Number"].includes(field.type);
@@ -478,9 +528,10 @@ const FieldRow = ({
         setV({ messages: text ? { required: text, minLength: text, maxLength: text, min: text, max: text, pattern: text, type: text } : undefined });
 
     const changeType = (type: FieldType) => {
-        if (type === "Component") onUpdate({ type, fields: field.fields ?? [], repeatable: field.repeatable ?? false, allowedComponents: undefined, componentApiId: undefined });
-        else if (type === "DynamicZone") onUpdate({ type, allowedComponents: field.allowedComponents ?? components.map((c) => c.apiId), fields: undefined, componentApiId: undefined, repeatable: undefined });
-        else onUpdate({ type, fields: undefined, repeatable: undefined, componentApiId: undefined, allowedComponents: undefined });
+        if (type === "Component") onUpdate({ type, fields: field.fields ?? [], repeatable: field.repeatable ?? false, allowedComponents: undefined, componentApiId: undefined, referencedTypeId: undefined, referencedTypeIds: undefined, mappedByField: undefined, multiple: undefined });
+        else if (type === "DynamicZone") onUpdate({ type, allowedComponents: field.allowedComponents ?? components.map((c) => c.apiId), fields: undefined, componentApiId: undefined, repeatable: undefined, referencedTypeId: undefined, referencedTypeIds: undefined, mappedByField: undefined, multiple: undefined });
+        else if (type === "Reference") onUpdate({ type, referencedTypeId: field.referencedTypeId ?? contentTypes[0]?.id, multiple: field.multiple ?? false, fields: undefined, repeatable: undefined, componentApiId: undefined, allowedComponents: undefined });
+        else onUpdate({ type, fields: undefined, repeatable: undefined, componentApiId: undefined, allowedComponents: undefined, referencedTypeId: undefined, referencedTypeIds: undefined, mappedByField: undefined, multiple: undefined });
     };
 
     const toggleAllowed = (apiId: string) => {
@@ -489,6 +540,27 @@ const FieldRow = ({
         else set.add(apiId);
         onUpdate({ allowedComponents: [...set] });
     };
+
+    // Polymorphic target content types (which types this relation may point at).
+    const toggleTargetType = (id: string) => {
+        const set = new Set(field.referencedTypeIds ?? []);
+        if (set.has(id)) set.delete(id);
+        else set.add(id);
+        onUpdate({ referencedTypeIds: [...set] });
+    };
+
+    // Switch a Reference field between single-target and polymorphic (multi-target).
+    const togglePolymorphic = (on: boolean) =>
+        on
+            ? onUpdate({ referencedTypeIds: field.referencedTypeId ? [field.referencedTypeId] : [], referencedTypeId: undefined })
+            : onUpdate({ referencedTypeIds: undefined, referencedTypeId: field.referencedTypeIds?.[0] ?? contentTypes[0]?.id });
+
+    // Switch a Reference field between the forward (owning) and reverse (mapped) side.
+    // The reverse side is derived from the join table, so it's never polymorphic.
+    const toggleReverse = (on: boolean) =>
+        on
+            ? onUpdate({ mappedByField: "", referencedTypeId: field.referencedTypeId ?? contentTypes[0]?.id, referencedTypeIds: undefined })
+            : onUpdate({ mappedByField: undefined });
 
     return (
         <Reorder.Item
@@ -537,6 +609,43 @@ const FieldRow = ({
                         onChange={(v) => (v === INLINE ? onUpdate({ componentApiId: undefined }) : onUpdate({ componentApiId: v, fields: undefined }))}
                         options={[{ value: INLINE, label: "Inline" }, ...components.map((c) => ({ value: c.apiId, label: c.name }))]}
                     />
+                )}
+
+                {/* Reference (relation): which content type, one vs many, single vs
+                    polymorphic (multi-type) target. */}
+                {isReference && (
+                    <>
+                        {!isPoly && (
+                            <Select
+                                variant="field"
+                                className="!w-auto"
+                                ariaLabel="Referenced content type"
+                                value={field.referencedTypeId ?? ""}
+                                onChange={(v) => onUpdate({ referencedTypeId: v || undefined })}
+                                options={
+                                    contentTypes.length
+                                        ? contentTypes.map((t) => ({ value: t.id, label: t.name }))
+                                        : [{ value: "", label: "No content types" }]
+                                }
+                            />
+                        )}
+                        <label className="flex items-center gap-2 shrink-0 px-1 cursor-pointer select-none">
+                            <span className="text-caption-2 font-medium text-grey">Multiple</span>
+                            <Switch checked={!!field.multiple} onChange={(v) => onUpdate({ multiple: v })} aria-label={`${field.name} multiple`} />
+                        </label>
+                        {!isReverse && (
+                            <label className="flex items-center gap-2 shrink-0 px-1 cursor-pointer select-none">
+                                <span className="text-caption-2 font-medium text-grey">Polymorphic</span>
+                                <Switch checked={isPoly} onChange={togglePolymorphic} aria-label={`${field.name} polymorphic`} />
+                            </label>
+                        )}
+                        {!isPoly && (
+                            <label className="flex items-center gap-2 shrink-0 px-1 cursor-pointer select-none">
+                                <span className="text-caption-2 font-medium text-grey">Reverse</span>
+                                <Switch checked={isReverse} onChange={toggleReverse} aria-label={`${field.name} reverse relation`} />
+                            </label>
+                        )}
+                    </>
                 )}
 
                 {(isComp || isZone) ? (
@@ -661,7 +770,7 @@ const FieldRow = ({
                             <strong className="font-semibold text-black dark:text-white">Components</strong> tab and reference it here instead of inlining it.
                         </p>
                     ) : (
-                        <FieldList fields={field.fields ?? []} onChange={onUpdateChildren} components={components} allowZones={false} depth={depth + 1} />
+                        <FieldList fields={field.fields ?? []} onChange={onUpdateChildren} components={components} contentTypes={contentTypes} allowZones={false} depth={depth + 1} />
                     )}
                 </div>
             )}
@@ -671,6 +780,75 @@ const FieldRow = ({
                 <p className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25 py-1.5 text-caption-2 text-grey">
                     References the <span className="font-mono text-primary dark:text-lilac">{field.componentApiId}</span> component. Edit its fields in the Components tab.
                 </p>
+            )}
+
+            {/* Reference relation → polymorphic target picker + note */}
+            {isReference && (
+                <div className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25">
+                    {isPoly && (
+                        <>
+                            <div className="py-1 text-caption-2 text-grey">Allowed types</div>
+                            {contentTypes.length === 0 ? (
+                                <p className="pb-2 text-caption-2 text-grey">No content types yet.</p>
+                            ) : (
+                                <div className="flex flex-wrap gap-2 pb-2">
+                                    {contentTypes.map((t) => {
+                                        const on = (field.referencedTypeIds ?? []).includes(t.id);
+                                        return (
+                                            <button
+                                                key={t.id}
+                                                type="button"
+                                                onClick={() => toggleTargetType(t.id)}
+                                                className={cn(
+                                                    "inline-flex items-center gap-1.5 rounded-xl border px-2.5 h-8 text-caption-2 transition-colors",
+                                                    on ? "border-primary bg-primary/10 text-primary dark:text-lilac" : "border-grey-light text-grey hover:text-primary dark:border-grey-light/10",
+                                                )}
+                                            >
+                                                {on && <Icon className="w-3.5 h-3.5 fill-current" name="check" />}
+                                                {t.name}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </>
+                    )}
+                    {isReverse && (
+                        <div className="flex flex-wrap items-center gap-2 py-1">
+                            <span className="text-caption-2 text-grey">Mapped by</span>
+                            <Select
+                                variant="field"
+                                className="!w-auto"
+                                ariaLabel="Mapped-by field"
+                                value={field.mappedByField || ""}
+                                onChange={(v) => onUpdate({ mappedByField: v })}
+                                options={
+                                    reverseOwner && reverseOwner.refFields.length
+                                        ? reverseOwner.refFields.map((rf) => ({ value: rf.name, label: rf.label }))
+                                        : [{ value: "", label: reverseOwner ? `No relation fields on ${reverseOwner.name}` : "Pick a type first" }]
+                                }
+                            />
+                        </div>
+                    )}
+                    {isReverse ? (
+                        <p className="py-1.5 text-caption-2 text-grey">
+                            Reverse relation (read-only). Shows {field.multiple ? "all" : "the"}{" "}
+                            <span className="font-mono text-primary dark:text-lilac">{reverseOwner?.name ?? "—"}</span>{" "}
+                            {field.multiple ? "entries whose" : "entry whose"}{" "}
+                            <span className="font-mono text-primary dark:text-lilac">{field.mappedByField || "—"}</span> field links to this one. Filled automatically by the delivery API.
+                        </p>
+                    ) : (
+                        <p className="py-1.5 text-caption-2 text-grey">
+                            Links to {field.multiple ? "many" : "one"}{" "}
+                            <span className="font-mono text-primary dark:text-lilac">
+                                {isPoly
+                                    ? (field.referencedTypeIds ?? []).map((id) => contentTypes.find((t) => t.id === id)?.name ?? id).join(", ") || "—"
+                                    : contentTypes.find((t) => t.id === field.referencedTypeId)?.name ?? "—"}
+                            </span>{" "}
+                            {field.multiple ? "entries" : "entry"}. Editors pick existing entries; the delivery API returns the full referenced {field.multiple ? "entries" : "entry"}.
+                        </p>
+                    )}
+                </div>
             )}
 
             {/* Dynamic zone → allowed components */}
