@@ -1,15 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import Icon from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
 import { mediaUrl } from "@/lib/api";
 import { runAi, aiErrorMessage } from "@/lib/useAi";
 import { richTextExtensions, imageUploadProps } from "@/lib/tiptap";
-import { ColorMenu, EmojiMenu, TableMenu } from "./RichToolbarMenus";
+import { ColorMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
+import { EditorIcon } from "./EditorIcons";
 import MediaPicker from "@/components/ui/MediaPicker";
+
+// One uniform glyph size for every button in the canvas toolbar + bubble.
+const ICON = "h-[1.125rem] w-[1.125rem]";
+// Trigger styles for the inline LinkMenu so it matches the canvas TBtn buttons.
+const LINK_TRIGGER = "inline-flex h-8 w-8 items-center justify-center rounded-lg text-body text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3";
+const LINK_ACTIVE = "bg-primary/10 text-primary dark:text-lilac";
 
 /**
  * TipTap canvas (free MIT core) for the body + Main Content sections. Provides a
@@ -31,6 +37,8 @@ const EditorCanvas = ({
     const [aiBusy, setAiBusy] = useState(false);
     const [aiError, setAiError] = useState<string | null>(null);
     const [imgPicker, setImgPicker] = useState(false);
+    // Keep the selection bubble open while its link popover is being edited.
+    const bubbleLinkOpen = useRef(false);
 
     const editor = useEditor({
         immediatelyRender: false,
@@ -62,7 +70,6 @@ const EditorCanvas = ({
                       highlight: editor.isActive("highlight"),
                       sup: editor.isActive("superscript"),
                       sub: editor.isActive("subscript"),
-                      link: editor.isActive("link"),
                       bullet: editor.isActive("bulletList"),
                       ordered: editor.isActive("orderedList"),
                       task: editor.isActive("taskList"),
@@ -115,14 +122,6 @@ const EditorCanvas = ({
     const hasUnderline = !!editor.schema.marks.underline;
     const hasLink = !!editor.schema.marks.link;
 
-    const toggleLink = () => {
-        const prev = (editor.getAttributes("link").href as string) ?? "";
-        const url = window.prompt("Link URL", prev);
-        if (url === null) return;
-        if (url.trim() === "") editor.chain().focus().extendMarkRange("link").unsetLink().run();
-        else editor.chain().focus().extendMarkRange("link").setLink({ href: url.trim() }).run();
-    };
-
     /** Insert an image from the asset library / a URL at the cursor (absolutized so
      *  it loads in the editor across origins). */
     const insertImage = (url: string) => {
@@ -143,8 +142,8 @@ const EditorCanvas = ({
         <div className="flex flex-col">
             {/* Pinned toolbar */}
             <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-grey-light bg-white/80 px-1.5 py-1.5 backdrop-blur dark:border-grey-light/10 dark:bg-dark-1/80">
-                <TBtn title="Undo" onClick={() => editor.chain().focus().undo().run()}><span className="text-[1rem] leading-none">↺</span></TBtn>
-                <TBtn title="Redo" onClick={() => editor.chain().focus().redo().run()}><span className="text-[1rem] leading-none">↻</span></TBtn>
+                <TBtn title="Undo" onClick={() => editor.chain().focus().undo().run()}><EditorIcon name="undo" className={ICON} /></TBtn>
+                <TBtn title="Redo" onClick={() => editor.chain().focus().redo().run()}><EditorIcon name="redo" className={ICON} /></TBtn>
                 <Sep />
                 <BlockMenu
                     label={blockLabel}
@@ -153,40 +152,39 @@ const EditorCanvas = ({
                     onQuote={() => editor.chain().focus().toggleBlockquote().run()}
                 />
                 <Sep />
-                <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><span className="font-bold">B</span></TBtn>
-                <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><span className="font-serif italic">i</span></TBtn>
-                {hasUnderline && <TBtn title="Underline" active={!!s?.underline} onClick={() => editor.chain().focus().toggleUnderline().run()}><span className="underline">U</span></TBtn>}
-                <TBtn title="Strikethrough" active={!!s?.strike} onClick={() => editor.chain().focus().toggleStrike().run()}><span className="line-through">S</span></TBtn>
-                <TBtn title="Highlight" active={!!s?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()}><Icon className="h-4 w-4 fill-current" name="edit" /></TBtn>
+                <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><EditorIcon name="bold" className={ICON} /></TBtn>
+                <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><EditorIcon name="italic" className={ICON} /></TBtn>
+                {hasUnderline && <TBtn title="Underline" active={!!s?.underline} onClick={() => editor.chain().focus().toggleUnderline().run()}><EditorIcon name="underline" className={ICON} /></TBtn>}
+                <TBtn title="Strikethrough" active={!!s?.strike} onClick={() => editor.chain().focus().toggleStrike().run()}><EditorIcon name="strike" className={ICON} /></TBtn>
+                <TBtn title="Highlight" active={!!s?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()}><EditorIcon name="highlight" className={ICON} /></TBtn>
                 <ColorMenu editor={editor} />
-                <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><span className="font-mono text-[0.78em]">{"</>"}</span></TBtn>
-                {hasLink && <TBtn title="Link" active={!!s?.link} onClick={toggleLink}><Icon className="h-4 w-4 fill-current" name="external" /></TBtn>}
-                <TBtn title="Superscript" active={!!s?.sup} onClick={() => editor.chain().focus().toggleSuperscript().run()}><span className="text-[0.82em]">x<sup>2</sup></span></TBtn>
-                <TBtn title="Subscript" active={!!s?.sub} onClick={() => editor.chain().focus().toggleSubscript().run()}><span className="text-[0.82em]">x<sub>2</sub></span></TBtn>
+                <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><EditorIcon name="code" className={ICON} /></TBtn>
+                {hasLink && <LinkMenu editor={editor} iconClass={ICON} triggerClass={LINK_TRIGGER} activeClass={LINK_ACTIVE} />}
+                <TBtn title="Superscript" active={!!s?.sup} onClick={() => editor.chain().focus().toggleSuperscript().run()}><EditorIcon name="superscript" className={ICON} /></TBtn>
+                <TBtn title="Subscript" active={!!s?.sub} onClick={() => editor.chain().focus().toggleSubscript().run()}><EditorIcon name="subscript" className={ICON} /></TBtn>
                 <Sep />
-                <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><Icon className="h-4 w-4 fill-current" name="menu-collapse" /></TBtn>
-                <TBtn title="Numbered list" active={!!s?.ordered} onClick={() => editor.chain().focus().toggleOrderedList().run()}><span className="text-[0.72rem] font-bold">1.</span></TBtn>
-                <TBtn title="Checklist" active={!!s?.task} onClick={() => editor.chain().focus().toggleTaskList().run()}><span className="text-[0.9em] leading-none">☑</span></TBtn>
-                <TBtn title="Quote" active={!!s?.quote} onClick={() => editor.chain().focus().toggleBlockquote().run()}><span className="font-serif text-[1.15em] leading-none">&rdquo;</span></TBtn>
-                <TBtn title="Code block" active={!!s?.codeBlock} onClick={() => editor.chain().focus().toggleCodeBlock().run()}><span className="font-mono text-[0.7rem] font-bold">{"{}"}</span></TBtn>
+                <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><EditorIcon name="bulletList" className={ICON} /></TBtn>
+                <TBtn title="Numbered list" active={!!s?.ordered} onClick={() => editor.chain().focus().toggleOrderedList().run()}><EditorIcon name="orderedList" className={ICON} /></TBtn>
+                <TBtn title="Checklist" active={!!s?.task} onClick={() => editor.chain().focus().toggleTaskList().run()}><EditorIcon name="taskList" className={ICON} /></TBtn>
+                <TBtn title="Quote" active={!!s?.quote} onClick={() => editor.chain().focus().toggleBlockquote().run()}><EditorIcon name="quote" className={ICON} /></TBtn>
+                <TBtn title="Code block" active={!!s?.codeBlock} onClick={() => editor.chain().focus().toggleCodeBlock().run()}><EditorIcon name="codeBlock" className={ICON} /></TBtn>
                 <Sep />
-                <TBtn title="Align left" active={!!s?.alignLeft} onClick={() => editor.chain().focus().setTextAlign("left").run()}><AlignIcon dir="left" /></TBtn>
-                <TBtn title="Align center" active={!!s?.alignCenter} onClick={() => editor.chain().focus().setTextAlign("center").run()}><AlignIcon dir="center" /></TBtn>
-                <TBtn title="Align right" active={!!s?.alignRight} onClick={() => editor.chain().focus().setTextAlign("right").run()}><AlignIcon dir="right" /></TBtn>
-                <TBtn title="Justify" active={!!s?.alignJustify} onClick={() => editor.chain().focus().setTextAlign("justify").run()}><AlignIcon dir="justify" /></TBtn>
+                <TBtn title="Align left" active={!!s?.alignLeft} onClick={() => editor.chain().focus().setTextAlign("left").run()}><EditorIcon name="alignLeft" className={ICON} /></TBtn>
+                <TBtn title="Align center" active={!!s?.alignCenter} onClick={() => editor.chain().focus().setTextAlign("center").run()}><EditorIcon name="alignCenter" className={ICON} /></TBtn>
+                <TBtn title="Align right" active={!!s?.alignRight} onClick={() => editor.chain().focus().setTextAlign("right").run()}><EditorIcon name="alignRight" className={ICON} /></TBtn>
+                <TBtn title="Justify" active={!!s?.alignJustify} onClick={() => editor.chain().focus().setTextAlign("justify").run()}><EditorIcon name="alignJustify" className={ICON} /></TBtn>
                 <Sep />
-                <EmojiMenu editor={editor} />
-                <TableMenu editor={editor} />
-                <TBtn title="Horizontal rule" onClick={() => editor.chain().focus().setHorizontalRule().run()}><span className="text-[1.1em] font-bold leading-none">―</span></TBtn>
+                <EmojiMenu editor={editor} iconClass={ICON} />
+                <TableMenu editor={editor} iconClass={ICON} />
+                <TBtn title="Horizontal rule" onClick={() => editor.chain().focus().setHorizontalRule().run()}><EditorIcon name="rule" className={ICON} /></TBtn>
                 <Sep />
                 <button
                     type="button"
                     onClick={clearFormatting}
                     title="Clear formatting — reset selection (or the whole block) to plain text"
-                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-medium text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-caption-2 font-medium text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
                 >
-                    <span className="font-serif">T</span>
-                    <span className="text-[0.65rem]">✕</span>
+                    <EditorIcon name="clear" className={ICON} />
                     Clear
                 </button>
                 <div className="ml-auto" />
@@ -194,9 +192,9 @@ const EditorCanvas = ({
                     type="button"
                     onClick={() => setImgPicker(true)}
                     title="Insert an image"
-                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-medium text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-caption-2 font-medium text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
                 >
-                    <Icon className="h-4 w-4 fill-current" name="image" />
+                    <EditorIcon name="image" className={ICON} />
                     Add
                 </button>
                 <button
@@ -204,9 +202,9 @@ const EditorCanvas = ({
                     onClick={() => void askAi()}
                     disabled={aiBusy}
                     title="Improve the selected text with AI"
-                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:text-lilac dark:hover:bg-dark-3"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:text-lilac dark:hover:bg-dark-3"
                 >
-                    <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name="sparkles" />
+                    <EditorIcon name="sparkles" className={ICON} />
                     {aiBusy ? "…" : "AI"}
                 </button>
             </div>
@@ -215,27 +213,28 @@ const EditorCanvas = ({
             <BubbleMenu
                 editor={editor}
                 options={{ placement: "top" }}
+                shouldShow={({ editor, state }) => bubbleLinkOpen.current || (editor.isEditable && !state.selection.empty)}
                 className="flex items-center gap-0.5 rounded-lg border border-grey-light bg-white p-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:border-grey-light/10 dark:bg-dark-1"
             >
-                <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><span className="font-bold">B</span></TBtn>
-                <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><span className="font-serif italic">i</span></TBtn>
-                <TBtn title="Highlight" active={!!s?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()}><Icon className="h-4 w-4 fill-current" name="edit" /></TBtn>
-                <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><span className="font-mono text-[0.78em]">{"</>"}</span></TBtn>
-                {hasLink && <TBtn title="Link" active={!!s?.link} onClick={toggleLink}><Icon className="h-4 w-4 fill-current" name="external" /></TBtn>}
+                <TBtn title="Bold" active={!!s?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><EditorIcon name="bold" className={ICON} /></TBtn>
+                <TBtn title="Italic" active={!!s?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><EditorIcon name="italic" className={ICON} /></TBtn>
+                <TBtn title="Highlight" active={!!s?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()}><EditorIcon name="highlight" className={ICON} /></TBtn>
+                <TBtn title="Inline code" active={!!s?.code} onClick={() => editor.chain().focus().toggleCode().run()}><EditorIcon name="code" className={ICON} /></TBtn>
+                {hasLink && <LinkMenu editor={editor} iconClass={ICON} triggerClass={LINK_TRIGGER} activeClass={LINK_ACTIVE} onOpenChange={(o) => (bubbleLinkOpen.current = o)} />}
                 <Sep />
-                <TBtn title="Paragraph" active={blockLabel === "Paragraph"} onClick={() => editor.chain().focus().setParagraph().run()}><span className="font-serif">¶</span></TBtn>
-                <TBtn title="Heading 2" active={!!s?.h2} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>H2</TBtn>
-                <TBtn title="Heading 3" active={!!s?.h3} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>H3</TBtn>
-                <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><Icon className="h-4 w-4 fill-current" name="menu-collapse" /></TBtn>
+                <TBtn title="Paragraph" active={blockLabel === "Paragraph"} onClick={() => editor.chain().focus().setParagraph().run()}><EditorIcon name="paragraph" className={ICON} /></TBtn>
+                <TBtn title="Heading 2" active={!!s?.h2} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}><span className="text-caption-1 font-semibold">H2</span></TBtn>
+                <TBtn title="Heading 3" active={!!s?.h3} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}><span className="text-caption-1 font-semibold">H3</span></TBtn>
+                <TBtn title="Bulleted list" active={!!s?.bullet} onClick={() => editor.chain().focus().toggleBulletList().run()}><EditorIcon name="bulletList" className={ICON} /></TBtn>
                 <Sep />
                 <button
                     type="button"
                     onClick={() => void askAi()}
                     disabled={aiBusy}
                     title="Improve the selected text with AI"
-                    className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:text-lilac dark:hover:bg-dark-3"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-caption-2 font-semibold text-primary transition-colors hover:bg-lavender-mist disabled:opacity-60 dark:text-lilac dark:hover:bg-dark-3"
                 >
-                    <Icon className="h-4 w-4 fill-primary dark:fill-lilac" name="sparkles" />
+                    <EditorIcon name="sparkles" className={ICON} />
                     {aiBusy ? "…" : "AI"}
                 </button>
             </BubbleMenu>
@@ -265,25 +264,6 @@ const EditorCanvas = ({
 
 const Sep = () => <span className="mx-0.5 h-5 w-px shrink-0 bg-grey-light dark:bg-grey-light/15" />;
 
-/** Four-line alignment glyph; the indented lines vary by direction. */
-const AlignIcon = ({ dir }: { dir: "left" | "center" | "right" | "justify" }) => {
-    const lines: Record<typeof dir, [string, string]> = {
-        left: ["M3 9h12", "M3 15h12"],
-        center: ["M6 9h12", "M6 15h12"],
-        right: ["M9 9h12", "M9 15h12"],
-        justify: ["M3 9h18", "M3 15h18"],
-    };
-    const [a, b] = lines[dir];
-    return (
-        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
-            <path d="M3 6h18" />
-            <path d={a} />
-            <path d="M3 12h18" />
-            <path d={b} />
-        </svg>
-    );
-};
-
 const TBtn = ({ active, onClick, title, children }: { active?: boolean; onClick: () => void; title: string; children: React.ReactNode }) => (
     <button
         type="button"
@@ -309,7 +289,7 @@ const BlockMenu = ({ label, onParagraph, onHeading, onQuote }: { label: string; 
             className={cn("flex w-full items-center justify-between px-3 py-1.5 text-left text-caption-1 transition-colors hover:bg-lavender-mist dark:hover:bg-dark-3", active ? "text-primary dark:text-lilac" : "text-black dark:text-white")}
         >
             {text}
-            {active && <Icon className="h-3.5 w-3.5 fill-current" name="check" />}
+            {active && <EditorIcon name="check" className="h-3.5 w-3.5" />}
         </button>
     );
     return (
@@ -320,7 +300,7 @@ const BlockMenu = ({ label, onParagraph, onHeading, onQuote }: { label: string; 
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-caption-1 font-medium text-black transition-colors hover:bg-lavender-mist dark:text-white dark:hover:bg-dark-3"
             >
                 {label}
-                <Icon className="h-3.5 w-3.5 fill-current text-grey" name="arrow-down" />
+                <EditorIcon name="chevronDown" className="h-3.5 w-3.5 text-grey" />
             </button>
             {open && (
                 <>

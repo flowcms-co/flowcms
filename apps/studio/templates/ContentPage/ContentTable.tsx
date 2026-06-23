@@ -367,7 +367,7 @@ const ContentTable = () => {
             {/* Table */}
             <Card className="!p-0 overflow-hidden">
                 {/* Header */}
-                <div className="hidden md:grid grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_auto] items-center gap-4 px-5 py-3 border-b border-grey-light text-caption-2 text-grey dark:border-grey-light/10">
+                <div className="hidden md:grid grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_2rem] items-center gap-4 px-5 py-3 border-b border-grey-light text-caption-2 text-grey dark:border-grey-light/10">
                     <Checkbox checked={allSelected} indeterminate={!allSelected && someSelected} onChange={toggleAll} aria-label="Select all" />
                     <SortHeader label="Title" active={sort.key === "title"} dir={sort.dir} onClick={() => setSortKey("title")} />
                     <span>Status</span>
@@ -481,7 +481,7 @@ const SortHeader = ({ label, active, dir, onClick }: { label: string; active: bo
 /* ─── skeleton row ───────────────────────────────────────── */
 
 const SkeletonRow = () => (
-    <div className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_auto] items-center gap-4 px-5 py-5 border-b border-grey-light last:border-b-0 dark:border-grey-light/10">
+    <div className="grid grid-cols-[auto_1fr_2rem] md:grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_2rem] items-center gap-4 px-5 py-5 border-b border-grey-light last:border-b-0 dark:border-grey-light/10">
         <div className="h-4 w-4 rounded bg-grey-light dark:bg-dark-3" />
         <div className="min-w-0">
             <div className="h-4 w-2/3 rounded bg-grey-light dark:bg-dark-3" />
@@ -531,7 +531,7 @@ const Row = ({
     return (
         <div
             className={cn(
-                "grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_auto] items-center gap-4 px-5 py-5 border-b border-grey-light transition-colors last:border-b-0 dark:border-grey-light/10",
+                "grid grid-cols-[auto_1fr_2rem] md:grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_2rem] items-center gap-4 px-5 py-5 border-b border-grey-light transition-colors last:border-b-0 dark:border-grey-light/10",
                 selected ? "bg-lavender-mist/70 dark:bg-dark-3/60" : "hover:bg-lavender-mist/40 dark:hover:bg-dark-3/40",
             )}
         >
