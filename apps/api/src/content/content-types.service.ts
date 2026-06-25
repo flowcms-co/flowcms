@@ -4,7 +4,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
 import { isHomeType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
-import { normalizeSchemaFields, toCamelCase, toLowerId } from "./naming";
+import { normalizeSchemaFields, toCamelCase, toLowerId, buildEntryKeyRemap } from "./naming";
 
 @Injectable()
 export class ContentTypesService {
@@ -193,9 +193,15 @@ export class ContentTypesService {
         if (!existing) throw new NotFoundException("Content type not found.");
         const data: Record<string, unknown> = {};
         if (dto.name !== undefined) data.name = dto.name;
+        // When field keys are renamed/camelCased, existing entries (keyed by the OLD
+        // field names) must be remapped so their content stays aligned with the schema.
+        let keyRemap: { remap: (d: unknown) => unknown; changed: boolean } = { remap: (d) => d, changed: false };
         if (dto.schema !== undefined) {
             const schema = normalizeSchemaFields(dto.schema) as object;
             data.schema = schema;
+            const oldFields = ((existing.schema as { fields?: Parameters<typeof buildEntryKeyRemap>[0] }) ?? {}).fields;
+            const newFields = (schema as { fields?: Parameters<typeof buildEntryKeyRemap>[1] }).fields;
+            keyRemap = buildEntryKeyRemap(oldFields, newFields);
             // Keep kind in step with the page type (Home = single, others = collection).
             // Never reclassify a reusable component.
             if (existing.kind !== "COMPONENT") {
@@ -221,6 +227,29 @@ export class ContentTypesService {
                 data.apiId = await this.uniqueApiId(workspaceId, next);
                 data.pluralApiId = pluralize(data.apiId as string);
             }
+        }
+
+        // Field keys changed: migrate this type's entries (data + draftData) to the new
+        // keys in the same transaction as the schema save, so neither can land without
+        // the other. Reusable components have no entries of their own, so they skip this.
+        if (keyRemap.changed && existing.kind !== "COMPONENT") {
+            const entries = await this.prisma.contentEntry.findMany({
+                where: { workspaceId, contentTypeId: id },
+                select: { id: true, data: true, draftData: true },
+            });
+            await this.prisma.$transaction([
+                this.prisma.contentType.update({ where: { id }, data }),
+                ...entries.map((e) =>
+                    this.prisma.contentEntry.update({
+                        where: { id: e.id },
+                        data: {
+                            data: keyRemap.remap(e.data) as object,
+                            ...(e.draftData != null ? { draftData: keyRemap.remap(e.draftData) as object } : {}),
+                        },
+                    }),
+                ),
+            ]);
+            return this.shape(await this.prisma.contentType.findUniqueOrThrow({ where: { id } }));
         }
 
         const t = await this.prisma.contentType.update({ where: { id }, data });

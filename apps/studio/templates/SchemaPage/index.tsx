@@ -16,6 +16,8 @@ import {
     camelCaseKey,
     lowerKey,
     fieldLabel,
+    humanizeName,
+    describeField,
     globalSchemaDefaults,
     normalizeFieldKeys,
     type ContentTypeSchema,
@@ -50,8 +52,12 @@ const uniqueFieldIds = (fields: SchemaField[] | undefined, seen: Set<string>): S
         seen.add(id);
         return f.fields ? { ...f, id, fields: uniqueFieldIds(f.fields, seen) } : { ...f, id };
     });
+// On load, give every field a unique id AND coerce its key to camelCase up front, so
+// the builder always shows the enforced machine key ("Title" → "title", "Cover image"
+// → "coverImage") instead of the raw seeded/imported name. Saving persists these keys
+// and the API migrates existing entry data to match (see buildEntryKeyRemap).
 const normalizeTypes = (list: ContentTypeSchema[]): ContentTypeSchema[] =>
-    list.map((t) => ({ ...t, fields: uniqueFieldIds(t.fields, new Set<string>()) }));
+    list.map((t) => ({ ...t, fields: normalizeFieldKeys(uniqueFieldIds(t.fields, new Set<string>())) }));
 const blankField = (): SchemaField => ({
     id: newId(),
     name: "New field",
@@ -67,8 +73,9 @@ const blankComponent = (): SchemaField => ({
     fields: [],
 });
 
-/** A reusable component the schema can reference (apiId + display name). */
-type ComponentRef = { apiId: string; name: string };
+/** A reusable component the schema can reference: its id (for navigating to it),
+ *  apiId, display name and fields (to preview what a reference pulls in). */
+type ComponentRef = { id: string; apiId: string; name: string; fields: SchemaField[] };
 
 /** A content type a Reference field can point at (id + display name). The id is the
  *  content type's database id — what the entry editor queries entries by. `refFields`
@@ -79,9 +86,9 @@ type TypeRef = { id: string; name: string; refFields: { name: string; label: str
 /**
  * Schema Builder (Content Model) — Strapi-style content-type builder. Define
  * content types and their fields, including inline + **reusable** components and
- * **dynamic zones** (an ordered list of mixed component sections), with
- * drag-to-reorder at every level. A separate Components tab manages the reusable
- * component library. Persisted via the content-types API.
+ * the **page builder** (a "dynamic zone": an ordered list of mixed component
+ * sections), with drag-to-reorder at every level. A separate Reusable components
+ * tab manages the component library. Persisted via the content-types API.
  */
 const SchemaPage = () => {
     const [types, setTypes] = useState<ContentTypeSchema[]>([]);
@@ -116,7 +123,7 @@ const SchemaPage = () => {
     const collection = tab === "types" ? types : components;
     const setCollection = tab === "types" ? setTypes : setComponents;
     const active = collection.find((t) => t.id === activeId) ?? null;
-    const componentRefs: ComponentRef[] = components.map((c) => ({ apiId: c.apiId ?? "", name: c.name })).filter((c) => c.apiId);
+    const componentRefs: ComponentRef[] = components.map((c) => ({ id: c.id, apiId: c.apiId ?? "", name: c.name, fields: c.fields ?? [] })).filter((c) => c.apiId);
     // Content types a Reference field can target (always the full type list, so a
     // type can even reference itself, e.g. "related posts"). Each carries its forward
     // Reference fields for configuring the reverse (mapped-by) side.
@@ -134,6 +141,20 @@ const SchemaPage = () => {
         const list = next === "types" ? types : components;
         setActiveId(list[0]?.id ?? null);
         setDirty(false);
+    };
+
+    // Jump straight to a reusable component (from a Reference field's note). Warns if
+    // the current type has unsaved edits, since switching tabs discards them.
+    const openComponent = async (apiId: string) => {
+        const target = components.find((c) => c.apiId === apiId);
+        if (!target) return;
+        if (dirty && !(await confirm({ title: "Discard unsaved changes?", message: "You have unsaved edits here. Leave to open this component?", confirmLabel: "Discard and open" }))) return;
+        setTab("components");
+        setActiveId(target.id);
+        setDirty(false);
+        // The component editor renders at the top of the page; jump there so the user
+        // lands on the component they opened instead of wherever they were scrolled.
+        if (typeof window !== "undefined") requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
     };
 
     const patchActive = (patch: Partial<ContentTypeSchema>) => {
@@ -217,7 +238,7 @@ const SchemaPage = () => {
 
     const deleteActive = async () => {
         if (!active) return;
-        const noun = tab === "types" ? "content type" : "component";
+        const noun = tab === "types" ? "content type" : "reusable component";
         if (!(await confirm({ title: `Delete the "${active.name}" ${noun}?`, confirmLabel: "Delete", tone: "danger" }))) return;
         try {
             await api(`/content-types/${active.id}`, { method: "DELETE" });
@@ -244,7 +265,7 @@ const SchemaPage = () => {
                             tab === m ? "bg-white text-primary shadow-sm dark:bg-dark-1" : "text-grey hover:text-primary",
                         )}
                     >
-                        {m === "types" ? "Content types" : "Components"}
+                        {m === "types" ? "Content types" : "Reusable components"}
                     </button>
                 ))}
             </div>
@@ -253,7 +274,7 @@ const SchemaPage = () => {
                 {/* Left list */}
                 <Card className="flex flex-col h-full !p-5">
                     <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-h5 text-black dark:text-white">{tab === "types" ? "Content types" : "Components"}</h2>
+                        <h2 className="text-h5 text-black dark:text-white">{tab === "types" ? "Content types" : "Reusable components"}</h2>
                         <span className="text-caption-2 text-grey">{collection.length}</span>
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -282,7 +303,7 @@ const SchemaPage = () => {
                     </div>
                     <button type="button" onClick={add} className="btn-secondary w-full mt-4">
                         <Icon className="w-5 h-5 fill-primary dark:fill-lilac" name="plus" />
-                        {tab === "types" ? "New type" : "New component"}
+                        {tab === "types" ? "New type" : "New reusable component"}
                     </button>
                 </Card>
 
@@ -292,12 +313,12 @@ const SchemaPage = () => {
                         <div className="grid h-full place-items-center py-16 text-center">
                             <div>
                                 <p className="text-body-sm text-grey">
-                                    {loading ? "Loading…" : tab === "types" ? "No content types yet." : "No components yet."}
+                                    {loading ? "Loading…" : tab === "types" ? "No content types yet." : "No reusable components yet."}
                                 </p>
                                 {!loading && (
                                     <button type="button" onClick={add} className="btn-primary mt-4">
                                         <Icon className="w-5 h-5 fill-white" name="plus" />
-                                        {tab === "types" ? "Create your first type" : "Create your first component"}
+                                        {tab === "types" ? "Create your first type" : "Create your first reusable component"}
                                     </button>
                                 )}
                             </div>
@@ -314,7 +335,7 @@ const SchemaPage = () => {
                                             value={active.name}
                                             onChange={(e) => patchActive({ name: e.target.value })}
                                             className="w-full bg-transparent font-poppins text-h5 font-bold text-black outline-none dark:text-white"
-                                            aria-label={tab === "types" ? "Content type name" : "Component name"}
+                                            aria-label={tab === "types" ? "Content type name" : "Reusable component name"}
                                         />
                                         <p className="flex flex-wrap items-center gap-x-1 text-caption-2 text-grey">
                                             {(active.entryCount ?? 0) === 0 ? (
@@ -406,7 +427,7 @@ const SchemaPage = () => {
                                 </label>
                             )}
 
-                            <FieldList fields={active.fields} onChange={setActiveFields} components={componentRefs} contentTypes={typeRefs} allowZones={tab === "types"} />
+                            <FieldList fields={active.fields} onChange={setActiveFields} components={componentRefs} contentTypes={typeRefs} allowZones={tab === "types"} onOpenComponent={openComponent} />
                         </>
                     )}
                 </Card>
@@ -424,6 +445,7 @@ const FieldList = ({
     components,
     contentTypes,
     allowZones,
+    onOpenComponent,
     depth = 0,
 }: {
     fields: SchemaField[];
@@ -431,6 +453,7 @@ const FieldList = ({
     components: ComponentRef[];
     contentTypes: TypeRef[];
     allowZones: boolean;
+    onOpenComponent: (apiId: string) => void;
     depth?: number;
 }) => {
     const update = (id: string, patch: Partial<SchemaField>) => onChange(fields.map((f) => (f.id === id ? { ...f, ...patch } : f)));
@@ -447,6 +470,7 @@ const FieldList = ({
                         components={components}
                         contentTypes={contentTypes}
                         allowZones={allowZones}
+                        onOpenComponent={onOpenComponent}
                         onUpdate={(patch) => update(f.id, patch)}
                         onUpdateChildren={(nf) => update(f.id, { fields: nf })}
                         onRemove={() => remove(f.id)}
@@ -461,7 +485,7 @@ const FieldList = ({
                 </button>
                 <button type="button" onClick={() => onChange([...fields, blankComponent()])} className="btn-ghost h-9 px-3.5 text-caption-1 border border-grey-light dark:border-grey-light/10">
                     <Icon className="w-4 h-4 fill-grey" name="copy" />
-                    Add component
+                    Add reusable component
                 </button>
                 {allowZones && depth === 0 && (
                     <button
@@ -470,7 +494,7 @@ const FieldList = ({
                         className="btn-ghost h-9 px-3.5 text-caption-1 border border-grey-light dark:border-grey-light/10"
                     >
                         <Icon className="w-4 h-4 fill-grey" name="grid" />
-                        Add dynamic zone
+                        Add page builder
                     </button>
                 )}
             </div>
@@ -490,6 +514,7 @@ const FieldRow = ({
     components,
     contentTypes,
     allowZones,
+    onOpenComponent,
     onUpdate,
     onUpdateChildren,
     onRemove,
@@ -499,6 +524,7 @@ const FieldRow = ({
     components: ComponentRef[];
     contentTypes: TypeRef[];
     allowZones: boolean;
+    onOpenComponent: (apiId: string) => void;
     onUpdate: (patch: Partial<SchemaField>) => void;
     onUpdateChildren: (next: SchemaField[]) => void;
     onRemove: () => void;
@@ -582,7 +608,10 @@ const FieldRow = ({
                     onChange={(e) => onUpdate({ name: e.target.value })}
                     onBlur={(e) => {
                         // Auto-fix the data key to camelCase (silently). Uniqueness across
-                        // siblings is resolved on save. Add a friendly label for display.
+                        // siblings is resolved on save. We do NOT write a label/description
+                        // here: the block editor derives a friendly label + helper text from
+                        // the name for display (fieldLabel / fieldDescription), so the schema
+                        // stays clean and the builder keeps showing the raw key.
                         const c = camelCaseKey(e.target.value);
                         if (c && c !== field.name) onUpdate({ name: c });
                     }}
@@ -596,7 +625,7 @@ const FieldRow = ({
                     ariaLabel="Field type"
                     value={field.type}
                     onChange={(v) => changeType(v as FieldType)}
-                    options={FIELD_TYPES.filter((ft) => ft !== "DynamicZone" || allowZones).map((ft) => ({ value: ft, label: ft === "DynamicZone" ? "Dynamic zone" : ft }))}
+                    options={FIELD_TYPES.filter((ft) => ft !== "DynamicZone" || allowZones).map((ft) => ({ value: ft, label: ft === "DynamicZone" ? "Page builder" : ft === "Component" ? "Reusable component" : ft }))}
                 />
 
                 {/* Component: inline vs reference a library component */}
@@ -606,7 +635,23 @@ const FieldRow = ({
                         className="!w-auto"
                         ariaLabel="Component source"
                         value={field.componentApiId ?? INLINE}
-                        onChange={(v) => (v === INLINE ? onUpdate({ componentApiId: undefined }) : onUpdate({ componentApiId: v, fields: undefined }))}
+                        onChange={(v) => {
+                            if (v === INLINE) { onUpdate({ componentApiId: undefined }); return; }
+                            const patch: Partial<SchemaField> = { componentApiId: v, fields: undefined };
+                            // If the field is still the placeholder key, adopt the picked
+                            // component's name so it reads as "quote" not "newComponent", and
+                            // drop any stale label/description so they re-derive from the new
+                            // name ("Quote" / its helper text) in the block editor.
+                            const comp = components.find((c) => c.apiId === v);
+                            if (comp && camelCaseKey(field.name) === "newComponent") {
+                                patch.name = comp.apiId;
+                                patch.label = undefined;
+                                patch.description = undefined;
+                                setShowLabel(false);
+                                setShowDesc(false);
+                            }
+                            onUpdate(patch);
+                        }}
                         options={[{ value: INLINE, label: "Inline" }, ...components.map((c) => ({ value: c.apiId, label: c.name }))]}
                     />
                 )}
@@ -676,7 +721,7 @@ const FieldRow = ({
                         value={field.label ?? ""}
                         onChange={(e) => onUpdate({ label: e.target.value })}
                         onBlur={(e) => !e.target.value && setShowLabel(false)}
-                        autoFocus={showLabel && !field.label}
+                        autoFocus={showLabel}
                         placeholder="Label shown to editors (optional, e.g. “Hero image”)"
                         className="flow-input !py-1.5 !text-caption-2"
                     />
@@ -686,7 +731,7 @@ const FieldRow = ({
                         value={field.description ?? ""}
                         onChange={(e) => onUpdate({ description: e.target.value })}
                         onBlur={(e) => !e.target.value && setShowDesc(false)}
-                        autoFocus={showDesc && !field.description}
+                        autoFocus={showDesc}
                         placeholder="Description shown to editors (optional)"
                         className="flow-input !py-1.5 !text-caption-2"
                     />
@@ -694,15 +739,18 @@ const FieldRow = ({
                 {((!showLabel && !field.label) || (!showDesc && !field.description) || (canValidate && !showValidation && !hasValidation)) && (
                     <div className="flex flex-wrap items-center gap-3">
                         {!showLabel && !field.label && (
-                            <button type="button" onClick={() => setShowLabel(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
+                            // Pre-fill the humanized name so the user edits the label the block
+                            // editor already shows, instead of starting from an empty field.
+                            <button type="button" onClick={() => { onUpdate({ label: humanizeName(field.name) }); setShowLabel(true); }} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
                                 <Icon className="h-3 w-3 fill-current" name="plus" />
-                                Add label
+                                Edit label
                             </button>
                         )}
                         {!showDesc && !field.description && (
-                            <button type="button" onClick={() => setShowDesc(true)} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
+                            // Pre-fill the derived helper text so the user edits the existing one.
+                            <button type="button" onClick={() => { onUpdate({ description: describeField(field.name, field.type) }); setShowDesc(true); }} className="inline-flex items-center gap-1 text-caption-2 text-grey transition-colors hover:text-primary">
                                 <Icon className="h-3 w-3 fill-current" name="plus" />
-                                Add description
+                                Edit description
                             </button>
                         )}
                         {canValidate && !showValidation && !hasValidation && (
@@ -767,20 +815,55 @@ const FieldRow = ({
                     {depth >= MAX_INLINE_DEPTH ? (
                         <p className="py-2 text-caption-2 text-grey">
                             This is nested very deep. For structures deeper than this, define a reusable component on the{" "}
-                            <strong className="font-semibold text-black dark:text-white">Components</strong> tab and reference it here instead of inlining it.
+                            <strong className="font-semibold text-black dark:text-white">Reusable components</strong> tab and reference it here instead of inlining it.
                         </p>
                     ) : (
-                        <FieldList fields={field.fields ?? []} onChange={onUpdateChildren} components={components} contentTypes={contentTypes} allowZones={false} depth={depth + 1} />
+                        <FieldList fields={field.fields ?? []} onChange={onUpdateChildren} components={components} contentTypes={contentTypes} allowZones={false} onOpenComponent={onOpenComponent} depth={depth + 1} />
                     )}
                 </div>
             )}
 
-            {/* Reference component → note */}
-            {isRef && (
-                <p className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25 py-1.5 text-caption-2 text-grey">
-                    References the <span className="font-mono text-primary dark:text-lilac">{field.componentApiId}</span> component. Edit its fields in the Components tab.
-                </p>
-            )}
+            {/* Reference component → preview its fields + a link to open it */}
+            {isRef && (() => {
+                const refComp = components.find((c) => c.apiId === field.componentApiId);
+                return (
+                    <div className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 py-1.5 text-caption-2 text-grey">
+                            <span>
+                                References the <span className="font-mono text-primary dark:text-lilac">{field.componentApiId}</span> reusable component.
+                            </span>
+                            {refComp && (
+                                <button
+                                    type="button"
+                                    onClick={() => onOpenComponent(refComp.apiId)}
+                                    className="inline-flex items-center gap-1 font-semibold text-primary transition-colors hover:text-primary/80 dark:text-lilac"
+                                >
+                                    Edit {refComp.name}
+                                    <Icon className="h-3 w-3 fill-current" name="arrow-right" />
+                                </button>
+                            )}
+                        </div>
+                        {!refComp ? (
+                            <p className="pb-2 text-caption-2 text-grey">This component no longer exists. Pick another in the dropdown above.</p>
+                        ) : refComp.fields.length === 0 ? (
+                            <p className="pb-2 text-caption-2 text-grey">This component has no fields yet.</p>
+                        ) : (
+                            <div className="flex flex-wrap gap-1.5 pb-2">
+                                {refComp.fields.map((sf) => (
+                                    <span
+                                        key={sf.id}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-grey-light px-2 h-7 text-caption-2 dark:border-grey-light/10"
+                                        title={`${sf.name} · ${sf.type}`}
+                                    >
+                                        <span className="font-medium text-black dark:text-white">{sf.name}</span>
+                                        <span className="text-grey/70">{sf.type === "DynamicZone" ? "Page builder" : sf.type === "Component" ? "Reusable component" : sf.type}</span>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                );
+            })()}
 
             {/* Reference relation → polymorphic target picker + note */}
             {isReference && (
@@ -851,12 +934,12 @@ const FieldRow = ({
                 </div>
             )}
 
-            {/* Dynamic zone → allowed components */}
+            {/* Page builder → allowed sections (reusable components) */}
             {isZone && (
                 <div className="ml-5 mr-2.5 mb-2.5 pl-3 border-l-2 border-primary/25">
                     <div className="py-1 text-caption-2 text-grey">Allowed sections</div>
                     {components.length === 0 ? (
-                        <p className="pb-2 text-caption-2 text-grey">No components yet — create some in the Components tab.</p>
+                        <p className="pb-2 text-caption-2 text-grey">No reusable components yet — create some in the Reusable components tab.</p>
                     ) : (
                         <div className="flex flex-wrap gap-2 pb-2">
                             {components.map((c) => {

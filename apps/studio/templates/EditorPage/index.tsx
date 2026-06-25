@@ -279,6 +279,13 @@ const EditorPage = () => {
         for (const c of components) map[c.apiId] = { apiId: c.apiId, name: c.name, icon: c.icon, fields: c.fields };
         return map;
     }, [components]);
+    // apiId → sub-fields, so Component fields that reference a library component (by
+    // componentApiId) render that component's fields in the form below.
+    const componentFields = useMemo(() => {
+        const map: Record<string, ComponentDef["fields"]> = {};
+        for (const c of components) map[c.apiId] = c.fields;
+        return map;
+    }, [components]);
     // Live word count across the body + all section text (drives the footer stats).
     const wordCount = useMemo(() => {
         const strip = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -920,6 +927,7 @@ const EditorPage = () => {
                             <FieldsForm
                                 fields={formFields}
                                 data={entryData}
+                                components={componentFields}
                                 onChange={(d) => {
                                     setEntryData(d);
                                     bump();

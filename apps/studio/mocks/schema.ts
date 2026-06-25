@@ -168,11 +168,133 @@ export const normalizeFieldKeys = (fields: SchemaField[]): SchemaField[] => {
     });
 };
 
-/** The display label for a field in the block editor: the editor-friendly `label`
- *  when set, otherwise the field's machine `name`. */
+/** The display label for a field in the block editor / preview: the editor-friendly
+ *  `label` when set, otherwise a humanized version of the machine `name` ("ctaContent"
+ *  → "Cta Content"). This is display-only — the schema builder still shows the raw
+ *  `name` in its field-key input, so humanizing here never changes the stored key. */
 export const fieldLabel = (f: { label?: string; name: string }): string => {
     const l = f.label?.trim();
-    return l ? l : f.name;
+    return l ? l : humanizeName(f.name);
+};
+
+/** The helper description shown under a field in the block editor: the author's
+ *  `description` when set, otherwise a best-effort one derived from the name + type.
+ *  Display-only, like fieldLabel — nothing is persisted to the schema. */
+export const fieldDescription = (f: { description?: string; name: string; type?: FieldType }): string => {
+    const d = f.description?.trim();
+    return d ? d : describeField(f.name, f.type);
+};
+
+/** Turn any machine-ish name into a Title-Case display label.
+ *  "ctaContent" / "service_categories" / "hero" → "Cta Content" / "Service Categories" / "Hero". */
+export const humanizeName = (input: string): string =>
+    String(input ?? "")
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[^A-Za-z0-9]+/g, " ")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(" ");
+
+/** Common CMS field names → a ready helper description (exact, normalized key). */
+const FIELD_DESCRIPTIONS: Record<string, string> = {
+    title: "Main heading shown at the top of the content.",
+    subtitle: "Secondary heading shown beneath the title.",
+    subheading: "Secondary heading shown beneath the title.",
+    heading: "Heading for this section.",
+    slug: "URL-friendly identifier used in the page address.",
+    hero: "Hero section shown at the top of the page.",
+    cta: "Call to action prompting the reader to take the next step.",
+    ctacontent: "Call to action prompting the reader to take the next step.",
+    calltoaction: "Call to action prompting the reader to take the next step.",
+    body: "Main body content.",
+    content: "Main body content.",
+    maincontent: "Main body content.",
+    introcontent: "Introductory text shown before the main content.",
+    intro: "Introductory text shown before the main content.",
+    introduction: "Introductory text shown before the main content.",
+    summary: "Short summary of the content.",
+    excerpt: "Short summary used in listings and previews.",
+    description: "Short description of this item.",
+    metadescription: "Summary used by search engines and social shares.",
+    metatitle: "Title used by search engines and social shares.",
+    author: "Person credited as the author.",
+    date: "Date associated with this content.",
+    publishedat: "Date this content was published.",
+    faq: "Frequently asked questions and their answers.",
+    question: "The question being answered.",
+    answer: "The answer to the question.",
+    quote: "Quote or testimonial text.",
+    testimonial: "Customer testimonial.",
+    price: "Price of the product or service.",
+    category: "Category used to group this content.",
+    categories: "Categories used to group this content.",
+    servicecategories: "Service categories used to group this content.",
+    tags: "Tags used to group and filter this content.",
+    icon: "Icon shown alongside this item.",
+    image: "Image displayed for this content.",
+    coverimage: "Main image shown for this content.",
+    ogimage: "Image used when shared on social media.",
+    thumbnail: "Small preview image.",
+};
+
+/** Looser keyword matches, tried when no exact name matches. Order matters: more
+ *  specific keywords come first so "metaDescription" beats "description". */
+const FIELD_KEYWORDS: [string, string][] = [
+    ["metadescription", "Summary used by search engines and social shares."],
+    ["metatitle", "Title used by search engines and social shares."],
+    ["description", "Short description of this item."],
+    ["subtitle", "Secondary heading."],
+    ["heading", "Heading for this section."],
+    ["title", "Heading for this content."],
+    ["calltoaction", "Call to action prompting the reader to take the next step."],
+    ["cta", "Call to action prompting the reader to take the next step."],
+    ["url", "Destination link."],
+    ["link", "Destination link."],
+    ["image", "Image displayed for this content."],
+    ["photo", "Image displayed for this content."],
+    ["icon", "Icon shown alongside this item."],
+    ["intro", "Introductory text shown before the main content."],
+    ["content", "Main body content."],
+    ["body", "Main body content."],
+    ["category", "Category used to group this content."],
+    ["tag", "Tags used to group and filter this content."],
+    ["price", "Price of the product or service."],
+    ["date", "Date associated with this content."],
+    ["email", "Email address."],
+    ["phone", "Phone number."],
+    ["name", "Name shown for this item."],
+];
+
+/** Best-effort, human helper description for a field, derived from its name (and
+ *  type). Used to pre-fill the optional description in the schema builder so editors
+ *  get a hint about what a field is for. A small dictionary of common CMS names,
+ *  then keyword matching, then a type-based fallback. */
+export const describeField = (name: string, type?: FieldType): string => {
+    const key = camelCaseKey(name).toLowerCase();
+    if (FIELD_DESCRIPTIONS[key]) return FIELD_DESCRIPTIONS[key];
+    for (const [kw, desc] of FIELD_KEYWORDS) if (key.includes(kw)) return desc;
+    const human = humanizeName(name).toLowerCase();
+    switch (type) {
+        case "Media":
+            return `Image or file for the ${human}.`;
+        case "Reference":
+            return `Linked entry for the ${human}.`;
+        case "Boolean":
+            return `Toggle for ${human}.`;
+        case "Date":
+            return `Date for the ${human}.`;
+        case "Number":
+            return `Numeric value for the ${human}.`;
+        case "URL":
+            return `Link for the ${human}.`;
+        case "Component":
+        case "DynamicZone":
+            return `${humanizeName(name)} for this content.`;
+        default:
+            return `${humanizeName(name)} for this content.`;
+    }
 };
 
 export type ContentTypeSchema = {

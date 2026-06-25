@@ -102,3 +102,76 @@ export function normalizeSchemaFields<T extends { fields?: AnyField[] } | Record
     if (!Array.isArray(s.fields)) return schema;
     return { ...schema, fields: normalizeFieldNames(s.fields) };
 }
+
+/** Build a function that rewrites an entry-data object's keys from a content type's
+ *  OLD field names to its NEW field names, so authored content stays aligned when a
+ *  field key is renamed or camelCased (e.g. "Title" → "title", "Cover image" →
+ *  "coverImage"). Recurses through inline-component sub-fields and repeatable item
+ *  arrays. Old↔new fields are matched by id first, then by camelCase-name equivalence
+ *  (so an id-less imported field that is only being camelCased still maps), then
+ *  positionally among same-typed fields. `changed` is true only when at least one key
+ *  actually moves, so callers can skip rewriting entries on no-op saves. Library
+ *  references (componentApiId) and dynamic zones move as a whole — their inner keys
+ *  are owned by the referenced component type, migrated when that type is saved. */
+export function buildEntryKeyRemap(
+    oldFields: AnyField[] | undefined,
+    newFields: AnyField[] | undefined,
+): { remap: (data: unknown) => unknown; changed: boolean } {
+    const olds = Array.isArray(oldFields) ? oldFields : [];
+    const news = Array.isArray(newFields) ? newFields : [];
+    const usedNew = new Set<number>();
+    let changed = false;
+    const steps: { oldKey: string; newKey: string; child?: (d: unknown) => unknown }[] = [];
+
+    const matchIndex = (of: AnyField, oi: number): number => {
+        if (of.id != null) {
+            const i = news.findIndex((nf, j) => !usedNew.has(j) && nf.id != null && nf.id === of.id);
+            if (i >= 0) return i;
+        }
+        const camel = toCamelCase(String(of.name ?? ""));
+        if (camel) {
+            const i = news.findIndex((nf, j) => !usedNew.has(j) && toCamelCase(String(nf.name ?? "")) === camel);
+            if (i >= 0) return i;
+        }
+        if (!usedNew.has(oi) && news[oi] && (news[oi].type ?? null) === (of.type ?? null)) return oi;
+        return -1;
+    };
+
+    olds.forEach((of, oi) => {
+        const ni = matchIndex(of, oi);
+        if (ni < 0) return;
+        usedNew.add(ni);
+        const nf = news[ni];
+        const oldKey = String(of.name ?? "");
+        const newKey = String(nf.name ?? "");
+        if (!oldKey || !newKey) return;
+        let child: ((d: unknown) => unknown) | undefined;
+        const inlineComponent = nf.type === "Component" && !nf.componentApiId && Array.isArray(nf.fields) && Array.isArray(of.fields);
+        if (inlineComponent) {
+            const r = buildEntryKeyRemap(of.fields, nf.fields);
+            if (r.changed) child = r.remap;
+        }
+        if (oldKey !== newKey || child) {
+            changed = true;
+            steps.push({ oldKey, newKey, child });
+        }
+    });
+
+    const remap = (data: unknown): unknown => {
+        if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+        const src = data as Record<string, unknown>;
+        const out: Record<string, unknown> = {};
+        const handled = new Set<string>();
+        for (const s of steps) {
+            if (!(s.oldKey in src)) continue;
+            handled.add(s.oldKey);
+            const v = src[s.oldKey];
+            out[s.newKey] = s.child ? (Array.isArray(v) ? v.map(s.child) : s.child(v)) : v;
+        }
+        // Carry over any keys we didn't explicitly remap (unchanged fields, stray keys).
+        for (const k of Object.keys(src)) if (!handled.has(k)) out[k] = src[k];
+        return out;
+    };
+
+    return { remap, changed };
+}

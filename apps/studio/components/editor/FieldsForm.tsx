@@ -9,7 +9,7 @@
  * "title" field by the editor's title input; those three are skipped here.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
@@ -17,11 +17,25 @@ import Switch from "@/components/ui/Switch";
 import { MediaField } from "@/components/ui/MediaPicker";
 import { api } from "@/lib/api";
 import RichTextField from "./RichTextField";
-import { fieldLabel, type SchemaField } from "@/mocks/schema";
+import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
 
 type Json = Record<string, unknown>;
 
 const INPUT = "flow-input";
+
+/** apiId → sub-fields for reusable (library) components. A Component field can
+ *  either inline its own `fields` or reference a library component by `componentApiId`;
+ *  in the latter case the fields live on the component definition, so we resolve them
+ *  here. Provided by FieldsForm; empty for inline-only forms. */
+export const ComponentDefsContext = createContext<Record<string, SchemaField[]>>({});
+
+/** Resolve a Component field's sub-fields: a library reference (componentApiId) reads
+ *  the referenced component's fields; an inline component carries its own. Mirrors the
+ *  backend's resolveFields (apps/api/src/content/entry-validation.ts). */
+const useComponentSubFields = (field: SchemaField): SchemaField[] => {
+    const defs = useContext(ComponentDefsContext);
+    return field.componentApiId ? defs[field.componentApiId] ?? [] : field.fields ?? [];
+};
 
 /** Strip tags/whitespace from rich-text HTML so it can preview on a collapsed header. */
 const stripHtml = (s: string) => s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
@@ -419,11 +433,11 @@ const FieldGroup = ({
                             {f.required && <span className="text-error">*</span>}
                             {f.type === "Component" && (
                                 <span className="text-caption-2 text-grey/70">
-                                    {f.repeatable ? "repeatable component" : "component"}
+                                    {f.repeatable ? "reusable component · repeatable" : "reusable component"}
                                 </span>
                             )}
                         </span>
-                        {f.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{f.description}</span>}
+                        <span className="-mt-0.5 text-caption-2 text-grey/80">{fieldDescription(f)}</span>
                         <FieldControl field={f} value={data[f.name]} onChange={(v) => set(f.name, v)} errors={errors} errorPath={path} depth={depth} />
                         {error && <span className="text-caption-2 text-error">{error}</span>}
                     </Wrap>
@@ -450,7 +464,7 @@ const RepeatableComponent = ({
     errorPath: string;
     depth: number;
 }) => {
-    const sub = field.fields ?? [];
+    const sub = useComponentSubFields(field);
     const items: Json[] = Array.isArray(value) ? (value as Json[]) : [];
     // Collapsed rows are tracked by index; on removal we shift indices above the
     // gap down by one so the right rows stay folded after a delete.
@@ -541,7 +555,7 @@ const ComponentControl = ({
     errorPath?: string;
     depth?: number;
 }) => {
-    const sub = field.fields ?? [];
+    const sub = useComponentSubFields(field);
 
     if (field.repeatable) {
         return (
@@ -603,6 +617,7 @@ const FieldsForm = ({
     data,
     onChange,
     errors = {},
+    components = {},
 }: {
     fields: SchemaField[];
     data: Json;
@@ -610,12 +625,19 @@ const FieldsForm = ({
     /** Optional field-keyed validation errors (path -> message) from the API. Each
      *  message renders in red under its field. Defaults to none. */
     errors?: FieldErrors;
+    /** apiId → sub-fields for reusable (library) components, so Component fields that
+     *  reference a library component render that component's fields. Defaults to none. */
+    components?: Record<string, SchemaField[]>;
 }) => {
     const shown = fields.filter(
         (f) => f.type !== "Rich text" && f.type !== "Slug" && f.name.trim().toLowerCase() !== "title",
     );
     if (!shown.length) return null;
-    return <FieldGroup fields={shown} data={data} onChange={onChange} errors={errors} />;
+    return (
+        <ComponentDefsContext.Provider value={components}>
+            <FieldGroup fields={shown} data={data} onChange={onChange} errors={errors} />
+        </ComponentDefsContext.Provider>
+    );
 };
 
 export default FieldsForm;

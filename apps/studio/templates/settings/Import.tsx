@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Combobox, ComboboxButton, ComboboxInput, ComboboxOption, ComboboxOptions } from "@headlessui/react";
 import Link from "next/link";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
@@ -59,7 +60,16 @@ const Import = () => {
     const [report, setReport] = useState<Report | null>(null);
     const [busy, setBusy] = useState<null | "preview" | "run">(null);
     const [error, setError] = useState<string | null>(null);
+    // Existing content types, offered as a dropdown when picking the import target
+    // (you can still type a new api id to create one). Components are excluded by the API.
+    const [existingTypes, setExistingTypes] = useState<{ apiId: string; name: string }[]>([]);
     const fileRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        api<{ apiId?: string; name: string }[]>("/content-types")
+            .then((rows) => setExistingTypes(rows.filter((r): r is { apiId: string; name: string } => !!r.apiId)))
+            .catch(() => {});
+    }, []);
 
     const body = () => ({
         kind,
@@ -185,9 +195,66 @@ const Import = () => {
                             <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Document type <span className="text-grey">(optional)</span></span><input value={docType} onChange={(e) => setDocType(e.target.value)} placeholder="post: blank = all with a title" className={field} /></label>
                         </>
                     )}
-                    {(kind === "markdown" || kind === "csv" || kind === "json") && (
-                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Import into content type <span className="text-grey">(api id, created if missing)</span></span><input value={typeApiId} onChange={(e) => setTypeApiId(e.target.value)} placeholder="article" className={field} /></label>
-                    )}
+                    {(kind === "markdown" || kind === "csv" || kind === "json") && (() => {
+                        const q = typeApiId.trim().toLowerCase();
+                        const matches = q
+                            ? existingTypes.filter((t) => t.apiId.toLowerCase().includes(q) || t.name.toLowerCase().includes(q))
+                            : existingTypes;
+                        return (
+                            <div className="block">
+                                <span className="mb-1.5 block text-caption-1 text-grey">
+                                    Import into content type{" "}
+                                    <span className="text-grey">{existingTypes.length ? "(pick an existing one or type a new api id)" : "(api id, created if missing)"}</span>
+                                </span>
+                                <Combobox value={typeApiId} onChange={(v: string | null) => setTypeApiId(v ?? "")} immediate>
+                                    <div className="relative">
+                                        <ComboboxInput
+                                            className={cn(field, "pr-10")}
+                                            placeholder="article"
+                                            aria-label="Import into content type"
+                                            autoComplete="off"
+                                            spellCheck={false}
+                                            displayValue={(v: string) => v}
+                                            onChange={(e) => setTypeApiId(e.target.value)}
+                                        />
+                                        {existingTypes.length > 0 && (
+                                            <ComboboxButton className="group absolute inset-y-0 right-0 flex items-center px-3.5" aria-label="Show existing content types">
+                                                <Icon name="arrow-down" className="h-4 w-4 fill-grey transition-transform duration-200 group-data-[open]:rotate-180" />
+                                            </ComboboxButton>
+                                        )}
+                                        {matches.length > 0 && (
+                                            <ComboboxOptions
+                                                anchor={{ to: "bottom start", gap: 6 }}
+                                                transition
+                                                className={cn(
+                                                    "z-50 max-h-56! w-[var(--input-width)] overflow-y-auto scrollbar-thin rounded-xl border border-grey-light bg-white p-1.5 shadow-[0_1rem_2.5rem_rgba(26,26,46,0.14)]",
+                                                    "origin-top transition duration-150 ease-out empty:invisible data-[closed]:scale-95 data-[closed]:opacity-0",
+                                                    "dark:border-grey-light/10 dark:bg-dark-1 dark:shadow-[0_1rem_2.5rem_rgba(0,0,0,0.5)]",
+                                                )}
+                                            >
+                                                {matches.map((t) => (
+                                                    <ComboboxOption
+                                                        key={t.apiId}
+                                                        value={t.apiId}
+                                                        className={cn(
+                                                            "group flex cursor-pointer items-center justify-between gap-3 rounded-md px-2.5 py-2 transition-colors",
+                                                            "data-[focus]:bg-lavender-mist data-[selected]:bg-lavender-mist/60 dark:data-[focus]:bg-dark-3 dark:data-[selected]:bg-dark-3/60",
+                                                        )}
+                                                    >
+                                                        <span className="min-w-0">
+                                                            <span className="block truncate text-caption-1 font-semibold text-black dark:text-white">{t.name}</span>
+                                                            <span className="block truncate font-mono text-caption-2 text-grey">{t.apiId}</span>
+                                                        </span>
+                                                        <Icon name="check" className="h-4 w-4 shrink-0 fill-primary opacity-0 group-data-[selected]:opacity-100 dark:fill-lilac" />
+                                                    </ComboboxOption>
+                                                ))}
+                                            </ComboboxOptions>
+                                        )}
+                                    </div>
+                                </Combobox>
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {/* Guided two-step actions: 1) Preview checks what would come in,

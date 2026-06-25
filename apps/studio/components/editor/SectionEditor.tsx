@@ -9,7 +9,7 @@
  * the zone field in the entry's data, so it autosaves/draft/publishes unchanged.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "framer-motion";
 import type { Editor } from "@tiptap/react";
 import Icon from "@/components/ui/Icon";
@@ -17,8 +17,8 @@ import Switch from "@/components/ui/Switch";
 import EditorCanvas from "./EditorCanvas";
 import { MediaField } from "@/components/ui/MediaPicker";
 import { runAi, extractJson, aiErrorMessage } from "@/lib/useAi";
-import { FieldControl } from "./FieldsForm";
-import { fieldLabel, type SchemaField } from "@/mocks/schema";
+import { FieldControl, ComponentDefsContext } from "./FieldsForm";
+import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
 import { cn } from "@/lib/cn";
 
 export type ComponentDef = { apiId: string; name: string; icon: string; fields: SchemaField[] };
@@ -71,7 +71,7 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
         return (
             <div className="flex flex-col gap-1.5">
                 <span className="text-caption-1 text-grey">{fieldLabel(field)}</span>
-                {field.description && <span className="-mt-0.5 text-caption-2 text-grey/80">{field.description}</span>}
+                <span className="-mt-0.5 text-caption-2 text-grey/80">{fieldDescription(field)}</span>
                 <MediaField value={value} alt={fieldLabel(field)} onChange={onChange} />
             </div>
         );
@@ -90,7 +90,7 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
                         {limit ? `${v.length} / ${limit}` : v.length || ""}
                     </span>
                 </span>
-                {field.description && <span className="text-caption-2 text-grey/80">{field.description}</span>}
+                <span className="text-caption-2 text-grey/80">{fieldDescription(field)}</span>
                 <input
                     value={v}
                     onChange={(e) => onChange(e.target.value)}
@@ -114,7 +114,7 @@ const SectionField = ({ field, value, onChange }: { field: SchemaField; value: u
                 {fieldLabel(field)}
                 {field.required && <span className="text-error">*</span>}
             </span>
-            {field.description && <span className="text-caption-2 text-grey/80">{field.description}</span>}
+            <span className="text-caption-2 text-grey/80">{fieldDescription(field)}</span>
             <FieldControl field={field} value={value} onChange={onChange} />
         </label>
     );
@@ -410,6 +410,13 @@ const SectionEditor = ({
     onChange: (next: Section[]) => void;
 }) => {
     const options = (allowed?.length ? allowed.map((id) => components[id]).filter(Boolean) : Object.values(components)) as ComponentDef[];
+    // apiId → sub-fields, so a Component section field that references a library
+    // component (componentApiId) resolves that component's fields (via FieldControl).
+    const componentFields = useMemo(() => {
+        const map: Record<string, SchemaField[]> = {};
+        for (const c of Object.values(components)) map[c.apiId] = c.fields;
+        return map;
+    }, [components]);
     // Folded sections are tracked by their stable __uid, so collapse state survives
     // reorder/duplicate/delete instead of shifting with array indices.
     const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -438,6 +445,7 @@ const SectionEditor = ({
     };
 
     return (
+        <ComponentDefsContext.Provider value={componentFields}>
         <div className="flex flex-col gap-3">
             {sections.length > 1 && (
                 <div className="flex items-center justify-between px-0.5">
@@ -480,6 +488,7 @@ const SectionEditor = ({
             </Reorder.Group>
             <AddBlock options={options} onAdd={(def) => onChange([...sections, blankSection(def)])} />
         </div>
+        </ComponentDefsContext.Provider>
     );
 };
 

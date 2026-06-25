@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeFieldNames, normalizeSchemaFields, normalizeFieldsWithData, toCamelCase, toLowerId } from "./naming";
+import { normalizeFieldNames, normalizeSchemaFields, normalizeFieldsWithData, buildEntryKeyRemap, toCamelCase, toLowerId } from "./naming";
 
 describe("toCamelCase", () => {
     it("coerces human strings into camelCase keys", () => {
@@ -104,5 +104,55 @@ describe("normalizeSchemaFields", () => {
     it("passes through a schema with no fields array", () => {
         const schema = { icon: "document" } as Record<string, unknown>;
         expect(normalizeSchemaFields(schema)).toBe(schema);
+    });
+});
+
+describe("buildEntryKeyRemap", () => {
+    it("reports no change when nothing was renamed", () => {
+        const { changed, remap } = buildEntryKeyRemap([{ id: "1", name: "title" }], [{ id: "1", name: "title" }]);
+        expect(changed).toBe(false);
+        expect(remap({ title: "Hi" })).toEqual({ title: "Hi" });
+    });
+
+    it("remaps a camelCased key when fields share an id", () => {
+        const { changed, remap } = buildEntryKeyRemap([{ id: "1", name: "Title" }], [{ id: "1", name: "title" }]);
+        expect(changed).toBe(true);
+        expect(remap({ Title: "Hi", body: "x" })).toEqual({ title: "Hi", body: "x" });
+    });
+
+    it("matches id-less imported fields by camelCase-name equivalence", () => {
+        const { remap } = buildEntryKeyRemap([{ name: "Cover image" }], [{ id: "a", name: "coverImage" }]);
+        expect(remap({ "Cover image": "/x.png" })).toEqual({ coverImage: "/x.png" });
+    });
+
+    it("follows an arbitrary rename when fields share an id", () => {
+        const { remap } = buildEntryKeyRemap([{ id: "1", name: "title" }], [{ id: "1", name: "heading" }]);
+        expect(remap({ title: "Hi" })).toEqual({ heading: "Hi" });
+    });
+
+    it("recurses into inline component sub-fields", () => {
+        const old = [{ id: "1", name: "Seo", type: "Component", fields: [{ id: "1a", name: "Meta title" }] }];
+        const next = [{ id: "1", name: "seo", type: "Component", fields: [{ id: "1a", name: "metaTitle" }] }];
+        const { remap } = buildEntryKeyRemap(old, next);
+        expect(remap({ Seo: { "Meta title": "T" } })).toEqual({ seo: { metaTitle: "T" } });
+    });
+
+    it("remaps each item of a repeatable inline component", () => {
+        const old = [{ id: "1", name: "Faq", type: "Component", repeatable: true, fields: [{ id: "1a", name: "Q text" }] }];
+        const next = [{ id: "1", name: "faq", type: "Component", repeatable: true, fields: [{ id: "1a", name: "qText" }] }];
+        const { remap } = buildEntryKeyRemap(old, next);
+        expect(remap({ Faq: [{ "Q text": "a" }, { "Q text": "b" }] })).toEqual({ faq: [{ qText: "a" }, { qText: "b" }] });
+    });
+
+    it("moves a library-referenced component value wholesale without touching inner keys", () => {
+        const old = [{ id: "1", name: "Main", type: "Component", componentApiId: "hero" }];
+        const next = [{ id: "1", name: "main", type: "Component", componentApiId: "hero" }];
+        const { remap } = buildEntryKeyRemap(old, next);
+        expect(remap({ Main: { Title: "keep-as-is" } })).toEqual({ main: { Title: "keep-as-is" } });
+    });
+
+    it("preserves keys with no matching field", () => {
+        const { remap } = buildEntryKeyRemap([{ id: "1", name: "Title" }], [{ id: "1", name: "title" }]);
+        expect(remap({ Title: "Hi", orphan: 1 })).toEqual({ title: "Hi", orphan: 1 });
     });
 });
