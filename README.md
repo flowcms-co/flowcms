@@ -1,8 +1,10 @@
 # Flow CMS
 
-An AI-powered, self-hostable headless CMS — content modeling, a public content API,
-an AI tool suite (bring-your-own provider keys), SEO/analytics ingestion, messaging,
-notifications, webhooks, and an agent API.
+An AI-powered, self-hostable headless CMS: content modeling with reusable components,
+a page builder, and content relations; REST + GraphQL delivery APIs; importers from
+WordPress, Strapi, Contentful, Sanity, and Markdown/CSV/JSON; an AI tool suite
+(bring-your-own provider keys); SEO/analytics ingestion, live preview, localization,
+draft/publish with approvals, messaging, notifications, webhooks, and an agent API.
 
 ## Monorepo layout
 
