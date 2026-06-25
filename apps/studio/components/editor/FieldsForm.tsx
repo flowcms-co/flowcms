@@ -433,7 +433,7 @@ const FieldGroup = ({
                             {f.required && <span className="text-error">*</span>}
                             {f.type === "Component" && (
                                 <span className="text-caption-2 text-grey/70">
-                                    {f.repeatable ? "reusable component · repeatable" : "reusable component"}
+                                    {f.componentApiId ? "reusable component" : "component"}{f.repeatable ? " · repeatable" : ""}
                                 </span>
                             )}
                         </span>

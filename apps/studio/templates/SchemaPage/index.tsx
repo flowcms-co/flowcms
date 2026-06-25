@@ -485,7 +485,7 @@ const FieldList = ({
                 </button>
                 <button type="button" onClick={() => onChange([...fields, blankComponent()])} className="btn-ghost h-9 px-3.5 text-caption-1 border border-grey-light dark:border-grey-light/10">
                     <Icon className="w-4 h-4 fill-grey" name="copy" />
-                    Add reusable component
+                    Add component
                 </button>
                 {allowZones && depth === 0 && (
                     <button
@@ -625,7 +625,7 @@ const FieldRow = ({
                     ariaLabel="Field type"
                     value={field.type}
                     onChange={(v) => changeType(v as FieldType)}
-                    options={FIELD_TYPES.filter((ft) => ft !== "DynamicZone" || allowZones).map((ft) => ({ value: ft, label: ft === "DynamicZone" ? "Page builder" : ft === "Component" ? "Reusable component" : ft }))}
+                    options={FIELD_TYPES.filter((ft) => ft !== "DynamicZone" || allowZones).map((ft) => ({ value: ft, label: ft === "DynamicZone" ? "Page builder" : ft }))}
                 />
 
                 {/* Component: inline vs reference a library component */}
@@ -856,7 +856,7 @@ const FieldRow = ({
                                         title={`${sf.name} · ${sf.type}`}
                                     >
                                         <span className="font-medium text-black dark:text-white">{sf.name}</span>
-                                        <span className="text-grey/70">{sf.type === "DynamicZone" ? "Page builder" : sf.type === "Component" ? "Reusable component" : sf.type}</span>
+                                        <span className="text-grey/70">{sf.type === "DynamicZone" ? "Page builder" : sf.type}</span>
                                     </span>
                                 ))}
                             </div>
