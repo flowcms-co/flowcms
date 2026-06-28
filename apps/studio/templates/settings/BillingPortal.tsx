@@ -13,7 +13,7 @@ import { api, ApiError } from "@/lib/api";
  * secret never touches the browser. Renders only when this install has a Stripe-billed
  * subscription; community / offline-licensed installs see nothing here (License handles keys).
  */
-type Summary = {
+export type Summary = {
     plan: string;
     status: string;
     currentPeriodEnd: number | null;
@@ -89,9 +89,9 @@ function CardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => vo
     );
 }
 
-export default function BillingPortal() {
-    const [summary, setSummary] = useState<Summary | null>(null);
-    const [available, setAvailable] = useState<boolean | null>(null); // null = loading
+export default function BillingPortal({ initial }: { initial?: Summary } = {}) {
+    const [summary, setSummary] = useState<Summary | null>(initial ?? null);
+    const [available, setAvailable] = useState<boolean | null>(initial ? true : null); // null = loading
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [editCard, setEditCard] = useState<{ clientSecret: string; stripe: Promise<Stripe | null> } | null>(null);
@@ -109,8 +109,8 @@ export default function BillingPortal() {
     }, []);
 
     useEffect(() => {
-        void load();
-    }, [load]);
+        if (!initial) void load();
+    }, [load, initial]);
 
     const act = async (action: string, extra: Record<string, unknown> = {}) => {
         setBusy(action);
@@ -161,7 +161,7 @@ export default function BillingPortal() {
                     <h2 className="text-h5 text-black dark:text-white">Subscription &amp; billing</h2>
                     <p className="mt-0.5 text-caption-1 text-grey">Manage your plan, payment method and invoices.</p>
                 </div>
-                <StatusBadge status={s.status} cancelAtPeriodEnd={s.cancelAtPeriodEnd} />
+                <div className="self-start sm:self-center"><StatusBadge status={s.status} cancelAtPeriodEnd={s.cancelAtPeriodEnd} /></div>
             </div>
 
             {msg && <div className={`mt-4 rounded-lg px-3 py-2 text-caption-1 ${msg.ok ? "bg-success/10 text-success" : "bg-error/10 text-error"}`}>{msg.text}</div>}
@@ -178,7 +178,7 @@ export default function BillingPortal() {
                 <div className="rounded-2xl border border-grey-light p-4 dark:border-grey-light/10">
                     <div className="text-caption-2 text-grey">Plan</div>
                     <div className="mt-1 font-poppins text-h5 font-bold capitalize text-black dark:text-white">{s.plan}</div>
-                    {s.amount && <div className="text-caption-1 text-grey">{money(s.amount.value, s.amount.currency)}/{s.amount.interval}{s.seats ? ` · ${s.seats} seats` : ""}</div>}
+                    {s.amount && <div className="text-caption-1 text-grey">{money(s.amount.value, s.amount.currency)}/{s.amount.interval}{s.seats ? ` · ${s.seats} seat${s.seats === 1 ? "" : "s"}` : ""}</div>}
                 </div>
                 <div className="rounded-2xl border border-grey-light p-4 dark:border-grey-light/10">
                     <div className="text-caption-2 text-grey">{s.cancelAtPeriodEnd ? "Ends" : "Renews"}</div>
