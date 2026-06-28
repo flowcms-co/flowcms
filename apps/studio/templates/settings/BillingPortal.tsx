@@ -22,6 +22,7 @@ type Summary = {
     amount: { value: number; currency: string; interval: string } | null;
     seats: number | null;
     seatPlan?: { total: number; included: number; interval: string; perSeat: number; selfServe: boolean };
+    installUsers?: number | null; // install-wide member count (matches the invite gate)
     paymentMethod: { brand: string; last4: string; expMonth: number; expYear: number } | null;
     invoices: { id: string; number: string | null; amount: number; currency: string; status: string | null; created: number; hostedUrl: string | null; pdf: string | null }[];
     customer: { name: string; email: string | null };
@@ -105,7 +106,7 @@ export default function BillingPortal() {
             const s = await api<Summary>("/billing/portal");
             setSummary(s);
             setAvailable(true);
-            api<unknown[]>("/users").then((u) => setSeatUsers(Array.isArray(u) ? u.length : null)).catch(() => undefined);
+            setSeatUsers(typeof s.installUsers === "number" ? s.installUsers : null);
         } catch (e) {
             // 400 (no license) / 401 (no Stripe subscription) → this install isn't Stripe-billed.
             if (e instanceof ApiError && (e.status === 400 || e.status === 401 || e.status === 404)) setAvailable(false);
