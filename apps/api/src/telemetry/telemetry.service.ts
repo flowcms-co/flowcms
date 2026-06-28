@@ -14,6 +14,7 @@ const FIRST_DELAY_MS = 30_000;
 const INTERVAL_MS = 12 * 60 * 60 * 1000; // twice daily
 const ADMIN_URL = (process.env.FLOWCMS_ADMIN_URL || "https://admin.flowcms.co").replace(/\/+$/, "");
 const VERSION = (process.env.FLOWCMS_VERSION || "0.1.0").replace(/^v/, "");
+const SITE_URL = (process.env.STUDIO_URL || "").replace(/\/+$/, ""); // this install's public origin
 
 type HeartbeatResponse = { ok: true; latestVersion?: string; license?: { status: string; token?: string } };
 
@@ -84,6 +85,25 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
         }
     }
 
+    /** Owner + organization details, so the vendor can reach the right person and brand emails. */
+    private async profile() {
+        try {
+            const [owner, ws, org] = await Promise.all([
+                this.prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, email: true } }),
+                this.prisma.workspace.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, brandName: true } }),
+                this.prisma.orgProfile.findUnique({ where: { id: "singleton" } }),
+            ]);
+            return {
+                siteUrl: SITE_URL || undefined,
+                owner: owner ? { name: owner.name ?? undefined, email: owner.email } : undefined,
+                company: org?.legalName || ws?.brandName || ws?.name || undefined,
+                org: org ? { legalName: org.legalName ?? undefined, addressLines: org.addressLines, taxId: org.taxId ?? undefined, billingEmail: org.billingEmail ?? undefined } : undefined,
+            };
+        } catch {
+            return { siteUrl: SITE_URL || undefined };
+        }
+    }
+
     /** Send one heartbeat. Public so it can be triggered on demand (ops/debug). Never throws. */
     async beat(): Promise<{ ok: boolean; status?: string }> {
         try {
@@ -95,6 +115,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
                 version: VERSION,
                 licenseToken: (await this.rawToken()) ?? undefined,
                 metrics: await this.metrics(),
+                ...(await this.profile()),
             };
             const res = await fetch(`${ADMIN_URL}/api/ingest/heartbeat`, {
                 method: "POST",

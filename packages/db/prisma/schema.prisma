@@ -678,6 +678,17 @@ model ServerInstance {
   createdAt  DateTime @default(now())
 }
 
+/// Install-level organization / billing details (single row). Shown on invoices and reported
+/// to the vendor so transactional emails reach the right person at the right company.
+model OrgProfile {
+  id           String   @id @default("singleton")
+  legalName    String? // legal/company name for invoices + billing
+  addressLines String[] @default([]) // billing address, one line each
+  taxId        String? // VAT / EIN / tax id (optional)
+  billingEmail String? // where billing emails go (falls back to the owner's email)
+  updatedAt    DateTime @updatedAt
+}
+
 // SEO Automation Engine — per-(page, task) audit ledger. One row per page+task;
 // stores the deterministic L1 findings + (later) the AI L2 findings as compact
 // codes, plus the content hash for change-detection. Findings are coded (see

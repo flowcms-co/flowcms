@@ -6,6 +6,7 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import { api, ApiError, API_BASE } from "@/lib/api";
+import { usePlan } from "@/components/providers/LicenseProvider";
 
 /**
  * Self-serve subscription + payment management (Stripe). The studio talks to its own API,
@@ -90,6 +91,7 @@ function CardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => vo
 }
 
 export default function BillingPortal() {
+    const { info } = usePlan();
     const [summary, setSummary] = useState<Summary | null>(null);
     const [available, setAvailable] = useState<boolean | null>(null); // null = loading
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -148,7 +150,35 @@ export default function BillingPortal() {
 
     const elementsOptions = useMemo(() => (editCard ? { clientSecret: editCard.clientSecret, appearance: { theme: "stripe" as const, variables: { colorPrimary: "#6c5ce7", borderRadius: "10px" } } } : undefined), [editCard]);
 
-    if (available === null || !summary) return null; // loading, or not a Stripe-billed install
+    if (available === null) return null; // loading
+
+    // No Stripe subscription. A paid install on a manually-issued license (common for
+    // Enterprise) still deserves a status card, just without the self-serve Stripe actions.
+    if (!summary) {
+        const paid = info.plan === "pro" || info.plan === "enterprise";
+        if (!paid) return null;
+        return (
+            <Card>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 className="text-h5 text-black dark:text-white">Subscription &amp; billing</h2>
+                        <p className="mt-0.5 text-caption-1 text-grey">Your plan and how billing is handled.</p>
+                    </div>
+                    <span className="self-start rounded-md bg-success/12 px-2.5 py-1 text-caption-2 font-semibold text-success sm:self-center">Active</span>
+                </div>
+                <div className="mt-5 rounded-2xl border border-grey-light p-4 dark:border-grey-light/10">
+                    <div className="text-caption-2 text-grey">Plan</div>
+                    <div className="mt-1 font-poppins text-h5 font-bold capitalize text-black dark:text-white">{info.plan}</div>
+                    {info.customer ? <div className="text-caption-1 text-grey">Licensed to {info.customer}</div> : null}
+                    {info.expiresAt ? <div className="text-caption-1 text-grey">Renews {new Date(info.expiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}</div> : null}
+                </div>
+                <div className="mt-4 flex items-start gap-2.5 rounded-2xl bg-lavender-mist p-4 dark:bg-white/[0.04]">
+                    <Icon name="key" className="mt-0.5 h-4 w-4 shrink-0 fill-primary dark:fill-lilac" />
+                    <p className="text-caption-1 text-grey">This plan is billed directly by your FlowCMS account team, so there&rsquo;s no card to manage here. To update billing, change your plan, or get an invoice, contact <a href="mailto:billing@flowcms.co" className="font-semibold text-primary dark:text-lilac">billing@flowcms.co</a>.</p>
+                </div>
+            </Card>
+        );
+    }
 
     const s = summary;
     const pastDue = s.status === "past_due" || s.status === "unpaid";
