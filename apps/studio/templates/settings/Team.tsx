@@ -72,6 +72,8 @@ const Team = () => {
     const [form, setForm] = useState<FormState>(emptyForm("editor"));
     const [saving, setSaving] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
+    const [seatLimit, setSeatLimit] = useState<{ seats: number; used: number } | null>(null);
+    const [seatBusy, setSeatBusy] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -101,6 +103,7 @@ const Team = () => {
         setEditing(null);
         setForm(emptyForm(roles.find((r) => r.key === "editor")?.key ?? roles[0]?.key ?? "editor"));
         setFormError(null);
+        setSeatLimit(null);
         setOpen(true);
     };
 
@@ -151,9 +154,29 @@ const Team = () => {
             setOpen(false);
             await load();
         } catch (e) {
-            setFormError(e instanceof ApiError ? e.message : "Could not save.");
+            const data = e instanceof ApiError ? (e.data as { code?: string; seats?: number; used?: number } | null) : null;
+            if (data?.code === "seat_limit") setSeatLimit({ seats: data.seats ?? 0, used: data.used ?? 0 });
+            else setFormError(e instanceof ApiError ? e.message : "Could not save.");
         } finally {
             setSaving(false);
+        }
+    };
+
+    // Out of seats: a security-manager can buy one and the invite retries; others are told to ask an owner.
+    const buySeatAndRetry = async () => {
+        if (!seatLimit) return;
+        setSeatBusy(true);
+        setFormError(null);
+        try {
+            await api("/billing/portal", { method: "POST", body: JSON.stringify({ action: "set-seats", total: seatLimit.seats + 1, currentUsers: seatLimit.used }) });
+            // Refresh the license so the new seat is recognized before retrying the invite.
+            await api("/telemetry/beat", { method: "POST" }).catch(() => undefined);
+            setSeatLimit(null);
+            setSeatBusy(false);
+            await save();
+        } catch (e) {
+            setSeatBusy(false);
+            setFormError(e instanceof ApiError ? e.message : "Couldn't add a seat. Ask an owner to add seats.");
         }
     };
 
@@ -319,6 +342,20 @@ const Team = () => {
                                     {formError && (
                                         <div className="mb-4 rounded-2xl bg-error/10 px-4 py-3 text-body-sm text-error">
                                             {formError}
+                                        </div>
+                                    )}
+
+                                    {seatLimit && (
+                                        <div className="mb-4 rounded-2xl border border-primary/25 bg-lavender-mist px-4 py-3 dark:bg-white/[0.04]">
+                                            <p className="text-body-sm font-semibold text-black dark:text-white">You&rsquo;ve used all {seatLimit.seats} seats.</p>
+                                            {can("security.manage") ? (
+                                                <>
+                                                    <p className="mt-0.5 text-caption-1 text-grey">Add a seat to send this invite. It&rsquo;s prorated and added to your subscription.</p>
+                                                    <button type="button" className="btn-primary btn-sm mt-3" onClick={buySeatAndRetry} disabled={seatBusy}>{seatBusy ? "Adding seat…" : "Add a seat & send invite"}</button>
+                                                </>
+                                            ) : (
+                                                <p className="mt-0.5 text-caption-1 text-grey">Ask an owner to add more seats, then invite again.</p>
+                                            )}
                                         </div>
                                     )}
 

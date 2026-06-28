@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from "@nestjs/common";
@@ -8,6 +9,7 @@ import { hashPassword } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { MailService } from "../mail/mail.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { LicenseService } from "../license/license.service";
 import { CreateUserDto, UpdateUserDto } from "./dto";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -18,7 +20,23 @@ export class UsersService {
         private readonly prisma: PrismaService,
         private readonly mail: MailService,
         private readonly notifications: NotificationsService,
+        private readonly license: LicenseService,
     ) {}
+
+    /**
+     * Seat gate. Pro is hard-capped in-app (3 included + purchased seats); the studio offers to
+     * buy a seat and retry. Community has no seat limit; Enterprise is contracted, so it's never
+     * blocked here (the vendor is alerted on overage instead). Invited-but-unaccepted users
+     * already exist as rows, so they count toward seats.
+     */
+    private async assertSeatAvailable() {
+        const info = await this.license.info();
+        if (info.plan !== "pro" || info.seats == null) return;
+        const used = await this.prisma.user.count();
+        if (used >= info.seats) {
+            throw new ForbiddenException({ message: `You've used all ${info.seats} seats. Add a seat to invite more people.`, code: "seat_limit", seats: info.seats, used });
+        }
+    }
 
     async list(workspaceId: string) {
         const memberships = await this.prisma.membership.findMany({
@@ -54,6 +72,7 @@ export class UsersService {
         if (await this.prisma.user.findUnique({ where: { email } })) {
             throw new ConflictException("An account with this email already exists.");
         }
+        await this.assertSeatAvailable();
         const role = await this.roleByKey(workspaceId, dto.roleKey);
         const user = await this.prisma.user.create({
             data: {

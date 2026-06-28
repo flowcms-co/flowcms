@@ -21,6 +21,7 @@ type Summary = {
     cancelAtPeriodEnd: boolean;
     amount: { value: number; currency: string; interval: string } | null;
     seats: number | null;
+    seatPlan?: { total: number; included: number; interval: string; perSeat: number; selfServe: boolean };
     paymentMethod: { brand: string; last4: string; expMonth: number; expYear: number } | null;
     invoices: { id: string; number: string | null; amount: number; currency: string; status: string | null; created: number; hostedUrl: string | null; pdf: string | null }[];
     customer: { name: string; email: string | null };
@@ -97,12 +98,14 @@ export default function BillingPortal() {
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [editCard, setEditCard] = useState<{ clientSecret: string; stripe: Promise<Stripe | null> } | null>(null);
+    const [seatUsers, setSeatUsers] = useState<number | null>(null); // live member count, for the seat guard
 
     const load = useCallback(async () => {
         try {
             const s = await api<Summary>("/billing/portal");
             setSummary(s);
             setAvailable(true);
+            api<unknown[]>("/users").then((u) => setSeatUsers(Array.isArray(u) ? u.length : null)).catch(() => undefined);
         } catch (e) {
             // 400 (no license) / 401 (no Stripe subscription) → this install isn't Stripe-billed.
             if (e instanceof ApiError && (e.status === 400 || e.status === 401 || e.status === 404)) setAvailable(false);
@@ -222,6 +225,28 @@ export default function BillingPortal() {
                     {s.paymentMethod && <div className="text-caption-2 text-grey">Expires {s.paymentMethod.expMonth}/{s.paymentMethod.expYear}</div>}
                 </div>
             </div>
+
+            {/* Seats — self-serve add/remove for Pro (3 included + per-seat add-on) */}
+            {s.seatPlan && (
+                <div className="mt-4 rounded-2xl border border-grey-light p-4 dark:border-grey-light/10">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <div className="text-title font-semibold text-black dark:text-white">Seats</div>
+                            <p className="mt-0.5 text-caption-1 text-grey">
+                                {seatUsers != null ? `${seatUsers} of ${s.seatPlan.total} used` : `${s.seatPlan.total} seats`} · {s.seatPlan.included} included{s.seatPlan.total > s.seatPlan.included ? ` + ${s.seatPlan.total - s.seatPlan.included} extra` : ""}
+                            </p>
+                        </div>
+                        {s.seatPlan.selfServe && (
+                            <div className="flex shrink-0 items-center gap-2">
+                                <button type="button" className="btn-ghost btn-md" disabled={busy === "set-seats" || s.seatPlan.total <= Math.max(s.seatPlan.included, seatUsers ?? 0)} onClick={() => act("set-seats", { total: s.seatPlan!.total - 1, currentUsers: seatUsers ?? 0 })}>Remove</button>
+                                <button type="button" className="btn-secondary btn-md" disabled={busy === "set-seats"} onClick={() => act("set-seats", { total: s.seatPlan!.total + 1, currentUsers: seatUsers ?? 0 })}>
+                                    <Icon name="plus" className="h-4 w-4 fill-primary dark:fill-lilac" />Add seat (${s.seatPlan.perSeat}/{s.seatPlan.interval === "year" ? "yr" : "mo"})
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Card update */}
             {editCard && elementsOptions ? (
