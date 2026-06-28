@@ -38,6 +38,7 @@ import { AvatarsModule } from "./avatars/avatars.module";
 import { AuditModule } from "./audit/audit.module";
 import { LicenseModule } from "./license/license.module";
 import { BillingModule } from "./billing/billing.module";
+import { TelemetryModule } from "./telemetry/telemetry.module";
 import { RedisModule } from "./redis/redis.module";
 import { CacheModule } from "./cache/cache.module";
 import { JobsModule } from "./jobs/jobs.module";
@@ -107,6 +108,7 @@ try {
         AuditModule,
         LicenseModule,
         BillingModule,
+        TelemetryModule,
         JobsModule,
         ...EE_MODULES,
     ],

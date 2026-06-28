@@ -142,13 +142,15 @@ const Profile = () => {
         <div className="flex flex-col gap-6">
             <Card>
                 <h2 className="text-h5 text-black dark:text-white mb-5">Profile</h2>
-                <div className="mb-6 flex items-center gap-4 rounded-lg bg-grey-light/30 p-4 dark:bg-white/[0.04]">
-                    <Image src={characterSrc(selectedChar)} alt="Your avatar" width={72} height={72} unoptimized className="h-18 w-18 shrink-0 rounded-full bg-lavender-mist object-cover" />
-                    <div className="min-w-0 grow">
-                        <span className="block text-caption-1 font-semibold text-black dark:text-white">Your avatar</span>
-                        <p className="text-caption-2 text-grey">A friendly character for your profile.</p>
+                <div className="mb-6 flex flex-col gap-3 rounded-lg bg-grey-light/30 p-4 sm:flex-row sm:items-center sm:gap-4 dark:bg-white/[0.04]">
+                    <div className="flex min-w-0 grow items-center gap-4">
+                        <Image src={characterSrc(selectedChar)} alt="Your avatar" width={72} height={72} unoptimized className="h-16 w-16 shrink-0 rounded-full bg-lavender-mist object-cover sm:h-18 sm:w-18" />
+                        <div className="min-w-0">
+                            <span className="block text-caption-1 font-semibold text-black dark:text-white">Your avatar</span>
+                            <p className="text-caption-2 text-grey">A friendly character for your profile.</p>
+                        </div>
                     </div>
-                    <button type="button" onClick={openPicker} className="btn-secondary h-9 px-3.5 text-caption-1 shrink-0">
+                    <button type="button" onClick={openPicker} className="btn-secondary h-9 w-full shrink-0 px-3.5 text-caption-1 sm:w-auto">
                         Change avatar
                     </button>
                 </div>

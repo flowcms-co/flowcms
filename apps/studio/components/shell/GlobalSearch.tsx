@@ -123,15 +123,15 @@ const GlobalSearch = () => {
 
     return (
         <>
-            {/* Trigger — looks like the old search field, lifts on hover. */}
+            {/* Trigger — a compact icon button on mobile, a full search field on desktop. */}
             <button
                 type="button"
                 onClick={() => setOpen(true)}
-                className="group relative flex h-11 grow items-center gap-3 rounded-2xl border border-transparent pl-11 pr-2.5 text-left transition-all hover:bg-white hover:border-grey-light hover:shadow-[0_0.5rem_1.5rem_rgba(227,230,236,0.6)] max-w-none md:max-w-md dark:hover:bg-dark-1 dark:hover:border-grey-light/10 dark:hover:shadow-[0_0.5rem_1.5rem_rgba(0,0,0,0.3)]"
+                className="group relative flex h-11 w-11 shrink-0 items-center justify-center gap-3 rounded-2xl border border-transparent text-left transition-all hover:bg-white hover:border-grey-light hover:shadow-[0_0.5rem_1.5rem_rgba(227,230,236,0.6)] md:w-auto md:grow md:max-w-md md:justify-start md:pl-11 md:pr-2.5 dark:bg-dark-1 dark:hover:bg-dark-1 dark:hover:border-grey-light/10 dark:hover:shadow-[0_0.5rem_1.5rem_rgba(0,0,0,0.3)] md:dark:bg-transparent"
                 aria-label="Search everything"
             >
-                <Icon className="pointer-events-none absolute left-4 h-5 w-5 fill-grey transition-colors group-hover:fill-primary" name="search" />
-                <span className="text-body text-grey">Search everything…</span>
+                <Icon className="h-5 w-5 fill-grey transition-colors group-hover:fill-primary md:pointer-events-none md:absolute md:left-4" name="search" />
+                <span className="hidden text-body text-grey md:inline">Search everything…</span>
                 <kbd className="ml-auto hidden rounded-md border border-grey-light px-1.5 py-0.5 text-[0.6875rem] font-semibold text-grey md:inline dark:border-grey-light/15">
                     ⌘K
                 </kbd>

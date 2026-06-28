@@ -52,7 +52,9 @@ const SeoDonut = ({
                     paddingAngle={2}
                     cornerRadius={cornerRadius}
                     stroke="none"
-                    animationDuration={900}
+                    // Render immediately. The grow-in animation can stall in background
+                    // tabs / headless / iframed contexts and leave the ring blank.
+                    isAnimationActive={false}
                 >
                     {data.map((s) => (
                         <Cell key={s.label} fill={s.color} style={{ outline: "none" }} />

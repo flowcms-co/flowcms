@@ -12,7 +12,7 @@ import { PrismaService } from "../prisma/prisma.service";
 export class BillingService {
     private readonly logger = new Logger(BillingService.name);
     // Operator-configured, trusted endpoint (not user input) — a plain fetch is fine here.
-    private readonly adminUrl = (process.env.FLOWCMS_ADMIN_URL || "https://flowcms-admin-production.up.railway.app").replace(/\/+$/, "");
+    private readonly adminUrl = (process.env.FLOWCMS_ADMIN_URL || "https://admin.flowcms.co").replace(/\/+$/, "");
 
     constructor(private readonly prisma: PrismaService) {}
 
@@ -21,6 +21,22 @@ export class BillingService {
         if (env) return env;
         const row = await this.prisma.license.findFirst({ orderBy: { updatedAt: "desc" } }).catch(() => null);
         return row?.key?.trim() || null;
+    }
+
+    /** Fetch a FlowCMS-branded invoice PDF from the admin, forwarding the license token. */
+    async invoicePdf(id: string): Promise<{ status: number; body: Buffer | string; contentType: string }> {
+        const token = await this.licenseToken();
+        if (!token) return { status: 400, body: "No license configured.", contentType: "text/plain" };
+        try {
+            const res = await fetch(`${this.adminUrl}/api/billing/portal/invoice?id=${encodeURIComponent(id)}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) return { status: res.status, body: await res.text().catch(() => "Invoice error."), contentType: "application/json" };
+            return { status: 200, body: Buffer.from(await res.arrayBuffer()), contentType: "application/pdf" };
+        } catch (e) {
+            this.logger.warn(`Invoice PDF proxy failed: ${(e as Error).message}`);
+            return { status: 502, body: "Could not reach the billing service.", contentType: "text/plain" };
+        }
     }
 
     /** Proxy a billing-portal call to the admin, returning its status + JSON verbatim. */

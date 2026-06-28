@@ -5,7 +5,7 @@ import { loadStripe, type Stripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, API_BASE } from "@/lib/api";
 
 /**
  * Self-serve subscription + payment management (Stripe). The studio talks to its own API,
@@ -13,7 +13,7 @@ import { api, ApiError } from "@/lib/api";
  * secret never touches the browser. Renders only when this install has a Stripe-billed
  * subscription; community / offline-licensed installs see nothing here (License handles keys).
  */
-export type Summary = {
+type Summary = {
     plan: string;
     status: string;
     currentPeriodEnd: number | null;
@@ -89,9 +89,9 @@ function CardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => vo
     );
 }
 
-export default function BillingPortal({ initial }: { initial?: Summary } = {}) {
-    const [summary, setSummary] = useState<Summary | null>(initial ?? null);
-    const [available, setAvailable] = useState<boolean | null>(initial ? true : null); // null = loading
+export default function BillingPortal() {
+    const [summary, setSummary] = useState<Summary | null>(null);
+    const [available, setAvailable] = useState<boolean | null>(null); // null = loading
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [editCard, setEditCard] = useState<{ clientSecret: string; stripe: Promise<Stripe | null> } | null>(null);
@@ -109,8 +109,8 @@ export default function BillingPortal({ initial }: { initial?: Summary } = {}) {
     }, []);
 
     useEffect(() => {
-        if (!initial) void load();
-    }, [load, initial]);
+        void load();
+    }, [load]);
 
     const act = async (action: string, extra: Record<string, unknown> = {}) => {
         setBusy(action);
@@ -226,7 +226,7 @@ export default function BillingPortal({ initial }: { initial?: Summary } = {}) {
                                 <span className="text-caption-2 text-grey">{date(inv.created)}</span>
                                 <span className="ml-auto text-caption-1 font-semibold text-black dark:text-white">{money(inv.amount, inv.currency)}</span>
                                 <span className={`rounded px-2 py-0.5 text-caption-2 font-semibold capitalize ${inv.status === "paid" ? "bg-success/10 text-success" : inv.status === "open" ? "bg-warning/10 text-warning" : "bg-grey-light text-grey dark:bg-dark-3"}`}>{inv.status}</span>
-                                {inv.pdf && <a href={inv.pdf} target="_blank" rel="noopener noreferrer" className="text-caption-1 font-semibold text-primary dark:text-lilac">PDF</a>}
+                                <a href={`${API_BASE}/billing/portal/invoice/${inv.id}`} target="_blank" rel="noopener noreferrer" className="text-caption-1 font-semibold text-primary dark:text-lilac">PDF</a>
                             </div>
                         ))}
                     </div>

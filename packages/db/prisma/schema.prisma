@@ -670,6 +670,14 @@ model License {
   updatedAt DateTime @updatedAt
 }
 
+/// Stable per-install identity (single row). Generated on first heartbeat, reported to the
+/// vendor for fleet telemetry, and bound to the subscription at checkout. Never changes.
+model ServerInstance {
+  id         String   @id @default("singleton")
+  instanceId String   @unique
+  createdAt  DateTime @default(now())
+}
+
 // SEO Automation Engine — per-(page, task) audit ledger. One row per page+task;
 // stores the deterministic L1 findings + (later) the AI L2 findings as compact
 // codes, plus the content hash for change-detection. Findings are coded (see

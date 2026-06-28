@@ -68,7 +68,7 @@ const KpiStrip = () => {
     ];
 
     return (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             {kpis.map((k) => (
                 <Link key={k.key} href={k.href} aria-label={`${k.label}: ${k.value}`} className="group block rounded-2xl">
                 <Card className="flex flex-col !p-4 transition-shadow group-hover:shadow-[0_0.75rem_2rem_rgba(26,26,46,0.08)]">
@@ -81,14 +81,18 @@ const KpiStrip = () => {
                             <Stroke d={k.icon} color={k.color} className="h-[15px] w-[15px]" />
                         </span>
                         <StatNumber value={String(k.value)} className="font-poppins text-[1.25rem] leading-none font-extrabold text-black dark:text-white" />
-                        <span className="min-w-0 truncate text-[0.875rem] font-semibold text-black dark:text-white">{k.label}</span>
+                        <span className="hidden min-w-0 truncate text-[0.875rem] font-semibold text-black sm:block dark:text-white">{k.label}</span>
                         <span className={cn("ml-auto flex shrink-0 items-center gap-0.5 whitespace-nowrap text-caption-2 font-semibold", k.dir === "up" ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
                             <Stroke d={k.dir === "up" ? PATHS.arrowUp : PATHS.arrowDown} className="h-3 w-3" />
                             <span>{k.delta}</span>
                         </span>
                     </div>
 
-                    <div className="mt-3 -mb-1">
+                    {/* Mobile: label sits under the number (the row is too narrow at 2-up). */}
+                    <span className="mt-1.5 min-w-0 truncate text-[0.8125rem] font-semibold text-black sm:hidden dark:text-white">{k.label}</span>
+
+                    {/* Sparkline is illustrative texture — desktop only, keeps mobile cards compact. */}
+                    <div className="mt-3 -mb-1 hidden sm:block">
                         <Sparkline data={k.spark} color={k.color} height={34} />
                     </div>
                 </Card>
