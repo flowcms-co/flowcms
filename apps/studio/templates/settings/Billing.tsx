@@ -1,11 +1,41 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { PLAN_LABEL, PLAN_RANK, PLANS, type Plan } from "@/lib/plans";
+
+const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "https://flowcms-admin-production.up.railway.app";
+
+/** Live plan pricing from the vendor console: Pro price, and Enterprise price if not custom. */
+function useLivePricing() {
+    const [price, setPrice] = useState<{ pro?: string; enterprise?: string }>({});
+    useEffect(() => {
+        let on = true;
+        (async () => {
+            try {
+                const res = await fetch(`${ADMIN_URL}/api/pricing`);
+                if (!res.ok) return;
+                const p = await res.json();
+                const fmt = (n: number) => {
+                    try {
+                        return new Intl.NumberFormat("en-US", { style: "currency", currency: p.currency, maximumFractionDigits: 0 }).format(n);
+                    } catch {
+                        return `${p.currency} ${n}`;
+                    }
+                };
+                if (on) setPrice({ pro: fmt(p.pro.monthly), enterprise: p.enterprise.custom === false ? fmt(p.enterprise.monthly) : undefined });
+            } catch {
+                /* keep the static labels if the feed is unreachable */
+            }
+        })();
+        return () => { on = false; };
+    }, []);
+    return price;
+}
 
 /**
  * Billing — compare editions and upgrade. Flow CMS is self-hosted and licensed
@@ -18,6 +48,7 @@ const Billing = () => {
     const { can } = useAuth();
     const canManage = can("security.manage");
     const currentRank = PLAN_RANK[plan];
+    const livePrice = useLivePricing();
 
     return (
         <div className="flex flex-col gap-6">
@@ -107,8 +138,8 @@ const Billing = () => {
                                     )}
                                 </div>
                                 <div className="mt-2 flex items-baseline gap-1.5">
-                                    <span className="font-poppins text-h4 font-extrabold text-black dark:text-white">{p.price}</span>
-                                    <span className="text-caption-2 text-grey">{p.cadence}</span>
+                                    <span className="font-poppins text-h4 font-extrabold text-black dark:text-white">{p.id === "pro" && livePrice.pro ? livePrice.pro : p.id === "enterprise" && livePrice.enterprise ? livePrice.enterprise : p.price}</span>
+                                    <span className="text-caption-2 text-grey">{(p.id === "pro" && livePrice.pro) || (p.id === "enterprise" && livePrice.enterprise) ? "/mo · " : ""}{p.cadence}</span>
                                 </div>
                                 <p className="mt-2 min-h-[2.5rem] text-caption-2 text-grey">{p.tagline}</p>
                                 <ul className="mt-4 flex grow flex-col gap-2">
