@@ -4,7 +4,9 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { useRouter } from "next/navigation";
 import Sidebar from "@/components/shell/Sidebar";
 import Topbar from "@/components/shell/Topbar";
+import MobileTabBar from "@/components/shell/MobileTabBar";
 import BrandStyle from "@/components/shell/BrandStyle";
+import { InstallAppBanner } from "@/components/install/InstallApp";
 import JobToasts from "@/components/jobs/JobToasts";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useWorkspace } from "@/lib/useWorkspace";
@@ -98,20 +100,23 @@ const AppShell = ({ children }: { children: ReactNode }) => {
                 onNavigate={() => setMobileOpen(false)}
             />
 
-            {/* Mobile overlay */}
+            {/* Mobile overlay (above the sticky header + bottom tab bar) */}
             {mobileOpen && (
                 <div
-                    className="fixed inset-0 z-4 block bg-ink/40 backdrop-blur-sm lg:hidden"
+                    className="fixed inset-0 z-40 block bg-ink/40 backdrop-blur-sm lg:hidden"
                     onClick={() => setMobileOpen(false)}
                 />
             )}
 
             <div className="flex min-w-0 flex-1 flex-col">
                 <Topbar onMenu={() => setMobileOpen(true)} />
-                <main className="mx-auto w-full max-w-[90rem] px-4 py-8 md:px-6 xl:px-8">
+                {/* pb-tabbar keeps content clear of the fixed mobile tab bar; reset at lg. */}
+                <main className="pb-tabbar mx-auto w-full max-w-[90rem] px-4 pt-5 md:px-6 md:pt-8 xl:px-8 lg:pb-8">
                     {children}
                 </main>
             </div>
+            <MobileTabBar />
+            <InstallAppBanner />
             <JobToasts />
         </div>
     );

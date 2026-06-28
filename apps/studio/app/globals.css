@@ -490,3 +490,20 @@ html.dark {
 @media (prefers-reduced-motion: reduce) {
     .animate-flow-confetti, .animate-flow-pop, .animate-flow-burst { animation: none; }
 }
+
+/* ── Mobile app chrome: safe-area helpers (iOS notch / home indicator) ────────── */
+.pt-safe { padding-top: env(safe-area-inset-top); }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+.pl-safe { padding-left: env(safe-area-inset-left); }
+.pr-safe { padding-right: env(safe-area-inset-right); }
+/* Content gutter so the fixed bottom tab bar never covers the last rows (mobile). */
+.pb-tabbar { padding-bottom: calc(env(safe-area-inset-bottom) + 5.25rem); }
+
+@keyframes sheetSlideUp {
+    from { opacity: 0; transform: translateY(100%); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.animate-sheet-up { animation: sheetSlideUp 320ms cubic-bezier(0.22, 1, 0.36, 1); }
+@media (prefers-reduced-motion: reduce) {
+    .animate-sheet-up { animation: none; }
+}

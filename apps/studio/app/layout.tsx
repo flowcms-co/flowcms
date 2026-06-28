@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { Inter, Poppins } from "next/font/google";
 import "./globals.css";
@@ -23,9 +23,26 @@ export const metadata: Metadata = {
     title: "Flow CMS",
     description:
         "AI-powered content management: content creation, SEO, and publishing in one platform.",
+    applicationName: "Flow CMS",
+    manifest: "/manifest.webmanifest",
     icons: {
         icon: "/favicon.svg",
+        apple: [{ url: "/brand/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
     },
+    // Launch the iOS home-screen shortcut full-screen, like a native app.
+    appleWebApp: { capable: true, title: "Flow CMS", statusBarStyle: "black-translucent" },
+};
+
+// viewport-fit=cover lets the app draw under the iOS notch / home indicator so the
+// safe-area insets resolve; theme-color tints the mobile browser chrome.
+export const viewport: Viewport = {
+    width: "device-width",
+    initialScale: 1,
+    viewportFit: "cover",
+    themeColor: [
+        { media: "(prefers-color-scheme: light)", color: "#fcfdfd" },
+        { media: "(prefers-color-scheme: dark)", color: "#1a1a2e" },
+    ],
 };
 
 // Pre-paint white-label boot: reads the brand cookie (mirrored by BrandStyle) and

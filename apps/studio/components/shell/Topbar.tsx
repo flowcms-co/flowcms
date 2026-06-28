@@ -14,14 +14,14 @@ const Topbar = ({ onMenu }: { onMenu: () => void }) => {
     const recent = (items ?? []).slice(0, 5);
 
     return (
-        <header className="flex items-center gap-4 h-20 px-4 md:px-6">
+        <header className="pt-safe sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-grey-light/70 bg-bg/80 px-4 backdrop-blur-xl lg:static lg:h-20 lg:gap-4 lg:border-b-0 lg:bg-transparent lg:px-6 lg:backdrop-blur-none dark:border-grey-light/10 dark:bg-dark-2/80 lg:dark:bg-transparent">
             {/* Mobile menu (opens the sidebar drawer). Desktop collapse lives on
-                the sidebar logo icon. */}
+                the sidebar logo icon. Header is fixed on mobile, static on desktop. */}
             <button
                 type="button"
                 aria-label="Open menu"
                 onClick={onMenu}
-                className="flex lg:hidden btn-circle dark:bg-dark-1"
+                className="flex lg:hidden btn-circle h-11 w-11 dark:bg-dark-1"
             >
                 <Icon className="fill-black dark:fill-white" name="menu-collapse" />
             </button>

@@ -9,6 +9,7 @@ import { navForRole, type NavItem } from "@/lib/navigation";
 import Icon from "@/components/ui/Icon";
 import Logo from "@/components/shell/Logo";
 import WorkspaceSwitcher from "@/components/shell/WorkspaceSwitcher";
+import { InstallAppButton } from "@/components/install/InstallApp";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
 
@@ -96,8 +97,9 @@ const Sidebar = ({
     return (
         <aside
             className={cn(
-                // Mobile: off-canvas fixed drawer (slides in over the content).
-                "fixed top-0 left-0 bottom-0 z-5 flex flex-col bg-bg transition-all dark:bg-dark-2",
+                // Mobile: off-canvas fixed drawer (slides in over the content), above the
+                // sticky header + bottom tab bar; safe-area padded for the notch.
+                "pt-safe fixed top-0 left-0 bottom-0 z-50 flex flex-col bg-bg transition-all lg:z-auto lg:pt-0 dark:bg-dark-2",
                 // Desktop: an in-flow column that STRETCHES to the full document
                 // height (so the footer sits at the true bottom and every nav item
                 // shows, even in full-page screenshots). The brand + nav are kept in
@@ -181,6 +183,13 @@ const Sidebar = ({
                 {showSwitcher && (
                     <div className={cn("mt-4 shrink-0", collapsed && "flex justify-center")}>
                         <PoweredBy collapsed={collapsed} />
+                    </div>
+                )}
+
+                {/* Install entry — only in the mobile drawer (desktop has the browser's own). */}
+                {!collapsed && (
+                    <div className="pb-safe mt-auto px-0 pt-4 lg:hidden">
+                        <InstallAppButton className="btn-md w-full" />
                     </div>
                 )}
             </nav>
