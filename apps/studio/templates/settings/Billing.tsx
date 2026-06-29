@@ -8,7 +8,7 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { PLAN_LABEL, PLAN_RANK, PLANS, type Plan } from "@/lib/plans";
 
-const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "https://flowcms-admin-production.up.railway.app";
+const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "https://admin.flowcms.co";
 
 /** Live plan pricing from the vendor console: Pro price, and Enterprise price if not custom. */
 function useLivePricing() {

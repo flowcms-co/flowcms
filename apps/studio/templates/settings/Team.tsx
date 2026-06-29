@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import Avatar from "@/components/ui/Avatar";
 import { Dialog, Transition } from "@headlessui/react";
 import Card from "@/components/ui/Card";
@@ -9,7 +10,14 @@ import Switch from "@/components/ui/Switch";
 import Select from "@/components/ui/Select";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
+import { usePlan } from "@/components/providers/LicenseProvider";
 import { confirm } from "@/components/providers/ConfirmProvider";
+
+// Community has no seat cap; once a team grows past this many members we show a
+// dismissible, non-blocking suggestion to consider Pro (for governance, not seats).
+const NUDGE_AT = 5;
+const NUDGE_STEP = 5; // after dismissal, only resurface once the team grows another step
+const NUDGE_KEY = "flowcms:community-team-nudge-dismissed-at";
 
 type RoleOption = { id: string; key: string; name: string };
 type Member = {
@@ -59,7 +67,17 @@ const emptyForm = (roleKey: string): FormState => ({
 /** Team / Users — list members, invite people, edit roles/titles, deactivate. */
 const Team = () => {
     const { user, can } = useAuth();
+    const { plan } = usePlan();
     const canManage = can("users.manage");
+
+    // Track the team size at which the nudge was last dismissed (read after mount; SSR-safe).
+    const [nudgeDismissedAt, setNudgeDismissedAt] = useState<number | null>(null);
+    useEffect(() => {
+        const raw = typeof window !== "undefined" ? window.localStorage.getItem(NUDGE_KEY) : null;
+        const n = raw == null ? null : Number(raw);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setNudgeDismissedAt(Number.isFinite(n) ? n : null);
+    }, []);
 
     const [members, setMembers] = useState<Member[]>([]);
     const [roles, setRoles] = useState<RoleOption[]>([]);
@@ -202,6 +220,25 @@ const Team = () => {
 
     const activeCount = members.filter((m) => m.isActive).length;
 
+    // Soft, non-blocking suggestion to consider Pro once a Community team grows. Only shown to
+    // people who can act on it (manage users), and suppressed after dismissal until the team
+    // grows another step. Community is never capped; everything keeps working at any size.
+    const showNudge =
+        !loading &&
+        canManage &&
+        plan === "community" &&
+        activeCount >= NUDGE_AT &&
+        (nudgeDismissedAt == null || activeCount >= nudgeDismissedAt + NUDGE_STEP);
+
+    const dismissNudge = () => {
+        setNudgeDismissedAt(activeCount);
+        try {
+            window.localStorage.setItem(NUDGE_KEY, String(activeCount));
+        } catch {
+            /* ignore storage failures */
+        }
+    };
+
     return (
         <Card className="!p-0 overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -235,6 +272,26 @@ const Team = () => {
             </div>
 
             {error && <div className="mx-5 mb-4 rounded-2xl bg-error/10 px-4 py-3 text-body-sm text-error">{error}</div>}
+
+            {showNudge && (
+                <div className="mx-5 mb-4 flex flex-col gap-3 rounded-2xl border border-primary/25 bg-lavender-mist px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between dark:border-lilac/20 dark:bg-white/[0.04]">
+                    <div className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10 dark:bg-lilac/15">
+                            <Icon name="sparkles" className="h-4 w-4 fill-primary dark:fill-lilac" />
+                        </span>
+                        <div>
+                            <p className="text-body-sm font-semibold text-black dark:text-white">Your team is growing</p>
+                            <p className="mt-0.5 text-caption-1 text-grey">
+                                Pro adds custom roles, field-level permissions, approval workflows and audit logging to keep editing under control as you add people.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2 self-end sm:self-center">
+                        <button type="button" onClick={dismissNudge} className="btn-ghost btn-sm">Not now</button>
+                        <Link href="/settings/plan" className="btn-primary btn-sm whitespace-nowrap">See Pro</Link>
+                    </div>
+                </div>
+            )}
 
             <div className="hidden md:grid grid-cols-[2.4fr_1.4fr_1fr_1fr_5rem] gap-4 px-5 py-3 border-y border-grey-light text-caption-2 text-grey dark:border-grey-light/10">
                 <span>Member</span>
