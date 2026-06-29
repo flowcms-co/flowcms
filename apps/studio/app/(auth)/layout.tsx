@@ -47,9 +47,11 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
                 <p className="relative text-caption-1 text-white/60">© 2026 Flow CMS</p>
             </div>
 
-            {/* Form panel */}
-            <div className="flex items-center justify-center bg-lavender-mist/40 p-6 dark:bg-dark-1">
-                <div className="w-full max-w-sm">
+            {/* Form panel — column scroll container with an auto-margin child so the
+                form centers when it fits and stays fully reachable when it overflows
+                a short mobile viewport (justify-center would clip the top). */}
+            <div className="flex min-h-[100dvh] flex-col overflow-y-auto bg-lavender-mist/40 px-6 py-10 dark:bg-dark-1 lg:min-h-0">
+                <div className="m-auto w-full max-w-sm">
                     <div className="mb-8 lg:hidden">
                         <Logo />
                     </div>

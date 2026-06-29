@@ -14,7 +14,7 @@ const Topbar = ({ onMenu }: { onMenu: () => void }) => {
     const recent = (items ?? []).slice(0, 5);
 
     return (
-        <header className="pt-safe sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-grey-light/70 bg-bg/80 px-4 backdrop-blur-xl lg:static lg:h-20 lg:gap-4 lg:border-b-0 lg:bg-transparent lg:px-6 lg:backdrop-blur-none dark:border-grey-light/10 dark:bg-dark-2/80 lg:dark:bg-transparent">
+        <header className="pt-safe sticky top-0 z-30 flex h-16 items-center gap-3 bg-surface px-4 shadow-[0_2px_12px_-2px_rgba(26,26,46,0.12)] lg:static lg:h-20 lg:gap-4 lg:bg-transparent lg:px-6 lg:shadow-none dark:bg-dark-2 dark:shadow-[0_2px_12px_-2px_rgba(0,0,0,0.5)] lg:dark:bg-transparent lg:dark:shadow-none">
             {/* Mobile menu (opens the sidebar drawer). Desktop collapse lives on
                 the sidebar logo icon. Header is fixed on mobile, static on desktop. */}
             <button
