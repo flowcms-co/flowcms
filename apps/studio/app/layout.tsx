@@ -20,10 +20,10 @@ const poppins = Poppins({
 });
 
 export const metadata: Metadata = {
-    title: "Flow CMS",
+    title: "FlowCMS",
     description:
         "AI-powered content management: content creation, SEO, and publishing in one platform.",
-    applicationName: "Flow CMS",
+    applicationName: "FlowCMS",
     manifest: "/manifest.webmanifest",
     icons: {
         icon: [
@@ -36,7 +36,7 @@ export const metadata: Metadata = {
         shortcut: ["/favicon.ico"],
     },
     // Launch the iOS home-screen shortcut full-screen, like a native app.
-    appleWebApp: { capable: true, title: "Flow CMS", statusBarStyle: "black-translucent" },
+    appleWebApp: { capable: true, title: "FlowCMS", statusBarStyle: "black-translucent" },
 };
 
 // viewport-fit=cover lets the app draw under the iOS notch / home indicator so the

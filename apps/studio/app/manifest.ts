@@ -3,8 +3,8 @@ import type { MetadataRoute } from "next";
 /** PWA manifest so the studio installs as a standalone app on iOS / Android. */
 export default function manifest(): MetadataRoute.Manifest {
     return {
-        name: "Flow CMS",
-        short_name: "Flow CMS",
+        name: "FlowCMS",
+        short_name: "FlowCMS",
         description: "AI-powered content management: content, SEO and publishing in one place.",
         start_url: "/",
         scope: "/",

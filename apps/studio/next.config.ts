@@ -16,6 +16,20 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: repoRoot,
   },
+  async headers() {
+    return [
+      {
+        // Never cache the HTML shell (or the manifest / data documents). On iOS a
+        // home-screen shortcut keeps its own cache that "Clear Website Data" never
+        // touches, so a stale shell pins old hashed chunks and the app shows an old
+        // copy. Forcing the shell to revalidate makes new deploys land on launch.
+        // Immutable, content-hashed assets (/_next/static, /_next/image) and the
+        // static brand/image/email dirs are excluded so they keep their long cache.
+        source: "/:path((?!_next/static|_next/image|favicon|brand|images|email).*)",
+        headers: [{ key: "Cache-Control", value: "no-cache, no-store, must-revalidate" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
