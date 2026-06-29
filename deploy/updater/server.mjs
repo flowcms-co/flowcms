@@ -80,6 +80,23 @@ async function pgContainer() {
     return id;
 }
 
+/**
+ * How to reach Postgres from a *throwaway* client container: its image (so pg_dump/psql match
+ * the server version), a resolvable host (the postgres container name), and a network to attach
+ * to. We run pg_dump/psql via `docker run` over the network rather than `docker exec`, because
+ * `exec` can't be proxied through the scoped docker-socket-proxy (no TCP hijack) — `docker run`
+ * can. Works identically with the direct socket.
+ */
+async function pgClient() {
+    const pgC = await pgContainer();
+    const image = ((await run("docker", ["inspect", pgC, "--format", "{{.Config.Image}}"]).catch(() => "")).trim()) || "postgres:16-alpine";
+    const host = ((await run("docker", ["inspect", pgC, "--format", "{{.Name}}"]).catch(() => "")).trim()).replace(/^\//, "") || "postgres";
+    const net =
+        ((await run("docker", ["inspect", pgC, "--format", "{{range $k,$v := .NetworkSettings.Networks}}{{$k}};{{end}}"]).catch(() => "")).trim().split(";").filter(Boolean)[0]) ||
+        `${PROJECT}_backend`;
+    return { image, host, net };
+}
+
 const backupId = () => "flowcms-" + new Date().toISOString().replace(/[:.]/g, "-").replace("Z", "");
 const safeId = (id) => /^flowcms-[\w-]+$/.test(id);
 
@@ -92,18 +109,26 @@ async function createBackup() {
     await fsp.mkdir(dir, { recursive: true });
     try {
         const env = await readEnv();
-        const pgC = await pgContainer();
+        const pg = await pgClient();
         const user = env.POSTGRES_USER || "flowcms";
         const db = env.POSTGRES_DB || "flowcms";
 
-        // 1. DB dump via the postgres container (matches the server's pg version).
+        // 1. DB dump via a throwaway pg client over the network (matches the server's pg
+        //    version; uses `docker run`, which is proxy-compatible — see pgClient()).
         await new Promise((resolve, reject) => {
             const dump = spawn("docker", [
-                "exec",
+                "run",
+                "--rm",
+                "--network",
+                pg.net,
                 "-e",
                 `PGPASSWORD=${env.POSTGRES_PASSWORD || ""}`,
-                pgC,
+                pg.image,
                 "pg_dump",
+                "-h",
+                pg.host,
+                "-p",
+                "5432",
                 "-U",
                 user,
                 "-d",
@@ -349,12 +374,13 @@ async function restoreFromBackup(id, { restoreEnv = false } = {}) {
         await run("tar", ["-xzf", tarball, "-C", work]);
         const inner = path.join(work, id);
         const env = await readEnv();
-        const pgC = await pgContainer();
+        const pg = await pgClient();
         const user = env.POSTGRES_USER || "flowcms";
         const db = env.POSTGRES_DB || "flowcms";
-        // DB: gunzip the dump and pipe it into psql inside the postgres container.
+        // DB: gunzip the dump and pipe it into psql via a throwaway client over the network
+        // (proxy-compatible `docker run` instead of `docker exec` — see pgClient()).
         await new Promise((resolve, reject) => {
-            const psql = spawn("docker", ["exec", "-i", "-e", `PGPASSWORD=${env.POSTGRES_PASSWORD || ""}`, pgC, "psql", "-U", user, "-d", db], { stdio: ["pipe", "ignore", "pipe"] });
+            const psql = spawn("docker", ["run", "--rm", "-i", "--network", pg.net, "-e", `PGPASSWORD=${env.POSTGRES_PASSWORD || ""}`, pg.image, "psql", "-h", pg.host, "-U", user, "-d", db], { stdio: ["pipe", "ignore", "pipe"] });
             let err = "";
             psql.stderr.on("data", (d) => (err += d));
             psql.on("error", reject);
