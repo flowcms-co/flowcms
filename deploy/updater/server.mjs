@@ -22,6 +22,12 @@ const FLOWCMS_DIR = process.env.FLOWCMS_DIR || "/opt/flowcms";
 const MEDIA_DIR = process.env.MEDIA_DIR || "/media";
 const BACKUP_DIR = path.join(FLOWCMS_DIR, "backups");
 const KEEP = Number(process.env.BACKUP_KEEP || 5);
+// Backup retention is capped by BOTH count (KEEP) and total size, so a few large-media
+// backups can't fill the disk on their own. The newest backup is always kept.
+const BACKUP_MAX_GB = Number(process.env.BACKUP_MAX_GB || 10);
+// Required free space before an upgrade pulls new images. A full disk is the most common
+// cause of a failed pull; we reclaim first, then refuse with a clear message if still low.
+const MIN_FREE_GB = Number(process.env.UPGRADE_MIN_FREE_GB || 6);
 const PROJECT = process.env.COMPOSE_PROJECT || "flowcms";
 
 if (!TOKEN) {
@@ -168,8 +174,17 @@ async function deleteBackup(id) {
 }
 
 async function pruneBackups() {
-    const all = await listBackups();
-    for (const b of all.slice(KEEP)) await deleteBackup(b.id).catch(() => undefined);
+    const all = await listBackups(); // newest -> oldest
+    const capBytes = BACKUP_MAX_GB * 1024 ** 3;
+    const keep = new Set();
+    let cumulative = 0;
+    all.forEach((b, i) => {
+        cumulative += Number(b.totalBytes || 0);
+        // Always keep the newest; keep the rest only while within both the count and the
+        // cumulative-size cap, so retention can never grow the disk without bound.
+        if (keep.size === 0 || (i < KEEP && cumulative <= capBytes)) keep.add(b.id);
+    });
+    for (const b of all) if (!keep.has(b.id)) await deleteBackup(b.id).catch(() => undefined);
 }
 
 // ── Upgrade orchestration ────────────────────────────────────────────────────
@@ -182,6 +197,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Run `docker compose` against the install's compose file + .env + project. */
 function compose(...args) {
     return run("docker", ["compose", "--env-file", ENV_FILE, "-f", COMPOSE_FILE, "-p", PROJECT, ...args]);
+}
+
+/** Free space (GB) on the filesystem holding the install dir. Null if it can't be read. */
+async function freeGB(dir = FLOWCMS_DIR) {
+    try {
+        const out = await run("df", ["-Pk", dir]);
+        const cols = out.trim().split("\n").pop().trim().split(/\s+/);
+        const availKb = Number(cols[3]); // df -P columns: fs, blocks, used, available, %, mount
+        return Number.isFinite(availKb) ? availKb / (1024 * 1024) : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Reclaim disk: drop images not used by a running container + build cache. Best-effort;
+ *  never throws. With the containerd image store this also frees the overlayfs snapshots.
+ *  Volumes (database + media) are never touched. */
+async function reclaimDisk() {
+    await run("docker", ["image", "prune", "-a", "-f"]).catch(() => undefined);
+    await run("docker", ["builder", "prune", "-a", "-f"]).catch(() => undefined);
 }
 
 /** Replace the tag (the ":tag" after the last "/") of an image ref. */
@@ -285,6 +320,16 @@ async function restoreFromBackup(id, { restoreEnv = false } = {}) {
 
 async function runUpgrade(ctx) {
     try {
+        // Pre-flight: reclaim stale/unused images first (a previous failed upgrade may have
+        // left some behind), then require enough headroom for the backup + the new pull. A
+        // full disk is the #1 cause of a failed pull; fail with a clear message instead of a
+        // cryptic registry error, and never even start a doomed upgrade.
+        await reclaimDisk();
+        const free = await freeGB();
+        if (free != null && free < MIN_FREE_GB) {
+            throw new Error(`Not enough disk space to upgrade safely: only ${free.toFixed(1)} GB free, about ${MIN_FREE_GB} GB is needed. Free some space (old backups or unused images) and try again.`);
+        }
+
         await setStatus({ step: "backup" });
         const backup = await createBackup();
         ctx.backupId = backup.id;
@@ -326,21 +371,15 @@ async function runUpgrade(ctx) {
         if (!(await waitHealthy(HEALTH_TIMEOUT))) throw new Error("the new version did not become healthy in time");
 
         await setStatus({ status: "success", step: "done", finishedAt: new Date().toISOString() });
-
-        // Reclaim disk: drop images no longer used by a running container (the prior
-        // versions this upgrade just replaced, plus dangling layers). Best-effort and
-        // strictly after success, with its own catch, so a prune failure can never
-        // fail or roll back a completed upgrade. Without this, every upgrade leaves
-        // another ~2GB image behind and the host's store grows without bound (it had
-        // climbed to ~24G of stale layers, which is what filled the disk and broke a
-        // pull). Volumes (database + media) are never touched by image prune.
-        try {
-            await run("docker", ["image", "prune", "-a", "-f"]);
-        } catch {
-            /* non-fatal: the upgrade already succeeded */
-        }
     } catch (e) {
         await rollback(ctx, e?.message || String(e));
+    } finally {
+        // Reclaim disk on BOTH paths. On success this drops the prior versions just
+        // replaced; on failure it drops the freshly-pulled (now-unused) images so a loop
+        // of failed upgrades can never pile up in the image store and fill the disk (the
+        // old code only pruned after success, so failed attempts accumulated unbounded).
+        // Best-effort and last, so it can never change the upgrade's outcome.
+        await reclaimDisk();
     }
 }
 
