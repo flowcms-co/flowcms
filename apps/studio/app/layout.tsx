@@ -26,8 +26,14 @@ export const metadata: Metadata = {
     applicationName: "Flow CMS",
     manifest: "/manifest.webmanifest",
     icons: {
-        icon: "/favicon.svg",
-        apple: [{ url: "/brand/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+        icon: [
+            { url: "/favicon.ico", sizes: "any" },
+            { url: "/favicon.svg", type: "image/svg+xml" },
+            { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+            { url: "/favicon-16.png", sizes: "16x16", type: "image/png" },
+        ],
+        apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+        shortcut: ["/favicon.ico"],
     },
     // Launch the iOS home-screen shortcut full-screen, like a native app.
     appleWebApp: { capable: true, title: "Flow CMS", statusBarStyle: "black-translucent" },
