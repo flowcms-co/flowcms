@@ -189,7 +189,7 @@ services:
       retries: 3
       start_period: 10s
     stop_grace_period: 30s
-    networks: [frontend] # needs egress (pull images from GHCR)
+    networks: [frontend, backend] # frontend = egress (pull from GHCR); backend = reach Postgres for backups
     labels:
       com.flowcms.service: updater
     deploy:

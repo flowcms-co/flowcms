@@ -64,37 +64,37 @@ async function readEnv() {
     return env;
 }
 
-/** Resolve the Postgres container (by compose labels, or an explicit override). */
-async function pgContainer() {
-    if (process.env.PG_CONTAINER) return process.env.PG_CONTAINER;
-    const ids = await run("docker", [
-        "ps",
-        "-q",
-        "--filter",
-        `label=com.docker.compose.project=${PROJECT}`,
-        "--filter",
-        "label=com.docker.compose.service=postgres",
-    ]);
-    const id = ids.trim().split("\n")[0].trim();
-    if (!id) throw new Error("postgres container not found");
-    return id;
-}
-
 /**
- * How to reach Postgres from a *throwaway* client container: its image (so pg_dump/psql match
- * the server version), a resolvable host (the postgres container name), and a network to attach
- * to. We run pg_dump/psql via `docker run` over the network rather than `docker exec`, because
- * `exec` can't be proxied through the scoped docker-socket-proxy (no TCP hijack) — `docker run`
- * can. Works identically with the direct socket.
+ * Postgres connection for backup/restore. The updater bundles pg_dump/psql and connects to the
+ * DB *directly over the network* (it shares the backend network with Postgres), so backups never
+ * shell out to Docker — they work whether the updater has the raw socket or only the scoped
+ * socket-proxy (which can't forward exec/attach streams). Authoritative source is DATABASE_URL;
+ * falls back to POSTGRES_* + the bundled `postgres` service host.
  */
-async function pgClient() {
-    const pgC = await pgContainer();
-    const image = ((await run("docker", ["inspect", pgC, "--format", "{{.Config.Image}}"]).catch(() => "")).trim()) || "postgres:16-alpine";
-    const host = ((await run("docker", ["inspect", pgC, "--format", "{{.Name}}"]).catch(() => "")).trim()).replace(/^\//, "") || "postgres";
-    const net =
-        ((await run("docker", ["inspect", pgC, "--format", "{{range $k,$v := .NetworkSettings.Networks}}{{$k}};{{end}}"]).catch(() => "")).trim().split(";").filter(Boolean)[0]) ||
-        `${PROJECT}_backend`;
-    return { image, host, net };
+async function pgConn() {
+    const env = await readEnv();
+    const url = env.DATABASE_URL || "";
+    if (url) {
+        try {
+            const u = new URL(url);
+            return {
+                host: u.hostname || "postgres",
+                port: u.port || "5432",
+                user: u.username ? decodeURIComponent(u.username) : env.POSTGRES_USER || "flowcms",
+                pass: u.password ? decodeURIComponent(u.password) : env.POSTGRES_PASSWORD || "",
+                db: (u.pathname || "").replace(/^\//, "").split("?")[0] || env.POSTGRES_DB || "flowcms",
+            };
+        } catch {
+            /* malformed URL → fall back to discrete vars */
+        }
+    }
+    return {
+        host: "postgres",
+        port: "5432",
+        user: env.POSTGRES_USER || "flowcms",
+        pass: env.POSTGRES_PASSWORD || "",
+        db: env.POSTGRES_DB || "flowcms",
+    };
 }
 
 const backupId = () => "flowcms-" + new Date().toISOString().replace(/[:.]/g, "-").replace("Z", "");
@@ -108,36 +108,15 @@ async function createBackup() {
     const dir = path.join(BACKUP_DIR, id);
     await fsp.mkdir(dir, { recursive: true });
     try {
-        const env = await readEnv();
-        const pg = await pgClient();
-        const user = env.POSTGRES_USER || "flowcms";
-        const db = env.POSTGRES_DB || "flowcms";
+        const pg = await pgConn();
 
-        // 1. DB dump via a throwaway pg client over the network (matches the server's pg
-        //    version; uses `docker run`, which is proxy-compatible — see pgClient()).
+        // 1. DB dump via the bundled pg_dump over the network (no Docker — proxy-safe).
         await new Promise((resolve, reject) => {
-            const dump = spawn("docker", [
-                "run",
-                "--rm",
-                "--network",
-                pg.net,
-                "-e",
-                `PGPASSWORD=${env.POSTGRES_PASSWORD || ""}`,
-                pg.image,
+            const dump = spawn(
                 "pg_dump",
-                "-h",
-                pg.host,
-                "-p",
-                "5432",
-                "-U",
-                user,
-                "-d",
-                db,
-                "--clean",
-                "--if-exists",
-                "--no-owner",
-                "--no-privileges",
-            ]);
+                ["-h", pg.host, "-p", pg.port, "-U", pg.user, "-d", pg.db, "--clean", "--if-exists", "--no-owner", "--no-privileges"],
+                { env: { ...process.env, PGPASSWORD: pg.pass } },
+            );
             const out = fs.createWriteStream(path.join(dir, "db.sql.gz"));
             let err = "";
             dump.stderr.on("data", (d) => (err += d));
@@ -373,14 +352,10 @@ async function restoreFromBackup(id, { restoreEnv = false } = {}) {
     try {
         await run("tar", ["-xzf", tarball, "-C", work]);
         const inner = path.join(work, id);
-        const env = await readEnv();
-        const pg = await pgClient();
-        const user = env.POSTGRES_USER || "flowcms";
-        const db = env.POSTGRES_DB || "flowcms";
-        // DB: gunzip the dump and pipe it into psql via a throwaway client over the network
-        // (proxy-compatible `docker run` instead of `docker exec` — see pgClient()).
+        const pg = await pgConn();
+        // DB: gunzip the dump and pipe it into the bundled psql over the network (no Docker).
         await new Promise((resolve, reject) => {
-            const psql = spawn("docker", ["run", "--rm", "-i", "--network", pg.net, "-e", `PGPASSWORD=${env.POSTGRES_PASSWORD || ""}`, pg.image, "psql", "-h", pg.host, "-U", user, "-d", db], { stdio: ["pipe", "ignore", "pipe"] });
+            const psql = spawn("psql", ["-h", pg.host, "-p", pg.port, "-U", pg.user, "-d", pg.db], { stdio: ["pipe", "ignore", "pipe"], env: { ...process.env, PGPASSWORD: pg.pass } });
             let err = "";
             psql.stderr.on("data", (d) => (err += d));
             psql.on("error", reject);
