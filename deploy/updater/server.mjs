@@ -298,7 +298,9 @@ async function ownMounts() {
             if (dest === "/var/run/docker.sock") sock = src;
             if (dest === FLOWCMS_DIR) dir = src;
         }
-        return sock && dir ? { sock, dir } : null;
+        // The compose dir is always required; the raw socket only in direct-socket mode (in
+        // socket-proxy mode the helper reaches the daemon over DOCKER_HOST instead).
+        return dir ? { dir, sock } : null;
     } catch {
         return null;
     }
@@ -317,25 +319,22 @@ async function selfUpdateUpdater(ctx) {
         return; // can't fetch the new updater image; keep the current one
     }
     await writeEnvKeys({ UPDATER_IMAGE: ctx.newUpdater });
-    const mounts = await ownMounts();
-    if (!mounts) return;
+    const m = await ownMounts();
+    if (!m || !m.dir) return;
     const composeBasename = path.basename(COMPOSE_FILE);
-    await run("docker", [
-        "run",
-        "-d",
-        "--rm",
-        "--entrypoint",
-        "sh",
-        "-v",
-        `${mounts.sock}:/var/run/docker.sock`,
-        "-v",
-        `${mounts.dir}:${FLOWCMS_DIR}`,
-        "-w",
-        FLOWCMS_DIR,
-        ctx.newUpdater,
-        "-c",
-        `sleep 12; docker compose --env-file .env -f ${composeBasename} -p ${PROJECT} up -d --no-deps updater`,
-    ]).catch(() => undefined);
+    const cmd = `sleep 12; docker compose --env-file .env -f ${composeBasename} -p ${PROJECT} up -d --no-deps updater`;
+    const args = ["run", "-d", "--rm", "--entrypoint", "sh"];
+    const dockerHost = process.env.DOCKER_HOST || "";
+    if (dockerHost) {
+        // Socket-proxy mode: helper talks to the daemon over DOCKER_HOST (TCP) and joins the
+        // network that resolves the proxy; no raw socket is mounted.
+        args.push("-e", `DOCKER_HOST=${dockerHost}`, "--network", process.env.UPDATER_HELPER_NETWORK || `${PROJECT}_frontend`);
+    } else {
+        if (!m.sock) return; // direct-socket mode needs the socket path
+        args.push("-v", `${m.sock}:/var/run/docker.sock`);
+    }
+    args.push("-v", `${m.dir}:${FLOWCMS_DIR}`, "-w", FLOWCMS_DIR, ctx.newUpdater, "-c", cmd);
+    await run("docker", args).catch(() => undefined);
 }
 
 /** Restore DB + media (and optionally .env) from a packed backup tarball. */
@@ -510,10 +509,13 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify(obj));
     };
     try {
-        if ((req.headers.authorization || "") !== `Bearer ${TOKEN}`) return send(401, { error: "unauthorized" });
         const url = new URL(req.url, "http://updater");
 
+        // Liveness probe is unauthenticated (only reveals up + version) so the container
+        // healthcheck can reach it without the token. Everything else requires the token.
         if (req.method === "GET" && url.pathname === "/health") return send(200, { ok: true, version: process.env.FLOWCMS_VERSION || null });
+
+        if ((req.headers.authorization || "") !== `Bearer ${TOKEN}`) return send(401, { error: "unauthorized" });
         if (req.method === "GET" && url.pathname === "/backups") return send(200, { backups: await listBackups() });
         if (req.method === "POST" && url.pathname === "/backups") return send(201, await createBackup());
 
