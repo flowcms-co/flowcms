@@ -274,7 +274,68 @@ async function currentImages() {
     return {
         api: env.API_IMAGE || "ghcr.io/flowcms-co/flowcms-api:latest",
         studio: env.STUDIO_IMAGE || "ghcr.io/flowcms-co/flowcms-studio:latest",
+        updater: env.UPDATER_IMAGE || "ghcr.io/flowcms-co/flowcms-updater:latest",
     };
+}
+
+/** This updater's own host-side mount paths (docker socket + compose dir), read by
+ *  inspecting our own container. Needed so the detached self-update helper can mount the
+ *  same paths. Returns null if they can't be determined (self-update is then skipped). */
+async function ownMounts() {
+    try {
+        const id = (
+            await run("docker", ["ps", "-q", "--filter", `label=com.docker.compose.project=${PROJECT}`, "--filter", "label=com.docker.compose.service=updater"])
+        )
+            .trim()
+            .split("\n")[0]
+            .trim();
+        if (!id) return null;
+        const fmt = await run("docker", ["inspect", id, "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}\n{{end}}"]);
+        let sock = null;
+        let dir = null;
+        for (const line of fmt.split("\n")) {
+            const [dest, src] = line.split("|");
+            if (dest === "/var/run/docker.sock") sock = src;
+            if (dest === FLOWCMS_DIR) dir = src;
+        }
+        return sock && dir ? { sock, dir } : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Self-update the updater container. The updater can't recreate itself directly (it would
+ *  kill the process mid-command), so we launch a detached, self-removing helper container
+ *  from the NEW updater image that waits a few seconds (until this upgrade has reported
+ *  success) and then recreates just the updater service with the new image. Best-effort:
+ *  if anything here fails, the running updater is simply left as-is. */
+async function selfUpdateUpdater(ctx) {
+    if (!ctx.newUpdater || ctx.newUpdater === ctx.curUpdater) return;
+    try {
+        await run("docker", ["pull", ctx.newUpdater]);
+    } catch {
+        return; // can't fetch the new updater image; keep the current one
+    }
+    await writeEnvKeys({ UPDATER_IMAGE: ctx.newUpdater });
+    const mounts = await ownMounts();
+    if (!mounts) return;
+    const composeBasename = path.basename(COMPOSE_FILE);
+    await run("docker", [
+        "run",
+        "-d",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        "-v",
+        `${mounts.sock}:/var/run/docker.sock`,
+        "-v",
+        `${mounts.dir}:${FLOWCMS_DIR}`,
+        "-w",
+        FLOWCMS_DIR,
+        ctx.newUpdater,
+        "-c",
+        `sleep 12; docker compose --env-file .env -f ${composeBasename} -p ${PROJECT} up -d --no-deps updater`,
+    ]).catch(() => undefined);
 }
 
 /** Restore DB + media (and optionally .env) from a packed backup tarball. */
@@ -319,6 +380,7 @@ async function restoreFromBackup(id, { restoreEnv = false } = {}) {
 }
 
 async function runUpgrade(ctx) {
+    let upgraded = false;
     try {
         // Pre-flight: reclaim stale/unused images first (a previous failed upgrade may have
         // left some behind), then require enough headroom for the backup + the new pull. A
@@ -371,6 +433,7 @@ async function runUpgrade(ctx) {
         if (!(await waitHealthy(HEALTH_TIMEOUT))) throw new Error("the new version did not become healthy in time");
 
         await setStatus({ status: "success", step: "done", finishedAt: new Date().toISOString() });
+        upgraded = true;
     } catch (e) {
         await rollback(ctx, e?.message || String(e));
     } finally {
@@ -380,6 +443,9 @@ async function runUpgrade(ctx) {
         // old code only pruned after success, so failed attempts accumulated unbounded).
         // Best-effort and last, so it can never change the upgrade's outcome.
         await reclaimDisk();
+        // On success, self-update the updater container too, so users never have to refresh
+        // it by hand. Runs AFTER reclaim so the freshly-pulled new updater image isn't pruned.
+        if (upgraded) await selfUpdateUpdater(ctx).catch(() => undefined);
     }
 }
 
@@ -414,10 +480,13 @@ async function startUpgrade({ toVersion, apiImage, studioImage } = {}) {
     const v = toVersion ? "v" + String(toVersion).replace(/^v/, "") : null;
     const newApi = apiImage || (v ? retag(cur.api, v) : cur.api);
     const newStudio = studioImage || (v ? retag(cur.studio, v) : cur.studio);
+    // The updater self-updates to the same version (see selfUpdateUpdater). Pinned to the
+    // target version so it tracks api/studio rather than drifting on a moving :latest.
+    const newUpdater = v ? retag(cur.updater, v) : cur.updater;
     const id = "upg-" + new Date().toISOString().replace(/[:.]/g, "-").replace("Z", "");
-    await setStatus({ id, status: "running", step: "starting", toVersion: toVersion || null, from: cur, to: { api: newApi, studio: newStudio }, backupId: null, error: null, startedAt: new Date().toISOString(), finishedAt: null });
+    await setStatus({ id, status: "running", step: "starting", toVersion: toVersion || null, from: cur, to: { api: newApi, studio: newStudio, updater: newUpdater }, backupId: null, error: null, startedAt: new Date().toISOString(), finishedAt: null });
     // Fire-and-forget: api/studio restart mid-run, so the studio polls /status.
-    runUpgrade({ curApi: cur.api, curStudio: cur.studio, newApi, newStudio, backupId: null }).catch((e) => setStatus({ status: "failed", step: "error", error: e?.message || String(e) }));
+    runUpgrade({ curApi: cur.api, curStudio: cur.studio, newApi, newStudio, curUpdater: cur.updater, newUpdater, backupId: null }).catch((e) => setStatus({ status: "failed", step: "error", error: e?.message || String(e) }));
     return getStatus();
 }
 
