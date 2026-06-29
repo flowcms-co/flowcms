@@ -154,11 +154,10 @@ services:
         reservations:
           memory: 256M
 
-  # ── Updater sidecar: full backups + one-click upgrade. The ONLY container with
-  #    Docker access; reachable only on the internal network (never published). By default
-  #    it mounts the Docker socket directly. For least-privilege, enable the `secure-socket`
-  #    profile and set in .env:  UPDATER_DOCKER_HOST=tcp://socket-proxy:2375  UPDATER_SOCKET=/dev/null
-  #    which routes all Docker calls through the scoped proxy and removes the raw socket.
+  # ── Updater sidecar: full backups + one-click upgrade. By DEFAULT it talks to Docker through
+  #    the scoped, read-only socket-proxy (below), NOT the raw socket, so a compromised updater
+  #    can't perform arbitrary host-root operations. To fall back to the direct socket (not
+  #    recommended), set in .env:  UPDATER_DOCKER_HOST=  UPDATER_SOCKET=/var/run/docker.sock
   updater:
     image: ${UPDATER_IMAGE:-ghcr.io/flowcms-co/flowcms-updater:latest}
     build:
@@ -174,13 +173,14 @@ services:
       MEDIA_DIR: /media
       COMPOSE_PROJECT: flowcms
       FLOWCMS_VERSION: ${FLOWCMS_VERSION:-}
-      DOCKER_HOST: ${UPDATER_DOCKER_HOST:-} # empty = direct socket; tcp://socket-proxy:2375 = proxy
+      # Default: route all Docker calls through the scoped proxy. Set empty for the direct socket.
+      DOCKER_HOST: ${UPDATER_DOCKER_HOST-tcp://socket-proxy:2375}
     volumes:
       - ${FLOWCMS_HOST_DIR:-/opt/flowcms}:/opt/flowcms
       - media_data:/media
-      # Direct Docker socket. Set UPDATER_SOCKET=/dev/null (with the secure-socket profile)
-      # to remove this exposure and use the proxy instead.
-      - ${UPDATER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      # Default: no raw Docker socket (the proxy handles Docker). Set UPDATER_SOCKET to
+      # /var/run/docker.sock only if you deliberately fall back to the direct socket.
+      - ${UPDATER_SOCKET:-/dev/null}:/var/run/docker.sock
     expose: ["9000"]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/health"]
@@ -189,7 +189,10 @@ services:
       retries: 3
       start_period: 10s
     stop_grace_period: 30s
-    networks: [frontend, backend] # frontend = egress (pull from GHCR); backend = reach Postgres for backups
+    depends_on:
+      socket-proxy:
+        condition: service_started
+    networks: [frontend, backend] # frontend = egress (pull from GHCR) + reach the proxy; backend = reach Postgres
     labels:
       com.flowcms.service: updater
     deploy:
@@ -197,12 +200,10 @@ services:
         limits:
           memory: ${UPDATER_MEM_LIMIT:-256M}
 
-  # ── Scoped Docker-socket proxy (opt-in: --profile secure-socket). Holds the real socket
-  #    read-only and exposes ONLY the API calls the updater needs, so a compromised updater
-  #    can't run arbitrary host-root operations. See the updater notes above to wire it.
+  # ── Scoped Docker-socket proxy (default-on). Holds the real socket read-only and exposes ONLY
+  #    the API calls the updater needs, so the updater never gets raw host-root Docker access.
   socket-proxy:
     image: tecnativa/docker-socket-proxy:0.2
-    profiles: ["secure-socket"]
     restart: unless-stopped
     init: true
     security_opt:
