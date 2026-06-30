@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { TelemetryService } from "../telemetry/telemetry.service";
 
 /**
  * Bridges the studio to the vendor's billing portal API. The signed license token never
@@ -14,7 +15,32 @@ export class BillingService {
     // Operator-configured, trusted endpoint (not user input) — a plain fetch is fine here.
     private readonly adminUrl = (process.env.FLOWCMS_ADMIN_URL || "https://admin.flowcms.co").replace(/\/+$/, "");
 
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly telemetry: TelemetryService,
+    ) {}
+
+    /**
+     * Start a Pro checkout for THIS install. Stamps the install's own instanceId (so the new
+     * subscription binds here and the next heartbeat auto-activates the license) and a returnUrl
+     * (so Stripe sends the buyer back to this studio). No license token needed — this is the
+     * on-ramp for a Community install that has no subscription yet. Returns the Stripe URL.
+     */
+    async checkout(opts: { interval: "month" | "year"; seats: number; returnUrl?: string }): Promise<{ status: number; data: unknown }> {
+        try {
+            const instanceId = await this.telemetry.instanceId();
+            const res = await fetch(`${this.adminUrl}/api/billing/checkout`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ interval: opts.interval, seats: opts.seats, instanceId, returnUrl: opts.returnUrl }),
+            });
+            const data = await res.json().catch(() => ({}));
+            return { status: res.status, data };
+        } catch (e) {
+            this.logger.warn(`Billing checkout proxy failed: ${(e as Error).message}`);
+            return { status: 502, data: { error: "Could not reach the billing service." } };
+        }
+    }
 
     private async licenseToken(): Promise<string | null> {
         const env = process.env.FLOWCMS_LICENSE_KEY?.trim();
