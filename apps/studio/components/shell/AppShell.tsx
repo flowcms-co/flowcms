@@ -39,6 +39,23 @@ const getSnapshot = () => {
 };
 const getServerSnapshot = () => false;
 
+// Collapse is a desktop-only space-saver. The mobile drawer should always show
+// the full, labelled sidebar, so we gate the collapse preference behind a
+// desktop media query rather than letting it shrink the drawer to an icon rail.
+const subscribeDesktop = (cb: () => void) => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    mq.addEventListener("change", cb);
+    return () => mq.removeEventListener("change", cb);
+};
+const getDesktopSnapshot = () => {
+    try {
+        return window.matchMedia("(min-width: 1024px)").matches;
+    } catch {
+        return true;
+    }
+};
+const getServerDesktop = () => true;
+
 /**
  * App shell: fixed sidebar + topbar + scrolling content.
  * - <1024px: sidebar slides over content behind a dimmed overlay (mobileOpen).
@@ -47,15 +64,17 @@ const getServerSnapshot = () => false;
  */
 const AppShell = ({ children }: { children: ReactNode }) => {
     const [mobileOpen, setMobileOpen] = useState(false);
-    const collapsed = useSyncExternalStore(
+    const collapsedPref = useSyncExternalStore(
         subscribe,
         getSnapshot,
         getServerSnapshot,
     );
+    const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot, getServerDesktop);
+    const collapsed = collapsedPref && isDesktop;
 
     const toggleCollapse = () => {
         try {
-            window.localStorage.setItem(STORE_KEY, collapsed ? "0" : "1");
+            window.localStorage.setItem(STORE_KEY, collapsedPref ? "0" : "1");
         } catch {
             // ignore storage failures (private mode, etc.)
         }

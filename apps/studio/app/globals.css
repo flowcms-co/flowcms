@@ -493,6 +493,9 @@ html.dark {
 
 /* ── Mobile app chrome: safe-area helpers (iOS notch / home indicator) ────────── */
 .pt-safe { padding-top: env(safe-area-inset-top); }
+/* Header top padding: the status-bar safe area plus a little breathing room, so
+   the installed (standalone) app header isn't cramped right under the notch. */
+.pt-safe-2 { padding-top: calc(env(safe-area-inset-top) + 0.625rem); }
 .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
 .pl-safe { padding-left: env(safe-area-inset-left); }
 .pr-safe { padding-right: env(safe-area-inset-right); }
