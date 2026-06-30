@@ -108,7 +108,7 @@ function InstallSheet({ platform, onClose }: { platform: Platform; onClose: () =
                 <div className="flex items-center gap-3.5">
                     <Image src="/brand/app-icon-192.png" alt="" width={52} height={52} unoptimized className="rounded-xl shadow-lift" />
                     <div className="min-w-0">
-                        <h2 className="text-h5 text-black dark:text-white">Add Flow Admin to your Home Screen</h2>
+                        <h2 className="text-h5 text-black dark:text-white">Add FlowCMS to your Home Screen</h2>
                         <p className="text-caption-1 text-grey">Launch it like a native app, full-screen and one tap away.</p>
                     </div>
                     <button type="button" aria-label="Close" onClick={onClose} className="ml-auto btn-circle h-9 w-9 dark:bg-dark-1">
@@ -137,7 +137,7 @@ function InstallSheet({ platform, onClose }: { platform: Platform; onClose: () =
                                 <Icon name="dots" classSize="w-5 h-5" className="mx-1 -mt-0.5 inline fill-grey" />.
                             </Step>
                             <Step n={2}>Tap <span className="font-semibold">Install app</span> or <span className="font-semibold">Add to Home screen</span>.</Step>
-                            <Step n={3}>Confirm, and Flow Admin lands on your Home Screen.</Step>
+                            <Step n={3}>Confirm, and FlowCMS lands on your Home Screen.</Step>
                         </>
                     )}
                 </ol>
@@ -183,7 +183,7 @@ export function InstallAppCard() {
         <div className="flex flex-col gap-4 rounded-2xl border border-grey-light p-5 sm:flex-row sm:items-center dark:border-grey-light/10">
             <Image src="/brand/app-icon-192.png" alt="" width={48} height={48} unoptimized className="shrink-0 rounded-xl shadow-lift" />
             <div className="grow">
-                <div className="text-title font-semibold text-black dark:text-white">Install Flow Admin</div>
+                <div className="text-title font-semibold text-black dark:text-white">Install FlowCMS</div>
                 <div className="text-caption-1 text-grey">Add it to your Home Screen or desktop to launch full-screen, like a native app.</div>
             </div>
             <InstallAppButton className="btn-md shrink-0" />
@@ -235,7 +235,7 @@ export function InstallAppBanner() {
                 <div className="animate-sheet-up mx-auto flex max-w-md items-center gap-3 rounded-2xl bg-white p-3 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.18)] ring-1 ring-grey-light dark:bg-dark-1 dark:ring-grey-light/10">
                     <Image src="/brand/app-icon-192.png" alt="" width={40} height={40} unoptimized className="shrink-0 rounded-xl" />
                     <div className="min-w-0 grow">
-                        <div className="text-caption-1 font-semibold text-black dark:text-white">Install Flow Admin</div>
+                        <div className="text-caption-1 font-semibold text-black dark:text-white">Install FlowCMS</div>
                         <div className="truncate text-caption-2 text-grey">Add it to your Home Screen for an app experience.</div>
                     </div>
                     <button type="button" onClick={onAdd} className="btn-primary btn-sm shrink-0">Add</button>
