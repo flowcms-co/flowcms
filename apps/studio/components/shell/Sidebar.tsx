@@ -99,12 +99,18 @@ const Sidebar = ({
             className={cn(
                 // Mobile: off-canvas fixed drawer (slides in over the content), above the
                 // sticky header + bottom tab bar; safe-area padded for the notch.
-                "pt-safe fixed top-0 left-0 bottom-0 z-50 flex flex-col bg-bg transition-all lg:z-auto lg:pt-0 dark:bg-dark-2",
+                "pt-safe fixed top-0 left-0 bottom-0 z-50 flex flex-col bg-bg transition-all lg:pt-0 dark:bg-dark-2",
                 // Desktop: an in-flow column that STRETCHES to the full document
                 // height (so the footer sits at the true bottom and every nav item
                 // shows, even in full-page screenshots). The brand + nav are kept in
                 // view by an inner sticky wrapper, so it still feels pinned on scroll.
-                "lg:static lg:h-auto lg:translate-x-0 lg:shrink-0 lg:self-stretch",
+                // `lg:relative lg:z-40`: the aside carries a transform (translate-x-0),
+                // which forms a stacking context even when static, so its contents
+                // (the open workspace menu) would otherwise paint UNDER the content
+                // column that follows it in the DOM. Making the aside positioned with
+                // a z-index lifts the whole column, and its overflowing menu, above
+                // that content. No inset, so the layout is unchanged.
+                "lg:relative lg:z-40 lg:h-auto lg:translate-x-0 lg:shrink-0 lg:self-stretch",
                 collapsed ? "w-20" : "w-64 lg:w-52",
                 show ? "translate-x-0" : "-translate-x-full",
             )}
@@ -114,7 +120,7 @@ const Sidebar = ({
                 (the nav scrolls internally if a role has many items); on mobile it
                 simply fills the drawer. The footer below sits at the column's true
                 bottom, so full-page screenshots show the whole sidebar correctly. */}
-            <div className="flex min-h-0 flex-1 flex-col lg:flex-none lg:sticky lg:top-0 lg:z-40 lg:max-h-screen">
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-none lg:sticky lg:top-0 lg:max-h-screen">
             {/* Brand row. Multi-workspace (Enterprise): a hamburger toggle + the
                 workspace switcher (which carries the workspace's own logo/name when
                 white-labeled), kept outside the scrolling nav so its menu never clips.
