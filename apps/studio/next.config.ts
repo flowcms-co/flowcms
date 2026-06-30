@@ -3,7 +3,19 @@ import { join } from "node:path";
 
 const repoRoot = join(__dirname, "..", "..");
 
+// A token that changes on every deploy. Injected into the JS bundle via `env`
+// below, so the loaded client shell and the running server both report the same
+// value for a given build, and differ after a redeploy. The version gate uses
+// this to detect a stale shell (common in iOS standalone web apps) and reload.
+const BUILD_ID =
+  process.env.BUILD_ID ||
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.SOURCE_VERSION ||
+  process.env.GIT_COMMIT_SHA ||
+  `build-${Date.now()}`;
+
 const nextConfig: NextConfig = {
+  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
   // Lean, self-contained server bundle for the production Docker image
   // (`.next/standalone/apps/studio/server.js`) — no node_modules needed at runtime.
   output: "standalone",

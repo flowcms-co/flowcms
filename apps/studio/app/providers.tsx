@@ -10,6 +10,7 @@ import { ConfirmProvider } from "@/components/providers/ConfirmProvider";
 import { UpgradeProvider } from "@/components/providers/UpgradeProvider";
 import FirstRunGate from "@/components/providers/FirstRunGate";
 import SilenceChartWarning from "@/components/providers/SilenceChartWarning";
+import VersionGate from "@/components/providers/VersionGate";
 import type { LicenseCookie } from "@/lib/brand";
 
 export function Providers({ children, initialLicense }: { children: ReactNode; initialLicense?: LicenseCookie }) {
@@ -21,6 +22,7 @@ export function Providers({ children, initialLicense }: { children: ReactNode; i
             disableTransitionOnChange
         >
             <SilenceChartWarning />
+            <VersionGate />
             <AuthProvider>
                 <LicenseProvider initial={initialLicense}>
                     <RoleProvider>
