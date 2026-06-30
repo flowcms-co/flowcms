@@ -114,7 +114,7 @@ const Sidebar = ({
                 (the nav scrolls internally if a role has many items); on mobile it
                 simply fills the drawer. The footer below sits at the column's true
                 bottom, so full-page screenshots show the whole sidebar correctly. */}
-            <div className="flex min-h-0 flex-1 flex-col lg:flex-none lg:sticky lg:top-0 lg:max-h-screen">
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-none lg:sticky lg:top-0 lg:z-40 lg:max-h-screen">
             {/* Brand row. Multi-workspace (Enterprise): a hamburger toggle + the
                 workspace switcher (which carries the workspace's own logo/name when
                 white-labeled), kept outside the scrolling nav so its menu never clips.
