@@ -30,7 +30,9 @@ const IntegrationsSettings = () => {
 
     return (
         <div className="flex flex-col gap-6">
-            <SubTabs tabs={TABS} active={active} onSelect={(id) => router.replace(`/settings/integrations?tab=${id}`)} />
+            <div data-tour="integrations-tabs">
+                <SubTabs tabs={TABS} active={active} onSelect={(id) => router.replace(`/settings/integrations?tab=${id}`)} />
+            </div>
             {active === "ai" && <Integrations />}
             {active === "analytics" && (
                 <div className="flex flex-col gap-8">

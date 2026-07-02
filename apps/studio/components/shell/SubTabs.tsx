@@ -15,6 +15,7 @@ const SubTabs = ({ tabs, active, onSelect }: { tabs: SubTab[]; active: string; o
                 type="button"
                 onClick={() => onSelect(t.id)}
                 data-active={active === t.id ? "true" : undefined}
+                data-tour-tab={t.id}
                 className={`shrink-0 px-4 py-2 rounded-md text-menu transition-colors ${
                     active === t.id ? "bg-primary text-white shadow-glow" : "text-grey hover:text-primary hover:bg-lavender-mist dark:hover:bg-dark-1"
                 }`}

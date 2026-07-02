@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import Icon from "@/components/ui/Icon";
 import GlobalSearch from "@/components/shell/GlobalSearch";
 import ProfileMenu from "@/components/shell/ProfileMenu";
+import TourLauncher from "@/components/tour/TourLauncher";
 import { metaFor, relTime, useNotifications } from "@/lib/useNotifications";
 
 const Topbar = ({ onMenu }: { onMenu: () => void }) => {
@@ -39,6 +40,9 @@ const Topbar = ({ onMenu }: { onMenu: () => void }) => {
                     <Icon className="w-5 h-5 fill-white" name="plus" />
                     <span className="hidden md:inline">New Content</span>
                 </Link>
+
+                {/* Guided tour compass */}
+                <TourLauncher />
 
                 {/* Theme toggle */}
                 <button

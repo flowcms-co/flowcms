@@ -267,7 +267,7 @@ const SeoDashboard = () => {
             {/* ── SEO Health + Issues Snapshot ── */}
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 {/* SEO Health */}
-                <Card className="!px-6 !pt-6 !pb-9">
+                <Card id="tour-seo-score" className="!px-6 !pt-6 !pb-9">
                     <div className="mb-2 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                             <h2 className="text-h5 text-black dark:text-white">SEO Health</h2>
@@ -395,7 +395,7 @@ const SeoDashboard = () => {
             </ConnectLock>
 
             {/* ── AI Search & Answer Engines + Backlinks ── */}
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <div data-tour="seo-aeo" className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 {/* AI Search & Answer Engines */}
                 <ConnectLock
                     connected={conn.ga4 || conn.aeo}

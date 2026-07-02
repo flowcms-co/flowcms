@@ -250,7 +250,7 @@ const Team = () => {
                 </div>
                 {canManage && (
                     <div className="flex flex-wrap items-center gap-3">
-                        <label className="flex items-center gap-2 rounded-2xl border border-grey-light px-3 py-1.5 dark:border-grey-light/10">
+                        <label data-tour="team-goal" className="flex items-center gap-2 rounded-2xl border border-grey-light px-3 py-1.5 dark:border-grey-light/10">
                             <span className="text-caption-2 text-grey">Default weekly goal</span>
                             <input
                                 type="number"
@@ -263,7 +263,7 @@ const Team = () => {
                             />
                             <span className="text-caption-2 text-grey">/ writer</span>
                         </label>
-                        <button type="button" className="btn-primary" onClick={openInvite}>
+                        <button type="button" data-tour="team-invite" className="btn-primary" onClick={openInvite}>
                             <Icon className="w-5 h-5 fill-white" name="plus" />
                             Invite member
                         </button>

@@ -31,6 +31,7 @@ const Developers = () => {
                         key={t.id}
                         type="button"
                         onClick={() => router.replace(`/settings/developers?tab=${t.id}`)}
+                        data-tour-tab={t.id}
                         className={`px-4 py-2 rounded-md text-menu transition-colors ${
                             active === t.id
                                 ? "bg-primary text-white"

@@ -125,7 +125,7 @@ const ContentGenerator = () => {
             href="/settings/integrations?tab=ai"
             ctaLabel="Connect AI provider"
         >
-        <div className="flex flex-col gap-6">
+        <div data-tour="ai-generator" className="flex flex-col gap-6">
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[7fr_3fr]">
                 {/* Generator form */}
                 <Card className="flex flex-col">

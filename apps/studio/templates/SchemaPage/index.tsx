@@ -254,7 +254,7 @@ const SchemaPage = () => {
     return (
         <div className="flex flex-col gap-6">
             {/* Types / Components toggle */}
-            <div className="inline-flex w-fit items-center gap-1 rounded-2xl bg-lavender-mist p-1 dark:bg-dark-3">
+            <div data-tour="schema-toggle" className="inline-flex w-fit items-center gap-1 rounded-2xl bg-lavender-mist p-1 dark:bg-dark-3">
                 {(["types", "components"] as const).map((m) => (
                     <button
                         key={m}
@@ -272,7 +272,7 @@ const SchemaPage = () => {
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[18rem_1fr]">
                 {/* Left list */}
-                <Card className="flex flex-col h-full !p-5">
+                <Card id="tour-schema-list" className="flex flex-col h-full !p-5">
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="text-h5 text-black dark:text-white">{tab === "types" ? "Content types" : "Reusable components"}</h2>
                         <span className="text-caption-2 text-grey">{collection.length}</span>
@@ -301,7 +301,7 @@ const SchemaPage = () => {
                             );
                         })}
                     </div>
-                    <button type="button" onClick={add} className="btn-secondary w-full mt-4">
+                    <button type="button" onClick={add} data-tour="schema-new" className="btn-secondary w-full mt-4">
                         <Icon className="w-5 h-5 fill-primary dark:fill-lilac" name="plus" />
                         {tab === "types" ? "New type" : "New reusable component"}
                     </button>

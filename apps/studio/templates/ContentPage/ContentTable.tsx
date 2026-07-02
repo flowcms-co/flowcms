@@ -356,7 +356,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
 
             {/* Stat bar (hidden in a single-type scoped view, e.g. a Reference sub-tab) */}
             {!lockedTypeId && (
-                <Card className="!p-5">
+                <Card id="tour-content-overview" className="!p-5">
                     <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
                         <StatTile icon={STAT_PATHS.all} color="var(--color-primary)" value={all.length} label="All content" />
                         <StatTile icon={STAT_PATHS.live} color="#00B894" value={statLive} label="Live" />

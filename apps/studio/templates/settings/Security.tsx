@@ -111,7 +111,7 @@ const Security = () => {
         <div className="flex flex-col gap-6">
             {/* Per-user 2FA leads (everyone can set it up), then the audit log +
                 export, then the Enterprise security cards. */}
-            <Card>
+            <Card id="tour-2fa">
                 <div className="flex items-start justify-between gap-4">
                     <div>
                         <h2 className="text-h5 text-black dark:text-white">Two-factor authentication</h2>
@@ -216,16 +216,20 @@ const Security = () => {
 
             {can("security.manage") && (
                 <>
-                    <AuditLog />
+                    <div data-tour="security-audit">
+                        <AuditLog />
+                    </div>
                     <UpgradeLock
                         feature="audit_export"
                         icon="download"
                         title="Export the audit log"
                         description="Stream or export the full audit trail to CSV and your SIEM (Splunk, Datadog, Elastic) for long-term retention and compliance."
                     />
-                    <SsoCard />
-                    <ScimCard />
-                    <IpPolicyCard />
+                    <div data-tour="security-enterprise" className="flex flex-col gap-6">
+                        <SsoCard />
+                        <ScimCard />
+                        <IpPolicyCard />
+                    </div>
                 </>
             )}
         </div>

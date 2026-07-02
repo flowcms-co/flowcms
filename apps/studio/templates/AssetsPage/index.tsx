@@ -245,7 +245,7 @@ const AssetsPage = () => {
                         {missingAlt} missing alt
                     </span>
                 )}
-                <button type="button" onClick={() => fileRef.current?.click()} aria-busy={pending > 0} className="btn-primary ml-auto">
+                <button type="button" onClick={() => fileRef.current?.click()} aria-busy={pending > 0} data-tour="assets-upload" className="btn-primary ml-auto">
                     <Icon className="w-5 h-5 fill-white" name="plus" />
                     {pending > 0 ? `Uploading ${pending}… · add more` : "Upload"}
                 </button>

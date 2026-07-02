@@ -372,13 +372,13 @@ const Optimizer = () => {
                     <h2 className="font-poppins text-h5 font-semibold text-black dark:text-white">Audit overview</h2>
                     <div className="flex shrink-0 items-center gap-3">
                         {lastRunLabel && <span className="hidden text-caption-2 text-grey sm:block">Last run: {lastRunLabel}</span>}
-                        <button type="button" onClick={() => void runAudit()} disabled={running} className="btn-primary btn-md gap-2 disabled:opacity-60">
+                        <button type="button" onClick={() => void runAudit()} disabled={running} data-tour="opt-run" className="btn-primary btn-md gap-2 disabled:opacity-60">
                             <Icon name="search" className="h-4 w-4 fill-white" />
                             {running ? "Scanning…" : "Run audit"}
                         </button>
                     </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+                <div data-tour="opt-stats" className="grid grid-cols-2 gap-4 xl:grid-cols-4">
                     <Card reveal={false} className="!p-5">
                         <StatCol icon="document" tint="bg-primary/12" fill="fill-primary" value={pagesAudited} label="Pages audited" delta={deltas?.pages} deltaCls="text-success" />
                     </Card>
@@ -396,7 +396,7 @@ const Optimizer = () => {
 
             {/* ---------- fix application + automatic AI auditing (mockup) ---------- */}
             <div className="grid gap-4 lg:grid-cols-2">
-                <Card reveal={false} className="flex flex-col !p-6">
+                <Card id="tour-opt-fixmode" reveal={false} className="flex flex-col !p-6">
                     <div className="mb-1 flex items-center gap-2">
                         <Icon name="lock" className="h-5 w-5 fill-primary" />
                         <h3 className="font-poppins text-title font-semibold text-black dark:text-white">Fix application</h3>
@@ -533,7 +533,7 @@ const Optimizer = () => {
             ) : byCategory.length === 0 ? (
                 <Card className="py-8 text-center text-body-sm text-grey">Nothing in this category.</Card>
             ) : (
-                <div ref={listRef} className="flex flex-col gap-3 scroll-mt-4">
+                <div ref={listRef} data-tour="opt-issues" className="flex flex-col gap-3 scroll-mt-4">
                     {byCategory.map(({ meta, groups }) => (
                         <CategoryRow
                             key={meta.key}

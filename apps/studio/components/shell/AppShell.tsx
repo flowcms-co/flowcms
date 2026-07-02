@@ -8,6 +8,7 @@ import MobileTabBar from "@/components/shell/MobileTabBar";
 import BrandStyle from "@/components/shell/BrandStyle";
 import { InstallAppBanner } from "@/components/install/InstallApp";
 import JobToasts from "@/components/jobs/JobToasts";
+import { TourProvider } from "@/components/tour/TourProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useWorkspace } from "@/lib/useWorkspace";
 
@@ -109,6 +110,7 @@ const AppShell = ({ children }: { children: ReactNode }) => {
         // height) rather than position:fixed. Fixed sidebars render in the wrong
         // place in full-page (stitched) screenshots; an in-flow sticky column
         // captures correctly while staying pinned during scroll.
+        <TourProvider>
         <div className="flex min-h-screen">
             {/* White-label accent override (only emits when licensed + configured). */}
             <BrandStyle />
@@ -138,6 +140,7 @@ const AppShell = ({ children }: { children: ReactNode }) => {
             <InstallAppBanner />
             <JobToasts />
         </div>
+        </TourProvider>
     );
 };
 

@@ -278,6 +278,7 @@ const ChatPage = () => {
                             )}
                             <input
                                 ref={inputRef}
+                                data-tour="chat-composer"
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={(e) => {

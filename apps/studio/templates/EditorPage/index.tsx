@@ -748,7 +748,7 @@ const EditorPage = () => {
                     </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 ml-auto md:gap-2">
+                <div data-tour="editor-actions" className="flex items-center gap-1.5 ml-auto md:gap-2">
                     <button type="button" onClick={openPreview} className="btn-ghost btn-md" title="Open live preview">
                         <Icon className="h-4 w-4 fill-current" name="eye" />
                         <span className="hidden sm:inline">Preview</span>
@@ -949,7 +949,7 @@ const EditorPage = () => {
 
                             {/* Rich-text body — only for types that define one. */}
                             {hasBody && (
-                                <div className="flex flex-col gap-1.5">
+                                <div data-tour="editor-canvas" className="flex flex-col gap-1.5">
                                     {fields.length > 0 && <span className="text-caption-1 text-grey">Body</span>}
                                     <EditorCanvas onReady={onEditorReady} initialContent={initialBody} />
                                 </div>

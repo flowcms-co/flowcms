@@ -150,6 +150,7 @@ const Sidebar = ({
 
             {/* Nav */}
             <nav
+                data-tour="sidebar-nav"
                 className="flex flex-col grow gap-1 px-4 pb-4 pt-6 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-grey-light dark:scrollbar-thumb-grey-light/20"
                 onClick={onNavigate}
             >
