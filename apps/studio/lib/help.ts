@@ -8,8 +8,9 @@ export const HELP_BASE = "https://flowcms.co/developers/docs";
 
 export const helpUrl = (slug: string) => `${HELP_BASE}/${slug.replace(/^\/+/, "")}`;
 
-/** Per-connector guide slugs. */
+/** Product/operations guide slugs. */
 export const GUIDES = {
+    updating: "getting-started/updating",
     gsc: "integrations/search-console",
     ga4: "integrations/google-analytics",
     pagespeed: "integrations/pagespeed",

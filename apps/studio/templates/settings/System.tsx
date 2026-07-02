@@ -9,6 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { clearWorkspaceCache, type Workspace } from "@/lib/useWorkspace";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { useUpgrade } from "@/components/providers/UpgradeProvider";
+import { helpUrl, GUIDES } from "@/lib/help";
 
 /**
  * System — workspace identity, the frontend preview URL, data export, and the
@@ -129,9 +130,13 @@ type UpdatesInfo = {
     notes: string | null;
     releaseUrl: string | null;
     deployment: "compose" | "aio" | "unknown";
+    platform: "railway" | "render" | null;
     checkedAt: string;
     error?: string;
 };
+
+/** Human label for the detected managed host (falls back to the generic wording). */
+const platformLabel = (p: UpdatesInfo["platform"]) => (p === "railway" ? "Railway" : p === "render" ? "Render" : "your platform");
 
 /** Self-host version, update availability, and the one-click upgrade (Super-Admin,
  *  compose self-host). The upgrade flow + its app-wide lock live in UpgradeProvider. */
@@ -200,7 +205,7 @@ const UpdatesCard = () => {
                             Upgrade to v{info.latest}
                         </button>
                     ) : info.deployment === "aio" ? (
-                        <span className="text-caption-2 text-grey">Managed by your platform</span>
+                        <span className="text-caption-2 text-grey">Managed by {platformLabel(info.platform)}</span>
                     ) : null}
                 </div>
             ) : (
@@ -210,9 +215,32 @@ const UpdatesCard = () => {
             )}
 
             {info?.deployment === "aio" && (
-                <p className="mt-3 text-caption-2 text-grey">
-                    Your hosting platform manages updates for this deployment. Redeploy from your platform&apos;s dashboard to move to a newer version.
-                </p>
+                <div className="mt-3 rounded-lg bg-lavender-mist/60 px-4 py-3 dark:bg-dark-3">
+                    <p className="text-caption-2 text-grey">
+                        This deployment is managed by {platformLabel(info.platform)}, so Flow CMS can&apos;t upgrade itself in place — {platformLabel(info.platform)} owns the container lifecycle. Move to a newer version by redeploying from {info.platform === "render" ? "Render" : platformLabel(info.platform)}&apos;s dashboard.
+                    </p>
+                    {info.platform === "railway" ? (
+                        <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-caption-2 text-grey">
+                            <li>Open your project in the Railway dashboard and select the Flow CMS service.</li>
+                            <li>Open <span className="font-semibold">Settings → Deploy</span> and trigger <span className="font-semibold">Redeploy</span> (or push to the connected branch) to rebuild the latest image.</li>
+                            <li>Railway pulls the new version and restarts the service; database migrations apply automatically on boot.</li>
+                        </ol>
+                    ) : info.platform === "render" ? (
+                        <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-caption-2 text-grey">
+                            <li>Open the Flow CMS service in your Render dashboard.</li>
+                            <li>Choose <span className="font-semibold">Manual Deploy → Deploy latest commit</span> (or push to the connected branch) to rebuild the image.</li>
+                            <li>Render restarts the service; database migrations apply automatically on boot.</li>
+                        </ol>
+                    ) : null}
+                    <a
+                        href={helpUrl(GUIDES.updating)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex items-center gap-1 text-caption-2 font-semibold text-primary hover:opacity-70 dark:text-lilac"
+                    >
+                        How to update on {platformLabel(info.platform)} →
+                    </a>
+                </div>
             )}
 
             {!upgrading && (

@@ -11,6 +11,9 @@ export type UpdatesInfo = {
     channel: "stable";
     /** How this instance is deployed — drives whether the in-app upgrade is offered. */
     deployment: "compose" | "aio" | "unknown";
+    /** Detected managed host (Railway/Render), so the UI can show platform-specific
+     *  update steps. Null on self-host or when the host can't be identified. */
+    platform: "railway" | "render" | null;
     checkedAt: string;
     error?: string;
 };
@@ -53,6 +56,14 @@ export class SystemService {
         return d === "compose" || d === "aio" ? d : "unknown";
     }
 
+    /** Best-effort managed-host detection from the platform's own runtime env vars.
+     *  Railway injects RAILWAY_* on every service; Render injects RENDER_*. */
+    platform(): "railway" | "render" | null {
+        if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_PUBLIC_DOMAIN) return "railway";
+        if (process.env.RENDER || process.env.RENDER_SERVICE_ID) return "render";
+        return null;
+    }
+
     async updates(force = false): Promise<UpdatesInfo> {
         if (!force && this.cached && Date.now() - this.cached.at < CHECK_TTL_MS) return this.cached.data;
 
@@ -65,6 +76,7 @@ export class SystemService {
             releaseUrl: null,
             channel: "stable",
             deployment: this.deployment(),
+            platform: this.platform(),
             checkedAt: new Date().toISOString(),
         };
 
