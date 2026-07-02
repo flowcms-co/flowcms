@@ -36,6 +36,18 @@ export type ListOptions = {
 export type Entry = Record<string, unknown> & { id: string; slug: string | null; locale: string; publishedAt: string | null };
 export type ListResult = { data: Entry[]; meta?: { total: number; limit: number; offset: number } };
 export type WriteBody = { title?: string; slug?: string; locale?: string; status?: string; scheduledAt?: string; data?: Record<string, unknown> };
+/** A reviewer's sign-off decision on an entry. */
+export type Review = { reviewer: string; decision: "APPROVED" | "CHANGES_REQUESTED"; note: string | null; at: string };
+/** Sign-off state for an entry: recorded decisions + the workspace approval policy. */
+export type ReviewState = {
+    status: string;
+    approvalsRequired: number;
+    approvals: number;
+    isApproved: boolean;
+    /** Whether approval is licensed/enforced for this workspace. */
+    enforced: boolean;
+    reviews: Review[];
+};
 
 export class FlowError extends Error {
     constructor(
@@ -125,6 +137,31 @@ export function createClient(options: ClientOptions) {
         },
         unpublish(type: string, id: string): Promise<Entry> {
             return request(`/agent/${type}/${id}/unpublish`, { method: "POST" });
+        },
+        /** Schedule an entry to auto-publish at `when` (ISO 8601). Needs content.publish. */
+        schedule(type: string, id: string, when: string | Date): Promise<Entry> {
+            const scheduledAt = typeof when === "string" ? when : when.toISOString();
+            return request(`/agent/${type}/${id}`, { method: "PATCH", body: JSON.stringify({ status: "SCHEDULED", scheduledAt }) });
+        },
+        /** Submit a draft for review (moves it to IN_REVIEW). Needs content.update. */
+        submitForReview(type: string, id: string): Promise<Entry> {
+            return request(`/agent/${type}/${id}`, { method: "PATCH", body: JSON.stringify({ status: "IN_REVIEW" }) });
+        },
+        /** Read the sign-off state (decisions + approval policy) for an entry. */
+        reviews(type: string, id: string): Promise<ReviewState> {
+            return request(`/agent/${type}/${id}/reviews`);
+        },
+        /** Record a reviewer decision. Attributed to the user who created the token. Needs content.publish. */
+        review(type: string, id: string, decision: "approve" | "request_changes", note?: string): Promise<ReviewState> {
+            return request(`/agent/${type}/${id}/review`, { method: "POST", body: JSON.stringify({ decision, note }) });
+        },
+        /** Approve a published entry's pending draft (step 1 of Approve → Publish). Needs content.publish. */
+        approveDraft(type: string, id: string): Promise<Entry> {
+            return request(`/agent/${type}/${id}/approve-draft`, { method: "POST" });
+        },
+        /** Discard a published entry's pending draft and keep the live version. Needs content.update. */
+        discardDraft(type: string, id: string): Promise<Entry> {
+            return request(`/agent/${type}/${id}/discard-draft`, { method: "POST" });
         },
         remove(type: string, id: string): Promise<{ ok: boolean }> {
             return request(`/agent/${type}/${id}`, { method: "DELETE" });
