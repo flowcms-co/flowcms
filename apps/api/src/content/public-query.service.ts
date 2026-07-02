@@ -47,7 +47,11 @@ const MEDIA_BASE = (process.env.MEDIA_PUBLIC_URL || process.env.STUDIO_URL || ""
 const absolutizeMedia = (v: unknown): unknown => {
     if (typeof v === "string") return v.startsWith("/media/") ? `${MEDIA_BASE}${v}` : v;
     if (Array.isArray(v)) return v.map(absolutizeMedia);
-    if (v && typeof v === "object") {
+    // Preserve non-plain objects (Date, Buffer, …). Rebuilding a Date via
+    // Object.entries() yields {} (a Date has no enumerable own keys), which would
+    // wipe publishedAt/createdAt/updatedAt from every delivered entry.
+    if (v instanceof Date) return v;
+    if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) {
         const out: Record<string, unknown> = {};
         for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = absolutizeMedia(val);
         return out;
