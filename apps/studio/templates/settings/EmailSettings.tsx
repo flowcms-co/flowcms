@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
+import Switch from "@/components/ui/Switch";
 import { api, ApiError } from "@/lib/api";
 import { confirm } from "@/components/providers/ConfirmProvider";
+import { cn } from "@/lib/cn";
 
 type Status = { connected: boolean; host?: string; port?: number; user?: string; from?: string };
 type Template = { key: string; name: string; subject: string; html: string; enabled: boolean; customized: boolean };
@@ -81,6 +83,13 @@ const EmailSettings = () => {
         setOpenKey(null);
     };
 
+    const resetTemplate = async (t: Template) => {
+        if (!(await confirm({ title: `Reset “${t.name}”?`, message: "Your customized subject and HTML will be replaced by the built-in default design.", confirmLabel: "Reset to default", tone: "danger" }))) return;
+        await api(`/mail/templates/${t.key}`, { method: "DELETE" });
+        await load();
+        setOpenKey(null);
+    };
+
     return (
         <div className="flex flex-col gap-6">
             {/* Connection */}
@@ -146,7 +155,7 @@ const EmailSettings = () => {
                                 </div>
                                 <Icon className={`w-4 h-4 fill-grey transition-transform ${openKey === t.key ? "rotate-180" : ""}`} name="arrow-down" />
                             </button>
-                            {openKey === t.key && <TemplateEditor template={t} onSave={saveTemplate} />}
+                            {openKey === t.key && <TemplateEditor template={t} onSave={saveTemplate} onReset={resetTemplate} />}
                         </div>
                     ))}
                 </div>
@@ -155,17 +164,199 @@ const EmailSettings = () => {
     );
 };
 
-const TemplateEditor = ({ template, onSave }: { template: Template; onSave: (t: Template) => void }) => {
-    const [t, setT] = useState(template);
+/* ── Template editor: code editor + live preview ─────────────────────────── */
+
+/** Same token substitution the API applies at send time. */
+const renderTokens = (tpl: string, vars: Record<string, string>) =>
+    tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k: string) => vars[k] ?? "");
+
+/** Sample values so the preview renders like a real send. */
+const SAMPLE_VARS: Record<string, Record<string, string>> = {
+    welcome: { name: "Sarah" },
+    invite: { name: "Daniel", inviter: "Sarah Whitfield", role: "Editor", link: "#" },
+    reset_password: { name: "Sarah", link: "#" },
+    content_published: { name: "Sarah", title: "Rebranding without the risk", link: "#" },
+    alert: { name: "Sarah", title: "Weekly SEO scan finished", body: "Your scheduled scan found 3 quick wins and fixed 12 safe issues automatically.", link: "#" },
+    digest: { name: "Sarah", count: "4", plural: "s", items: "“Rebranding without the risk” was published<br>Daniel submitted “Voice search in 2026” for review<br>2 assets were added to the library", link: "#" },
+};
+
+/** Tokens each template understands (chips insert them at the cursor). */
+const TEMPLATE_VARS: Record<string, string[]> = {
+    welcome: ["name", "workspace", "studioUrl"],
+    invite: ["name", "inviter", "role", "link", "workspace", "studioUrl"],
+    reset_password: ["name", "link", "workspace", "studioUrl"],
+    content_published: ["name", "title", "link", "workspace", "studioUrl"],
+    alert: ["name", "title", "body", "link", "workspace", "studioUrl"],
+    digest: ["name", "count", "plural", "items", "link", "workspace", "studioUrl"],
+};
+
+/**
+ * Minimal code editor: dark chrome, line-number gutter (scroll-synced, exact
+ * because wrapping is off), Tab inserts two spaces. No highlighting library —
+ * the templates are hand-sized HTML and reliability beats color here.
+ */
+const CodeEditor = ({
+    value,
+    onChange,
+    filename,
+    taRef,
+}: {
+    value: string;
+    onChange: (v: string) => void;
+    filename: string;
+    taRef: React.RefObject<HTMLTextAreaElement | null>;
+}) => {
+    const gutterRef = useRef<HTMLDivElement>(null);
+    const lineCount = useMemo(() => value.split("\n").length, [value]);
+
+    const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key !== "Tab") return;
+        e.preventDefault();
+        const el = e.currentTarget;
+        const { selectionStart: s, selectionEnd: en } = el;
+        onChange(value.slice(0, s) + "  " + value.slice(en));
+        requestAnimationFrame(() => {
+            el.selectionStart = el.selectionEnd = s + 2;
+        });
+    };
+
     return (
-        <div className="flex flex-col gap-3 border-t border-grey-light p-4 dark:border-grey-light/10">
-            <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Subject</span><input value={t.subject} onChange={(e) => setT({ ...t, subject: e.target.value })} className={field} /></label>
-            <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">HTML body</span><textarea value={t.html} onChange={(e) => setT({ ...t, html: e.target.value })} rows={6} className={`${field} h-auto py-3 font-mono text-caption-1`} /></label>
-            <div className="flex items-center justify-between">
+        <div className="flex h-[30rem] flex-col overflow-hidden rounded-2xl bg-[#14141f] ring-1 ring-white/10">
+            {/* Editor chrome */}
+            <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.07] px-4 py-2.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+                <span className="ml-2 font-mono text-caption-2 text-white/60">{filename}</span>
+                <span className="ml-auto font-mono text-[0.6875rem] text-white/30">{lineCount} lines · HTML</span>
+            </div>
+            <div className="flex min-h-0 grow">
+                <div ref={gutterRef} className="w-11 shrink-0 select-none overflow-hidden border-r border-white/[0.07] py-3 text-right font-mono text-caption-2 leading-5 text-white/25">
+                    {Array.from({ length: lineCount }, (_, i) => (
+                        <div key={i} className="pr-2.5">{i + 1}</div>
+                    ))}
+                </div>
+                <textarea
+                    ref={taRef}
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    onScroll={(e) => {
+                        if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+                    }}
+                    onKeyDown={onKeyDown}
+                    spellCheck={false}
+                    wrap="off"
+                    className="min-h-0 grow resize-none overflow-auto bg-transparent px-3 py-3 font-mono text-caption-2 leading-5 text-[#e6e4f5] caret-lilac outline-none selection:bg-primary/40 scrollbar-thin scrollbar-thumb-white/15"
+                />
+            </div>
+        </div>
+    );
+};
+
+const TemplateEditor = ({ template, onSave, onReset }: { template: Template; onSave: (t: Template) => void; onReset: (t: Template) => void }) => {
+    const [t, setT] = useState(template);
+    const [view, setView] = useState<"split" | "code" | "preview">("split");
+    const taRef = useRef<HTMLTextAreaElement>(null);
+
+    const insertVar = (name: string) => {
+        const token = `{{${name}}}`;
+        const el = taRef.current;
+        if (!el) return setT((cur) => ({ ...cur, html: cur.html + token }));
+        const s = el.selectionStart ?? t.html.length;
+        const en = el.selectionEnd ?? s;
+        setT((cur) => ({ ...cur, html: cur.html.slice(0, s) + token + cur.html.slice(en) }));
+        requestAnimationFrame(() => {
+            el.focus();
+            el.selectionStart = el.selectionEnd = s + token.length;
+        });
+    };
+
+    // Live preview: the same substitution the server applies, with sample data.
+    // {{studioUrl}} resolves to this studio, so /email/* illustrations load.
+    const previewHtml = useMemo(() => {
+        const vars = {
+            studioUrl: typeof window === "undefined" ? "" : window.location.origin,
+            workspace: "Your workspace",
+            ...(SAMPLE_VARS[template.key] ?? {}),
+        };
+        return renderTokens(t.html, vars);
+    }, [t.html, template.key]);
+
+    const views: { id: typeof view; label: string }[] = [
+        { id: "split", label: "Split" },
+        { id: "code", label: "Code" },
+        { id: "preview", label: "Preview" },
+    ];
+
+    return (
+        <div className="flex flex-col gap-4 border-t border-grey-light p-4 dark:border-grey-light/10">
+            <label className="block">
+                <span className="mb-1.5 block text-caption-1 text-grey">Subject</span>
+                <input value={t.subject} onChange={(e) => setT({ ...t, subject: e.target.value })} className={field} />
+            </label>
+
+            {/* Variables + view switch */}
+            <div className="flex flex-wrap items-center gap-2">
+                <span className="text-caption-2 text-grey">Variables:</span>
+                {(TEMPLATE_VARS[template.key] ?? []).map((v) => (
+                    <button
+                        key={v}
+                        type="button"
+                        onClick={() => insertVar(v)}
+                        title={`Insert {{${v}}} at the cursor`}
+                        className="rounded-lg bg-lavender-mist px-2 py-1 font-mono text-caption-2 font-semibold text-primary transition-colors hover:bg-purple-100 dark:bg-dark-3 dark:text-lilac dark:hover:bg-dark-3/60"
+                    >
+                        {`{{${v}}}`}
+                    </button>
+                ))}
+                <div className="ml-auto inline-flex items-center gap-1 rounded-xl bg-lavender-mist p-1 dark:bg-dark-3">
+                    {views.map((m) => (
+                        <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => setView(m.id)}
+                            className={cn(
+                                "h-7 rounded-lg px-3 text-caption-2 font-semibold transition-colors",
+                                view === m.id ? "bg-white text-primary shadow-sm dark:bg-dark-1" : "text-grey hover:text-primary",
+                            )}
+                        >
+                            {m.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* Editor + live preview */}
+            <div className={cn("grid gap-4", view === "split" && "xl:grid-cols-2")}>
+                {view !== "preview" && (
+                    <CodeEditor value={t.html} onChange={(html) => setT({ ...t, html })} filename={`${template.key}.html`} taRef={taRef} />
+                )}
+                {view !== "code" && (
+                    <div className="flex h-[30rem] flex-col overflow-hidden rounded-2xl border border-grey-light dark:border-grey-light/10">
+                        <div className="flex shrink-0 items-center gap-2 border-b border-grey-light bg-lavender-mist/50 px-4 py-2.5 dark:border-grey-light/10 dark:bg-dark-3/40">
+                            <Icon name="eye" className="h-3.5 w-3.5 fill-grey" />
+                            <span className="text-caption-2 font-semibold text-grey">Live preview · sample data</span>
+                        </div>
+                        <iframe title="Email preview" sandbox="" srcDoc={previewHtml} className="min-h-0 w-full grow bg-[#f4f2fb]" />
+                    </div>
+                )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
                 <label className="inline-flex items-center gap-2 text-caption-1 text-black dark:text-white">
-                    <input type="checkbox" checked={t.enabled} onChange={(e) => setT({ ...t, enabled: e.target.checked })} className="accent-primary" /> Enabled
+                    <Switch checked={t.enabled} onChange={(enabled) => setT({ ...t, enabled })} aria-label="Template enabled" />
+                    Enabled
                 </label>
-                <button type="button" onClick={() => onSave(t)} className="btn-primary h-9 px-4 text-caption-1">Save template</button>
+                <div className="ml-auto flex items-center gap-2">
+                    {template.customized && (
+                        <button type="button" onClick={() => onReset(t)} className="btn-ghost h-9 px-4 text-caption-1 text-grey hover:text-error">
+                            Reset to default
+                        </button>
+                    )}
+                    <button type="button" onClick={() => onSave(t)} className="btn-primary h-9 px-4 text-caption-1">
+                        Save template
+                    </button>
+                </div>
             </div>
         </div>
     );

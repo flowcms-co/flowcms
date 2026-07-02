@@ -62,4 +62,9 @@ export class MailController {
     updateTemplate(@CurrentUser() user: AuthUser, @Param("key") key: string, @Body() dto: UpdateTemplateDto) {
         return this.mail.updateTemplate(user.workspaceId, key, dto);
     }
+
+    @Delete("templates/:key")
+    resetTemplate(@CurrentUser() user: AuthUser, @Param("key") key: string) {
+        return this.mail.resetTemplate(user.workspaceId, key);
+    }
 }
