@@ -10,7 +10,7 @@ import { useRole } from "@/components/providers/RoleProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
 import Image from "next/image";
 import { api, ApiError } from "@/lib/api";
-import { AVATAR_POOL, characterSrc, resolveCharacter } from "@/lib/avatar";
+import { AVATAR_POOL, characterSrc, legacyCharacterSrc, resolveCharacter, withAvatarFallback } from "@/lib/avatar";
 import { notificationPrefs } from "@/mocks/settings";
 
 /**
@@ -144,7 +144,7 @@ const Profile = () => {
                 <h2 className="text-h5 text-black dark:text-white mb-5">Profile</h2>
                 <div className="mb-6 flex flex-col gap-3 rounded-lg bg-grey-light/30 p-4 sm:flex-row sm:items-center sm:gap-4 dark:bg-white/[0.04]">
                     <div className="flex min-w-0 grow items-center gap-4">
-                        <Image src={characterSrc(selectedChar)} alt="Your avatar" width={72} height={72} unoptimized className="h-16 w-16 shrink-0 rounded-full bg-lavender-mist object-cover sm:h-18 sm:w-18" />
+                        <Image src={characterSrc(selectedChar)} alt="Your avatar" width={72} height={72} unoptimized onError={(e) => withAvatarFallback(e, legacyCharacterSrc(selectedChar))} className="h-16 w-16 shrink-0 rounded-full bg-lavender-mist object-cover sm:h-18 sm:w-18" />
                         <div className="min-w-0">
                             <span className="block text-caption-1 font-semibold text-black dark:text-white">Your avatar</span>
                             <p className="text-caption-2 text-grey">A friendly character for your profile.</p>
@@ -289,7 +289,7 @@ const Profile = () => {
                                             aria-pressed={draft === key}
                                             className={`relative aspect-square overflow-hidden rounded-full bg-lavender-mist transition-transform hover:scale-105 dark:bg-dark-3 ${draft === key ? "ring-2 ring-primary ring-offset-2 ring-offset-white dark:ring-offset-dark-1" : ""}`}
                                         >
-                                            <Image src={characterSrc(key)} alt="" width={64} height={64} unoptimized className="h-full w-full object-cover" />
+                                            <Image src={characterSrc(key)} alt="" width={64} height={64} unoptimized onError={(e) => withAvatarFallback(e, legacyCharacterSrc(key))} className="h-full w-full object-cover" />
                                         </button>
                                     ))}
                                 </div>

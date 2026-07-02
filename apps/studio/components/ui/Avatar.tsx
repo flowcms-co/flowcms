@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import { cn } from "@/lib/cn";
-import { characterSrc, resolveCharacter } from "@/lib/avatar";
+import { characterSrc, legacyCharacterSrc, resolveCharacter, withAvatarFallback } from "@/lib/avatar";
 
 const initials = (name?: string | null) =>
     (name || "?")
@@ -63,15 +63,16 @@ const Avatar = ({
 
     // Pooled character — small local asset served as-is (`unoptimized`); skipping
     // the next/image optimizer avoids stale-cache issues when the set is swapped.
+    const charKey = resolveCharacter(character, userId);
     return (
         <Image
-            src={characterSrc(resolveCharacter(character, userId))}
+            src={characterSrc(charKey)}
             alt={name || "Avatar"}
             width={size}
             height={size}
             style={{ width: size, height: size }}
             unoptimized
-            onError={() => setFailed(true)}
+            onError={(e) => withAvatarFallback(e, legacyCharacterSrc(charKey))}
             className={cls}
         />
     );

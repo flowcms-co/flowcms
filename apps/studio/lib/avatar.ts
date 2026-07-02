@@ -1,22 +1,42 @@
+import type { SyntheticEvent } from "react";
+
 /**
- * Team avatars — a fixed pool of illustrated 3D characters in
- * `/public/avatars/3d/` (1.png … 14.png). Gender-neutral; each user gets one
- * deterministically (stable rotation across the team) and can pick a different
- * one. The chosen character key is stored on the user as `avatarStyle`.
+ * Team avatars — a fixed pool of 14 illustrated characters. The v2 pack (soft
+ * pastel storybook style matching the guided-tour art) lives in
+ * `/public/avatars/v2/` and `/public/illustrations/v2/`; the original 3D pack
+ * stays on disk as the fallback, so any slot without v2 art yet keeps showing
+ * the classic character. Each user gets one deterministically (stable rotation
+ * across the team) and can pick a different one; the chosen character key is
+ * stored on the user as `avatarStyle`.
  */
 export const AVATAR_POOL: string[] = Array.from({ length: 14 }, (_, i) => String(i + 1));
 
-/** Public path for a character image. */
-export const characterSrc = (key: string) => `/avatars/3d/${key}.png`;
+/** Public path for a character image (v2 pack; see `withAvatarFallback`). */
+export const characterSrc = (key: string) => `/avatars/v2/${key}.png`;
+
+/** Classic 3D pack, kept as the per-slot fallback for missing v2 art. */
+export const legacyCharacterSrc = (key: string) => `/avatars/3d/${key}.png`;
 
 /**
- * Public path for the full-body illustration that matches a character key.
- * `/public/illustrations/1.webp … 14.webp` are numbered to match the avatar pool,
- * so the person a user picked as their avatar is the figure on their dashboard.
- * (The source art was auto-traced SVG; rasterized to WebP since it displays small
- * and the traces were ~7 MB each. Swap back when flat layered vectors land.)
+ * Public path for the dashboard hero illustration that matches a character key
+ * (v2 pack). Numbered to match the avatar pool, so the person a user picked as
+ * their avatar is the figure on their dashboard.
  */
-export const illustrationSrc = (key: string) => `/illustrations/${key}.webp`;
+export const illustrationSrc = (key: string) => `/illustrations/v2/${key}.png`;
+
+/** Original traced-art hero pack, kept as the per-slot fallback. */
+export const legacyIllustrationSrc = (key: string) => `/illustrations/${key}.webp`;
+
+/**
+ * onError handler: swap a v2 image to its legacy counterpart exactly once
+ * (the dataset flag stops a loop if the legacy file were ever missing too).
+ */
+export function withAvatarFallback(e: SyntheticEvent<HTMLImageElement>, legacySrc: string): void {
+    const img = e.currentTarget;
+    if (img.dataset.fellBack) return;
+    img.dataset.fellBack = "1";
+    img.src = legacySrc;
+}
 
 /** Stable, well-distributed pick from a seed (FNV-1a → index into the pool). */
 export function characterForSeed(seed: string): string {

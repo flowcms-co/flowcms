@@ -4,7 +4,7 @@ import { useRef } from "react";
 import Image from "next/image";
 import { useRole } from "@/components/providers/RoleProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
-import { illustrationSrc, resolveCharacter } from "@/lib/avatar";
+import { illustrationSrc, legacyIllustrationSrc, resolveCharacter, withAvatarFallback } from "@/lib/avatar";
 import { useHeaderReveal } from "@/lib/useReveal";
 import SharedOverview from "@/templates/Overview/SharedOverview";
 import EditorOverview from "@/templates/Overview/EditorOverview";
@@ -77,6 +77,7 @@ const Overview = () => {
                     height={200}
                     priority
                     unoptimized
+                    onError={(e) => withAvatarFallback(e, legacyIllustrationSrc(heroKey))}
                     className="reveal-pop hidden h-auto w-[clamp(15rem,22vw,21rem)] shrink-0 select-none md:block"
                 />
             </div>
