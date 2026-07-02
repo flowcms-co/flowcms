@@ -21,16 +21,38 @@ import { SYSTEM_ROLES, hashPassword } from "@flowcms/shared";
 
 const WORKSPACE = { name: "Flow CMS", slug: "default" };
 
+/** Default live-preview URL template from the environment, so live preview works
+ *  out of the box on a fresh install (instead of the demo fallback):
+ *   - PREVIEW_URL  — a full template, used as-is (e.g. https://site.com/{slug}).
+ *   - FRONTEND_URL — the site origin; `/{slug}` is appended when no token is present.
+ *  Returns undefined when neither is set. */
+function envPreviewUrl(): string | undefined {
+    const tpl = process.env.PREVIEW_URL?.trim();
+    if (tpl) return tpl;
+    const base = process.env.FRONTEND_URL?.trim();
+    if (!base) return undefined;
+    const clean = base.replace(/\/+$/, "");
+    return /\{(slug|id|type|locale)\}/.test(clean) ? clean : `${clean}/{slug}`;
+}
+
 /** Run the idempotent bootstrap against a Prisma client. Exported so it can be
  *  invoked programmatically and integration-tested (run twice → no data loss). */
 export async function bootstrap(prisma: PrismaClient) {
+    const previewUrl = envPreviewUrl();
     // Workspace: create un-onboarded so the first login lands on /setup. On
     // re-run, leave everything (name, onboardedAt) as the user has it.
     const workspace = await prisma.workspace.upsert({
         where: { slug: WORKSPACE.slug },
         update: {},
-        create: { name: WORKSPACE.name, slug: WORKSPACE.slug },
+        create: { name: WORKSPACE.name, slug: WORKSPACE.slug, ...(previewUrl ? { previewUrl } : {}) },
     });
+
+    // Backfill the preview URL on an existing workspace only when it's still empty,
+    // so a value the user set in Settings is never overwritten.
+    if (previewUrl && !workspace.previewUrl) {
+        await prisma.workspace.update({ where: { id: workspace.id }, data: { previewUrl } });
+        workspace.previewUrl = previewUrl;
+    }
 
     // System roles: keep their definitions in sync (permissions can change across
     // releases) but never delete or rename custom roles.
