@@ -8,8 +8,15 @@ import { api, ApiError } from "@/lib/api";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { cn } from "@/lib/cn";
 
-type Status = { connected: boolean; host?: string; port?: number; user?: string; from?: string };
+type EmailProvider = "smtp" | "resend" | "sendgrid";
+type Status = { connected: boolean; provider?: EmailProvider; host?: string; port?: number; user?: string; from?: string };
 type Template = { key: string; name: string; subject: string; html: string; enabled: boolean; customized: boolean };
+
+const PROVIDERS: { id: EmailProvider; label: string }[] = [
+    { id: "smtp", label: "SMTP" },
+    { id: "resend", label: "Resend" },
+    { id: "sendgrid", label: "SendGrid" },
+];
 
 const field = "w-full h-11 px-4 rounded-2xl border border-grey-light bg-white text-black placeholder:text-grey outline-none transition-colors focus:border-primary dark:border-dark-3 dark:bg-dark-2 dark:text-white";
 
@@ -20,7 +27,8 @@ const field = "w-full h-11 px-4 rounded-2xl border border-grey-light bg-white te
  */
 const EmailSettings = () => {
     const [status, setStatus] = useState<Status | null>(null);
-    const [form, setForm] = useState({ host: "", port: "587", user: "", password: "", from: "" });
+    const [provider, setProvider] = useState<EmailProvider>("smtp");
+    const [form, setForm] = useState({ host: "", port: "587", user: "", password: "", apiKey: "", from: "" });
     const [saving, setSaving] = useState(false);
     const [testTo, setTestTo] = useState("");
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -32,7 +40,10 @@ const EmailSettings = () => {
             const [s, t] = await Promise.all([api<Status>("/mail/status"), api<Template[]>("/mail/templates")]);
             setStatus(s);
             setTemplates(t);
-            if (s.connected) setForm((f) => ({ ...f, host: s.host ?? "", port: String(s.port ?? 587), user: s.user ?? "", from: s.from ?? "" }));
+            if (s.connected) {
+                setProvider(s.provider ?? "smtp");
+                setForm((f) => ({ ...f, host: s.host ?? "", port: String(s.port ?? 587), user: s.user ?? "", from: s.from ?? "" }));
+            }
         } catch {
             setStatus({ connected: false });
         }
@@ -47,22 +58,23 @@ const EmailSettings = () => {
         setSaving(true);
         setMsg(null);
         try {
-            await api("/mail/connect", {
-                method: "POST",
-                body: JSON.stringify({ host: form.host.trim(), port: Number(form.port) || 587, user: form.user.trim(), password: form.password, from: form.from.trim() }),
-            });
-            setForm((f) => ({ ...f, password: "" }));
+            const body =
+                provider === "smtp"
+                    ? { provider, host: form.host.trim(), port: Number(form.port) || 587, user: form.user.trim(), password: form.password, from: form.from.trim() }
+                    : { provider, apiKey: form.apiKey, from: form.from.trim() };
+            await api("/mail/connect", { method: "POST", body: JSON.stringify(body) });
+            setForm((f) => ({ ...f, password: "", apiKey: "" }));
             await load();
-            setMsg({ ok: true, text: "SMTP saved." });
+            setMsg({ ok: true, text: `${PROVIDERS.find((p) => p.id === provider)?.label} saved.` });
         } catch (e) {
-            setMsg({ ok: false, text: e instanceof ApiError ? e.message : "Could not save SMTP." });
+            setMsg({ ok: false, text: e instanceof ApiError ? e.message : "Could not save." });
         } finally {
             setSaving(false);
         }
     };
 
     const disconnect = async () => {
-        if (!(await confirm({ title: "Disconnect SMTP?", message: "Outgoing email will stop.", confirmLabel: "Disconnect", tone: "danger" }))) return;
+        if (!(await confirm({ title: "Disconnect email?", message: "Outgoing email will stop.", confirmLabel: "Disconnect", tone: "danger" }))) return;
         await api("/mail", { method: "DELETE" });
         await load();
     };
@@ -90,6 +102,14 @@ const EmailSettings = () => {
         setOpenKey(null);
     };
 
+    // The secret can be left blank when re-saving the already-connected provider (it's preserved).
+    const secretKnown = !!status?.connected && status.provider === provider;
+    const canSubmit =
+        !!form.from.trim() &&
+        (provider === "smtp"
+            ? !!form.host.trim() && !!form.user.trim() && (secretKnown || !!form.password)
+            : secretKnown || !!form.apiKey);
+
     return (
         <div className="flex flex-col gap-6">
             {/* Connection */}
@@ -99,9 +119,11 @@ const EmailSettings = () => {
                         <Icon className="w-5 h-5 fill-primary" name="mail" />
                     </span>
                     <div>
-                        <h2 className="text-h5 text-black dark:text-white">SMTP server</h2>
+                        <h2 className="text-h5 text-black dark:text-white">Email delivery</h2>
                         <p className="text-caption-2 text-grey">
-                            {status?.connected ? `Connected · ${status.host}` : "Not connected: email is logged but not sent."}
+                            {status?.connected
+                                ? `Connected · ${status.provider === "resend" ? "Resend" : status.host}`
+                                : "Not connected: email is logged but not sent."}
                         </p>
                     </div>
                     {status?.connected && (
@@ -111,17 +133,46 @@ const EmailSettings = () => {
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Host</span><input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="smtp.postmarkapp.com" className={field} /></label>
-                    <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Port</span><input value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} placeholder="587" className={field} /></label>
-                    <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Username</span><input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} placeholder="apikey / SMTP user" className={field} /></label>
-                    <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Password</span><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={status?.connected ? "•••••••• (unchanged)" : "SMTP password / API key"} className={field} /></label>
-                    <label className="block sm:col-span-2"><span className="mb-1.5 block text-caption-1 text-grey">From address</span><input value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} placeholder="Flow CMS <noreply@yourdomain.com>" className={field} /></label>
+                {/* Provider selector */}
+                <div className="mb-5 inline-flex items-center gap-1 rounded-2xl bg-lavender-mist p-1 dark:bg-dark-3">
+                    {PROVIDERS.map((p) => (
+                        <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => setProvider(p.id)}
+                            className={cn(
+                                "h-8 rounded-xl px-4 text-caption-1 font-semibold transition-colors",
+                                provider === p.id ? "bg-white text-primary shadow-sm dark:bg-dark-1" : "text-grey hover:text-primary",
+                            )}
+                        >
+                            {p.label}
+                        </button>
+                    ))}
                 </div>
 
+                {provider !== "smtp" ? (
+                    <div className="grid grid-cols-1 gap-4">
+                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">API key</span><input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={secretKnown ? "•••••••• (unchanged)" : provider === "resend" ? "re_..." : "SG...."} className={field} /></label>
+                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">From address</span><input value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} placeholder="Flow CMS <noreply@yourdomain.com>" className={field} /></label>
+                        {provider === "resend" ? (
+                            <p className="text-caption-2 text-grey">Create an API key at <span className="font-mono">resend.com/api-keys</span>. The from domain must be verified in your Resend account.</p>
+                        ) : (
+                            <p className="text-caption-2 text-grey">Create an API key with Mail Send access at <span className="font-mono">app.sendgrid.com</span>. The from address must use a verified sender or domain.</p>
+                        )}
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Host</span><input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="smtp.postmarkapp.com" className={field} /></label>
+                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Port</span><input value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} placeholder="587" className={field} /></label>
+                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Username</span><input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} placeholder="apikey / SMTP user" className={field} /></label>
+                        <label className="block"><span className="mb-1.5 block text-caption-1 text-grey">Password</span><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={status?.connected && status.provider === "smtp" ? "•••••••• (unchanged)" : "SMTP password / API key"} className={field} /></label>
+                        <label className="block sm:col-span-2"><span className="mb-1.5 block text-caption-1 text-grey">From address</span><input value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} placeholder="Flow CMS <noreply@yourdomain.com>" className={field} /></label>
+                    </div>
+                )}
+
                 <div className="mt-5 flex flex-wrap gap-3">
-                    <button type="button" onClick={connect} disabled={saving || !form.host.trim() || !form.user.trim() || (!status?.connected && !form.password) || !form.from.trim()} className="btn-primary disabled:opacity-60">
-                        {saving ? "Saving…" : status?.connected ? "Update" : "Connect SMTP"}
+                    <button type="button" onClick={connect} disabled={saving || !canSubmit} className="btn-primary disabled:opacity-60">
+                        {saving ? "Saving…" : status?.connected && status.provider === provider ? "Update" : `Connect ${PROVIDERS.find((p) => p.id === provider)?.label}`}
                     </button>
                     {status?.connected && (
                         <button type="button" onClick={disconnect} className="btn-secondary">Disconnect</button>

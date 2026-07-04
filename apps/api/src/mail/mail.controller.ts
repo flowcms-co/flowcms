@@ -1,18 +1,27 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import { IsBoolean, IsEmail, IsInt, IsOptional, IsString } from "class-validator";
+import { BadRequestException } from "@nestjs/common";
+import { IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
-import { MailService } from "./mail.service";
+import { type ConnectInput, MailService } from "./mail.service";
 
-class ConnectSmtpDto {
-    @IsString() host!: string;
+/**
+ * One DTO for every provider; fields are validated per-provider in the handler
+ * (SMTP needs host/user/password, Resend/SendGrid need an apiKey). `from` is always required.
+ */
+class ConnectEmailDto {
+    @IsOptional() @IsIn(["smtp", "resend", "sendgrid"]) provider?: "smtp" | "resend" | "sendgrid";
+    @IsString() from!: string;
+    // SMTP
+    @IsOptional() @IsString() host?: string;
     @IsOptional() @IsInt() port?: number;
     @IsOptional() @IsBoolean() secure?: boolean;
-    @IsString() user!: string;
-    @IsString() password!: string;
-    @IsString() from!: string;
+    @IsOptional() @IsString() user?: string;
+    @IsOptional() @IsString() password?: string;
+    // Resend / SendGrid
+    @IsOptional() @IsString() apiKey?: string;
 }
 
 class TestDto {
@@ -38,8 +47,18 @@ export class MailController {
 
     @Throttle({ default: { limit: 10, ttl: 60_000 } })
     @Post("connect")
-    connect(@CurrentUser() user: AuthUser, @Body() dto: ConnectSmtpDto) {
-        return this.mail.connect(user.workspaceId, dto);
+    connect(@CurrentUser() user: AuthUser, @Body() dto: ConnectEmailDto) {
+        return this.mail.connect(user.workspaceId, this.normalizeConnect(dto));
+    }
+
+    /** Validate the provider-specific fields and shape the service input (the secret may be
+     *  blank on an update, in which case the service keeps the stored one). */
+    private normalizeConnect(dto: ConnectEmailDto): ConnectInput {
+        if (dto.provider === "resend" || dto.provider === "sendgrid") {
+            return { provider: dto.provider, apiKey: dto.apiKey ?? "", from: dto.from };
+        }
+        if (!dto.host || !dto.user) throw new BadRequestException("host and user are required for SMTP.");
+        return { provider: "smtp", host: dto.host, port: dto.port, secure: dto.secure, user: dto.user, password: dto.password ?? "", from: dto.from };
     }
 
     @Delete()

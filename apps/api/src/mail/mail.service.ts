@@ -1,13 +1,31 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import nodemailer, { type Transporter } from "nodemailer";
 import { IntegrationType } from "@flowcms/db";
 import { decryptSecret, encryptSecret } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { DEFAULT_TEMPLATES, testEmailHtml } from "./email-templates";
 
+export type EmailProvider = "smtp" | "resend" | "sendgrid";
 export type SmtpConfig = { host: string; port: number; secure: boolean; user: string; from: string };
+/** Config for the HTTP-API providers (Resend, SendGrid): only a from address, key is encrypted. */
+export type ApiEmailConfig = { from: string };
 export type ConnectSmtpInput = { host: string; port?: number; secure?: boolean; user: string; password: string; from: string };
+export type ConnectApiInput = { apiKey: string; from: string };
+export type ConnectInput =
+    | ({ provider: "smtp" } & ConnectSmtpInput)
+    | ({ provider: "resend" | "sendgrid" } & ConnectApiInput);
 export type SendResult = { sent: boolean; reason?: string; error?: string; messageId?: string };
+
+const RESEND_ENDPOINT = "https://api.resend.com/emails";
+const SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/mail/send";
+const isApiProvider = (p: string | null | undefined): p is "resend" | "sendgrid" => p === "resend" || p === "sendgrid";
+
+/** Parse a `"Name <email@x.com>"` (or bare `email@x.com`) from address into parts (SendGrid needs this shape). */
+const parseAddress = (s: string): { email: string; name?: string } => {
+    const m = s.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+    if (m) return { email: m[2].trim(), name: m[1].trim() || undefined };
+    return { email: s.trim() };
+};
 
 /** Built-in default templates (branded design system; see email-templates.ts). */
 const DEFAULTS = DEFAULT_TEMPLATES;
@@ -28,32 +46,52 @@ export class MailService {
         return this.prisma.integration.findFirst({ where: { workspaceId, type: IntegrationType.SMTP } });
     }
 
-    /** Connection status without exposing the password. */
+    /** Connection status without exposing the secret. */
     async status(workspaceId: string) {
         const i = await this.integration(workspaceId);
         if (!i) return { connected: false };
+        if (isApiProvider(i.provider)) {
+            const c = (i.config ?? {}) as Partial<ApiEmailConfig>;
+            return { connected: true, provider: i.provider, from: c.from };
+        }
         const c = (i.config ?? {}) as Partial<SmtpConfig>;
-        return { connected: true, host: c.host, port: c.port, secure: c.secure, user: c.user, from: c.from };
+        return { connected: true, provider: "smtp" as const, host: c.host, port: c.port, secure: c.secure, user: c.user, from: c.from };
     }
 
-    /** Save/update SMTP credentials (password encrypted at rest). */
-    async connect(workspaceId: string, input: ConnectSmtpInput) {
-        const config: SmtpConfig = {
-            host: input.host,
-            port: input.port ?? 587,
-            secure: input.secure ?? (input.port === 465),
-            user: input.user,
-            from: input.from,
-        };
+    /** Save/update email credentials (secret encrypted at rest). Provider is SMTP, Resend or SendGrid. */
+    async connect(workspaceId: string, input: ConnectInput) {
+        const isApi = input.provider === "resend" || input.provider === "sendgrid";
+        const provider: EmailProvider = isApi ? input.provider : "smtp";
         const existing = await this.integration(workspaceId);
-        const data = {
-            type: IntegrationType.SMTP,
-            provider: "smtp",
-            label: input.host,
-            status: "CONNECTED" as const,
-            config: config as object,
-            encryptedSecret: encryptSecret(input.password),
-        };
+
+        // A blank secret on an update keeps the stored one (same provider); otherwise it's required.
+        const rawSecret = input.provider === "smtp" ? input.password : input.apiKey;
+        const encryptedSecret = rawSecret
+            ? encryptSecret(rawSecret)
+            : existing?.provider === provider && existing.encryptedSecret
+              ? existing.encryptedSecret
+              : null;
+        if (!encryptedSecret) {
+            throw new BadRequestException(isApi ? "An API key is required." : "A password is required.");
+        }
+
+        const base = { type: IntegrationType.SMTP, status: "CONNECTED" as const, encryptedSecret };
+        const data =
+            input.provider === "smtp"
+                ? {
+                      ...base,
+                      provider,
+                      label: input.host,
+                      config: {
+                          host: input.host,
+                          port: input.port ?? 587,
+                          secure: input.secure ?? (input.port === 465),
+                          user: input.user,
+                          from: input.from,
+                      } satisfies SmtpConfig as object,
+                  }
+                : { ...base, provider, label: input.provider === "sendgrid" ? "SendGrid" : "Resend", config: { from: input.from } satisfies ApiEmailConfig as object };
+
         if (existing) await this.prisma.integration.update({ where: { id: existing.id }, data });
         else await this.prisma.integration.create({ data: { workspaceId, ...data } });
         return this.status(workspaceId);
@@ -65,27 +103,74 @@ export class MailService {
         return { connected: false };
     }
 
-    private async transport(workspaceId: string): Promise<{ tx: Transporter; from: string } | null> {
-        const i = await this.integration(workspaceId);
-        if (!i || !i.encryptedSecret) return null;
-        const c = (i.config ?? {}) as SmtpConfig;
+    private smtpTransport(config: SmtpConfig, secret: string): { tx: Transporter; from: string } {
         const tx = nodemailer.createTransport({
-            host: c.host,
-            port: c.port,
-            secure: c.secure,
-            auth: { user: c.user, pass: decryptSecret(i.encryptedSecret) },
+            host: config.host,
+            port: config.port,
+            secure: config.secure,
+            auth: { user: config.user, pass: secret },
         });
-        return { tx, from: c.from || c.user };
+        return { tx, from: config.from || config.user };
     }
 
-    /** Low-level send. No-ops (logs) gracefully when SMTP isn't configured. */
-    async send(workspaceId: string, msg: { to: string; subject: string; html: string; text?: string }): Promise<SendResult> {
-        const t = await this.transport(workspaceId);
-        if (!t) {
-            this.logger.warn(`Email skipped (SMTP not configured): "${msg.subject}" → ${msg.to}`);
-            return { sent: false, reason: "smtp-not-configured" };
-        }
+    /** Send via the Resend HTTP API (no SMTP transport, no extra dependency). */
+    private async sendViaResend(apiKey: string, from: string, msg: { to: string; subject: string; html: string; text?: string }): Promise<SendResult> {
         try {
+            const res = await fetch(RESEND_ENDPOINT, {
+                method: "POST",
+                headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+                body: JSON.stringify({ from, to: msg.to, subject: msg.subject, html: msg.html, text: msg.text }),
+            });
+            const data = (await res.json().catch(() => ({}))) as { id?: string; message?: string; name?: string };
+            if (!res.ok) return { sent: false, error: data.message || data.name || `Resend error ${res.status}` };
+            return { sent: true, messageId: data.id };
+        } catch (err) {
+            this.logger.error(`Resend send failed → ${msg.to}`, err as Error);
+            return { sent: false, error: (err as Error).message };
+        }
+    }
+
+    /** Send via the SendGrid v3 HTTP API (202 + empty body on success; id in X-Message-Id). */
+    private async sendViaSendgrid(apiKey: string, from: string, msg: { to: string; subject: string; html: string; text?: string }): Promise<SendResult> {
+        try {
+            const res = await fetch(SENDGRID_ENDPOINT, {
+                method: "POST",
+                headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+                body: JSON.stringify({
+                    personalizations: [{ to: [{ email: msg.to }] }],
+                    from: parseAddress(from),
+                    subject: msg.subject,
+                    // SendGrid requires text/plain before text/html when both are present.
+                    content: [...(msg.text ? [{ type: "text/plain", value: msg.text }] : []), { type: "text/html", value: msg.html }],
+                }),
+            });
+            if (!res.ok) {
+                const data = (await res.json().catch(() => ({}))) as { errors?: { message?: string }[] };
+                return { sent: false, error: data.errors?.[0]?.message || `SendGrid error ${res.status}` };
+            }
+            return { sent: true, messageId: res.headers.get("x-message-id") ?? undefined };
+        } catch (err) {
+            this.logger.error(`SendGrid send failed → ${msg.to}`, err as Error);
+            return { sent: false, error: (err as Error).message };
+        }
+    }
+
+    /** Low-level send. No-ops (logs) gracefully when no email provider is configured. */
+    async send(workspaceId: string, msg: { to: string; subject: string; html: string; text?: string }): Promise<SendResult> {
+        const i = await this.integration(workspaceId);
+        if (!i || !i.encryptedSecret) {
+            this.logger.warn(`Email skipped (no provider configured): "${msg.subject}" → ${msg.to}`);
+            return { sent: false, reason: "email-not-configured" };
+        }
+        const secret = decryptSecret(i.encryptedSecret);
+
+        if (isApiProvider(i.provider)) {
+            const c = (i.config ?? {}) as ApiEmailConfig;
+            return i.provider === "sendgrid" ? this.sendViaSendgrid(secret, c.from, msg) : this.sendViaResend(secret, c.from, msg);
+        }
+
+        try {
+            const t = this.smtpTransport((i.config ?? {}) as SmtpConfig, secret);
             const info = await t.tx.sendMail({ from: t.from, to: msg.to, subject: msg.subject, html: msg.html, text: msg.text });
             return { sent: true, messageId: info.messageId };
         } catch (err) {
@@ -118,9 +203,9 @@ export class MailService {
         const all = await this.globalVars(workspaceId);
         return this.send(workspaceId, {
             to,
-            subject: "Flow CMS — SMTP test",
+            subject: "Flow CMS — email test",
             html: render(testEmailHtml(), all),
-            text: "Your SMTP connection works. This is a test email from Flow CMS.",
+            text: "Your email connection works. This is a test email from Flow CMS.",
         });
     }
 
