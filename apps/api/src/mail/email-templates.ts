@@ -118,7 +118,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
         subject: "Welcome to {{workspace}}",
         html: layout({
             preheader: "Your account is ready — come on in.",
-            illustration: "ill-welcome.png",
+            illustration: "ill-welcome.jpg",
             headline: "Welcome aboard, {{name}} 👋",
             content:
                 text("Your account on <b>{{workspace}}</b> is ready. Your dashboard, the block editor and your team are waiting.") +
@@ -131,7 +131,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
         subject: "You've been invited to {{workspace}}",
         html: layout({
             preheader: "{{inviter}} invited you to join {{workspace}}.",
-            illustration: "ill-invite.png",
+            illustration: "ill-invite.jpg",
             headline: "You're invited 🎉",
             content:
                 text("<b>{{inviter}}</b> invited you to join <b>{{workspace}}</b> on Flow CMS as <b>{{role}}</b>.") +
@@ -144,7 +144,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
         subject: "Reset your {{workspace}} password",
         html: layout({
             preheader: "Here's your password reset link. It expires in 1 hour.",
-            illustration: "ill-reset_password.png",
+            illustration: "ill-reset_password.jpg",
             headline: "Let's get you back in",
             content:
                 text("Hi {{name}}, we received a request to reset your <b>{{workspace}}</b> password. This link expires in <b>1 hour</b>.") +
@@ -157,7 +157,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
         subject: "“{{title}}” is now live",
         html: layout({
             preheader: "Your content just went live.",
-            illustration: "ill-content_published.png",
+            illustration: "ill-content_published.jpg",
             headline: "It's live! 🚀",
             content:
                 text("Hi {{name}}, your content just went out into the world on <b>{{workspace}}</b>:") +
@@ -170,7 +170,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
         subject: "{{title}}",
         html: layout({
             preheader: "{{title}}",
-            illustration: "ill-alert.png",
+            illustration: "ill-alert.jpg",
             headline: "{{title}}",
             content: text("Hi {{name}},") + text("{{body}}") + button("Open Flow CMS", "{{link}}"),
         }),
@@ -180,7 +180,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
         subject: "{{count}} update{{plural}} on {{workspace}}",
         html: layout({
             preheader: "Here's what happened on {{workspace}} since your last digest.",
-            illustration: "ill-digest.png",
+            illustration: "ill-digest.jpg",
             headline: "{{count}} update{{plural}} for you",
             content:
                 text("Hi {{name}}, here's what happened on <b>{{workspace}}</b> since your last digest:") +
@@ -194,7 +194,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
 export const testEmailHtml = (): string =>
     layout({
         preheader: "Your SMTP connection works.",
-        illustration: "ill-welcome.png",
+        illustration: "ill-welcome.jpg",
         headline: "Your SMTP works ✅",
         content:
             text("This is a test email from <b>{{workspace}}</b>. Delivery, styling and images all made it through, so invites, resets and alerts are good to go.") +

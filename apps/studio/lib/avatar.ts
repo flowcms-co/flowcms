@@ -12,7 +12,7 @@ import type { SyntheticEvent } from "react";
 export const AVATAR_POOL: string[] = Array.from({ length: 14 }, (_, i) => String(i + 1));
 
 /** Public path for a character image (v2 pack; see `withAvatarFallback`). */
-export const characterSrc = (key: string) => `/avatars/v2/${key}.png`;
+export const characterSrc = (key: string) => `/avatars/v2/${key}.webp`;
 
 /** Classic 3D pack, kept as the per-slot fallback for missing v2 art. */
 export const legacyCharacterSrc = (key: string) => `/avatars/3d/${key}.png`;
@@ -22,7 +22,7 @@ export const legacyCharacterSrc = (key: string) => `/avatars/3d/${key}.png`;
  * (v2 pack). Numbered to match the avatar pool, so the person a user picked as
  * their avatar is the figure on their dashboard.
  */
-export const illustrationSrc = (key: string) => `/illustrations/v2/${key}.png`;
+export const illustrationSrc = (key: string) => `/illustrations/v2/${key}.webp`;
 
 /** Original traced-art hero pack, kept as the per-slot fallback. */
 export const legacyIllustrationSrc = (key: string) => `/illustrations/${key}.webp`;

@@ -125,7 +125,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
         id: "overview",
         route: "/",
         icon: "overview",
-        image: "/tour/overview.png",
+        image: "/tour/overview.webp",
         title: "Welcome",
         blurb: "The lay of the land: navigation, search and shortcuts.",
         steps: [
@@ -188,7 +188,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "content",
         route: "/content",
-        image: "/tour/content.png",
+        image: "/tour/content.webp",
         icon: "document",
         title: "Content",
         blurb: "The content table, filters and the publishing lifecycle.",
@@ -238,7 +238,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "editor",
         route: "/content/editor",
-        image: "/tour/editor.png",
+        image: "/tour/editor.webp",
         icon: "edit",
         title: "Block editor",
         blurb: "Blocks, live SEO scoring and the publish workflow.",
@@ -308,7 +308,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "seo",
         route: "/seo",
-        image: "/tour/seo.png",
+        image: "/tour/seo.webp",
         icon: "chart",
         title: "SEO",
         blurb: "The deterministic score, reports and the AI Optimizer.",
@@ -362,7 +362,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
         id: "optimizer",
         route: "/seo/optimizer",
         icon: "chart",
-        image: "/tour/optimizer.png",
+        image: "/tour/optimizer.webp",
         title: "AI Optimizer",
         blurb: "Scan your site, review the issues, apply fixes.",
         roles: ["super", "admin", "seo"],
@@ -426,7 +426,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "ai",
         route: "/ai",
-        image: "/tour/ai.png",
+        image: "/tour/ai.webp",
         icon: "sparkles",
         title: "AI Tools",
         blurb: "Generate drafts, proofread, and teach the AI your voice.",
@@ -496,7 +496,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "assets",
         route: "/assets",
-        image: "/tour/assets.png",
+        image: "/tour/assets.webp",
         icon: "folder",
         title: "Assets",
         blurb: "The media library, AI alt text and page templates.",
@@ -529,7 +529,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "chat",
         route: "/chat",
-        image: "/tour/chat.png",
+        image: "/tour/chat.webp",
         icon: "chat",
         title: "Chat",
         blurb: "Team conversations, right next to the work.",
@@ -571,7 +571,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "team",
         route: "/settings/workspace",
-        image: "/tour/team.png",
+        image: "/tour/team.webp",
         launchHref: "/settings/workspace?tab=team",
         icon: "users",
         title: "Team",
@@ -627,7 +627,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
         id: "security",
         route: "/settings/security",
         icon: "lock",
-        image: "/tour/security.png",
+        image: "/tour/security.webp",
         title: "Security",
         blurb: "Two-factor auth, the audit log and access controls.",
         steps: [
@@ -683,7 +683,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
         id: "content-model",
         route: "/settings/content",
         icon: "grid",
-        image: "/tour/content-model.png",
+        image: "/tour/content-model.webp",
         title: "Content model",
         blurb: "Types, reusable components, references and locales.",
         roles: ["super", "admin"],
@@ -750,7 +750,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
         id: "integrations",
         route: "/settings/integrations",
         icon: "settings",
-        image: "/tour/integrations.png",
+        image: "/tour/integrations.webp",
         title: "Integrations",
         blurb: "The power strip: connect once, unlock features everywhere.",
         roles: ["super", "admin"],
@@ -822,7 +822,7 @@ export const TOUR_CHAPTERS: TourChapter[] = [
     {
         id: "developers",
         route: "/settings/developers",
-        image: "/tour/developers.png",
+        image: "/tour/developers.webp",
         icon: "key",
         title: "Developers",
         blurb: "Tokens, webhooks and connecting your front end.",
