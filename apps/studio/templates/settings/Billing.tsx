@@ -18,6 +18,8 @@ type PricingFeed = {
     pro: { monthly: number; annual: number };
     enterprise: { custom: boolean; monthly?: number; annual?: number };
     seat?: { included: number; monthly: number; annual: number };
+    // Discount auto-applied to annual checkouts (ANNUAL23), so the upgrade dialog shows the real price.
+    annualDiscount?: { percent?: number; amount?: number; currency?: string };
     checkout?: boolean;
 };
 
@@ -346,12 +348,18 @@ function UpgradeDialog({ feed, onClose }: { feed: PricingFeed; onClose: () => vo
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
 
-    const { total, perMo, savePct } = useMemo(() => {
+    const disc = feed.annualDiscount;
+    const discLabel = disc?.percent ? `${disc.percent}%` : disc?.amount ? money(disc.amount, disc.currency ?? feed.currency) : "";
+    const { total, listTotal, perMo, savePct, discounted } = useMemo(() => {
         const extra = Math.max(0, seats - included);
-        const base = annual ? feed.pro.annual : feed.pro.monthly;
         const seatPrice = annual ? seat.annual : seat.monthly;
-        const total = base + extra * seatPrice;
-        return { total, perMo: annual ? total / 12 : total, savePct: Math.round((1 - feed.pro.annual / (feed.pro.monthly * 12)) * 100) };
+        const listTotal = (annual ? feed.pro.annual : feed.pro.monthly) + extra * seatPrice;
+        // Apply the annual auto-discount (ANNUAL23) so the price matches what Stripe charges.
+        const d = feed.annualDiscount;
+        const applyDisc = (amt: number) => (d?.percent ? amt * (1 - d.percent / 100) : d?.amount ? Math.max(0, amt - d.amount) : amt);
+        const total = annual ? applyDisc(listTotal) : listTotal;
+        const netAnnualBase = applyDisc(feed.pro.annual);
+        return { total, listTotal, perMo: annual ? total / 12 : total, savePct: Math.round((1 - netAnnualBase / (feed.pro.monthly * 12)) * 100), discounted: annual && total < listTotal };
     }, [annual, seats, included, seat, feed]);
 
     const start = async () => {
@@ -426,7 +434,16 @@ function UpgradeDialog({ feed, onClose }: { feed: PricingFeed; onClose: () => vo
                             <span className="font-poppins text-h4 font-extrabold text-black dark:text-white">{money(perMo, feed.currency, perMo % 1 ? 2 : 0)}</span>
                             <span className="pb-1 text-caption-2 text-grey">/mo</span>
                         </div>
-                        <div className="mt-0.5 text-caption-2 text-grey">{annual ? `${money(total, feed.currency)} billed yearly` : `${money(total, feed.currency)} billed monthly`}</div>
+                        <div className="mt-0.5 text-caption-2 text-grey">
+                            {annual ? (
+                                <>
+                                    {discounted && <span className="mr-1 text-grey/50 line-through">{money(listTotal, feed.currency)}</span>}
+                                    {money(total, feed.currency)} billed yearly{discounted && <span className="font-semibold text-success"> · {discLabel} off</span>}
+                                </>
+                            ) : (
+                                `${money(total, feed.currency)} billed monthly`
+                            )}
+                        </div>
                     </div>
                 </div>
 
