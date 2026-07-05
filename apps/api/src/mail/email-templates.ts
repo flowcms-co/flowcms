@@ -32,8 +32,8 @@ const brandLockup = (): string =>
     `</tr></table>`;
 
 /* ── Body content blocks. Inline = light default; classes flip in dark. ────── */
-const text = (t: string) => `<p class="body-txt" style="margin:0 0 16px;font-size:15.5px;line-height:1.62;color:${BODY};">${t}</p>`;
-const muted = (t: string) => `<p class="muted-txt" style="margin:0 0 16px;font-size:13px;line-height:1.55;color:${GREY};">${t}</p>`;
+const text = (t: string) => `<p class="body-txt" style="margin:0 0 16px;font-size:15.5px;line-height:1.62;color:${BODY};word-break:break-word;overflow-wrap:break-word;">${t}</p>`;
+const muted = (t: string) => `<p class="muted-txt" style="margin:0 0 16px;font-size:13px;line-height:1.55;color:${GREY};word-break:break-word;overflow-wrap:break-word;">${t}</p>`;
 const button = (label: string, href: string) =>
     `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 22px;"><tr><td class="cta" style="border-radius:13px;background:${PURPLE};box-shadow:0 10px 24px rgba(108,92,231,.34);">` +
     `<a href="${href}" style="display:inline-block;padding:15px 32px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;">${label} &rarr;</a></td></tr></table>`;
@@ -161,7 +161,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
             headline: "It's live! 🚀",
             content:
                 text("Hi {{name}}, your content just went out into the world on <b>{{workspace}}</b>:") +
-                panel(`<div class="txt" style="font-size:16px;font-weight:700;color:${INK};line-height:1.4;">{{title}}</div>`) +
+                panel(`<div class="txt" style="font-size:16px;font-weight:700;color:${INK};line-height:1.4;word-break:break-word;overflow-wrap:break-word;">{{title}}</div>`) +
                 button("View it live", "{{link}}"),
         }),
     },
@@ -184,7 +184,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
             headline: "{{count}} update{{plural}} for you",
             content:
                 text("Hi {{name}}, here's what happened on <b>{{workspace}}</b> since your last digest:") +
-                panel(`<div class="body-txt" style="font-size:14px;line-height:1.7;color:${BODY};">{{items}}</div>`) +
+                panel(`<div class="body-txt" style="font-size:14px;line-height:1.7;color:${BODY};word-break:break-word;overflow-wrap:break-word;">{{items}}</div>`) +
                 button("Open notifications", "{{link}}"),
         }),
     },
@@ -194,7 +194,7 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
 export const testEmailHtml = (): string =>
     layout({
         preheader: "Your SMTP connection works.",
-        illustration: "ill-welcome.jpg",
+        illustration: "ill-smtp_test.jpg",
         headline: "Your SMTP works ✅",
         content:
             text("This is a test email from <b>{{workspace}}</b>. Delivery, styling and images all made it through, so invites, resets and alerts are good to go.") +

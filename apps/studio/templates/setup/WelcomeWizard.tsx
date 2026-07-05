@@ -97,6 +97,14 @@ export default function WelcomeWizard() {
     async function onSubmit(e: FormEvent) {
         e.preventDefault();
         setError(null);
+        if (!workspaceName.trim()) {
+            setError("Workspace name is required.");
+            return;
+        }
+        if (!name.trim()) {
+            setError("Your name is required.");
+            return;
+        }
         if (password.length < MIN_PASSWORD) {
             setError(`Password must be at least ${MIN_PASSWORD} characters.`);
             return;
@@ -112,8 +120,8 @@ export default function WelcomeWizard() {
                 body: JSON.stringify({
                     email: email.trim(),
                     password,
-                    ...(name.trim() ? { name: name.trim() } : {}),
-                    ...(workspaceName.trim() ? { workspaceName: workspaceName.trim() } : {}),
+                    name: name.trim(),
+                    workspaceName: workspaceName.trim(),
                 }),
             });
             // Mark the instance claimed SYNCHRONOUSLY so the first-run gate updates
@@ -191,11 +199,11 @@ export default function WelcomeWizard() {
                     )}
 
                     <Field label="Workspace name" icon={<BriefcaseIcon />}>
-                        <input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} className={inputBase} placeholder="Acme Inc." />
+                        <input required value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} className={inputBase} placeholder="Acme Inc." />
                     </Field>
 
                     <Field label="Your name" icon={<UserIcon />}>
-                        <input value={name} onChange={(e) => setName(e.target.value)} className={inputBase} placeholder="Jane Doe" autoComplete="name" />
+                        <input required value={name} onChange={(e) => setName(e.target.value)} className={inputBase} placeholder="Jane Doe" autoComplete="name" />
                     </Field>
 
                     <Field label="Email" icon={<MailIcon />}>

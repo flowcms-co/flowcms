@@ -96,6 +96,9 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
             return {
                 siteUrl: SITE_URL || undefined,
                 owner: owner ? { name: owner.name ?? undefined, email: owner.email } : undefined,
+                // The friendly workspace name from setup, reported distinctly so the vendor can
+                // personalize the install-welcome email (company below is a broader legal/brand name).
+                workspace: ws?.name || undefined,
                 company: org?.legalName || ws?.brandName || ws?.name || undefined,
                 org: org ? { legalName: org.legalName ?? undefined, addressLines: org.addressLines, taxId: org.taxId ?? undefined, billingEmail: org.billingEmail ?? undefined } : undefined,
             };

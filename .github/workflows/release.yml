@@ -141,3 +141,22 @@ jobs:
           body_path: ${{ steps.notes.outputs.body_path }}
           generate_release_notes: ${{ steps.notes.outputs.generate }}
           make_latest: "true"
+
+      # Let the vendor console know a new version shipped, so it emails every install's
+      # super admin a short "new version available" heads-up linking to the update guide.
+      # Runs after the Release is live; best-effort, so a failure here never fails the release.
+      - name: Announce the new version to installs
+        continue-on-error: true
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET not set; skipping the install announcement."
+            exit 0
+          fi
+          echo "Announcing ${GITHUB_REF_NAME} to installs via admin.flowcms.co…"
+          curl -fsS -X POST https://admin.flowcms.co/api/hooks/product-update \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "content-type: application/json" \
+            -d "{\"version\":\"${GITHUB_REF_NAME}\"}" \
+            && echo "Announcement sent." || echo "Announcement call failed (non-fatal)."
