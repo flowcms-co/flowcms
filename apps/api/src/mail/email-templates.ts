@@ -81,7 +81,7 @@ const layout = (opts: { preheader: string; illustration: string; headline: strin
 <span style="display:none!important;max-height:0;overflow:hidden;opacity:0;color:transparent;">${opts.preheader}</span>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="bg" style="background:#f4f2fb;">
 <tr><td align="center" style="padding:34px 14px;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="wrap" style="width:600px;max-width:600px;">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="wrap" style="width:100%;max-width:600px;">
 
   <!-- Logo -->
   <tr><td align="center" style="padding:2px 0 26px;">${brandLockup()}</td></tr>
@@ -90,7 +90,7 @@ const layout = (opts: { preheader: string; illustration: string; headline: strin
   <tr><td class="card" style="background:#ffffff;border:1px solid #efedf8;border-radius:24px;box-shadow:0 18px 50px rgba(108,92,231,.13);overflow:hidden;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr><td class="ill-pad" style="padding:16px 16px 0;">
-        <img src="{{studioUrl}}/email/${opts.illustration}" width="100%" alt="" style="display:block;width:100%;height:auto;border-radius:16px;">
+        <img src="{{studioUrl}}/email/${opts.illustration}" width="560" alt="" style="display:block;width:100%;max-width:100%;height:auto;border-radius:16px;">
       </td></tr>
       <tr><td class="px" style="padding:28px 40px 6px;">
         <h1 class="h1 txt" style="margin:0 0 14px;font-family:${FONT};font-size:28px;line-height:1.2;font-weight:800;letter-spacing:-.03em;color:${INK};">${opts.headline}</h1>
