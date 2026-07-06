@@ -138,21 +138,89 @@ type UpdatesInfo = {
 /** Human label for the detected managed host (falls back to the generic wording). */
 const platformLabel = (p: UpdatesInfo["platform"]) => (p === "railway" ? "Railway" : p === "render" ? "Render" : "your platform");
 
+type PlatformUpdater = { platform: "railway" | "render" | null; configured: boolean; reason: string | null };
+
 /** Self-host version, update availability, and the one-click upgrade (Super-Admin,
  *  compose self-host). The upgrade flow + its app-wide lock live in UpgradeProvider. */
 const UpdatesCard = () => {
-    const [info, setInfo] = useState<(UpdatesInfo & { updaterAvailable?: boolean }) | null>(null);
+    const [info, setInfo] = useState<(UpdatesInfo & { updaterAvailable?: boolean; platformUpdater?: PlatformUpdater | null }) | null>(null);
     const [checking, setChecking] = useState(false);
+    const [secret, setSecret] = useState("");
+    const [savingSecret, setSavingSecret] = useState(false);
+    const [redeploying, setRedeploying] = useState(false);
+    const [redeployMsg, setRedeployMsg] = useState<string | null>(null);
     // The upgrade itself is owned by the app-wide UpgradeProvider, so its progress
     // overlay locks the whole studio (not just this card) until it finishes.
     const { progress, startUpgrade } = useUpgrade();
 
     const load = (force?: boolean) => {
         setChecking(true);
-        api<UpdatesInfo & { updaterAvailable?: boolean }>(`/system/updates${force ? "?force=1" : ""}`)
+        api<UpdatesInfo & { updaterAvailable?: boolean; platformUpdater?: PlatformUpdater | null }>(`/system/updates${force ? "?force=1" : ""}`)
             .then(setInfo)
             .catch(() => undefined)
             .finally(() => setChecking(false));
+    };
+
+    const savePlatformSecret = async () => {
+        if (!secret.trim()) return;
+        setSavingSecret(true);
+        try {
+            await api("/system/platform-updater", { method: "PUT", body: JSON.stringify({ secret }) });
+            setSecret("");
+            load();
+        } catch (e) {
+            setRedeployMsg(e instanceof Error ? e.message : "Couldn't save the credential.");
+        } finally {
+            setSavingSecret(false);
+        }
+    };
+
+    const disconnectPlatform = async () => {
+        await api("/system/platform-updater", { method: "DELETE" }).catch(() => undefined);
+        load();
+    };
+
+    /** One-click update on a managed host: the platform pulls the newest image and
+     *  restarts; we poll the version and reload the studio when the new one is live. */
+    const doPlatformUpdate = async () => {
+        if (!info?.latest) return;
+        if (
+            !(await confirm({
+                title: `Update to v${info.latest}?`,
+                message: `${platformLabel(info.platform)} pulls the newest image and restarts the service. The studio is briefly unavailable and reloads automatically on the new version; database migrations apply on boot.`,
+                confirmLabel: `Update to v${info.latest}`,
+            }))
+        )
+            return;
+        setRedeploying(true);
+        setRedeployMsg(`Asking ${platformLabel(info.platform)} to redeploy…`);
+        try {
+            await api("/system/platform-redeploy", { method: "POST", body: JSON.stringify({}) });
+        } catch (e) {
+            setRedeploying(false);
+            setRedeployMsg(e instanceof Error ? e.message : "The platform rejected the redeploy.");
+            return;
+        }
+        setRedeployMsg(`${platformLabel(info.platform)} is deploying the new version — this page reloads automatically when it's live.`);
+        const startedVersion = info.current;
+        const deadline = Date.now() + 8 * 60 * 1000;
+        const tick = async () => {
+            try {
+                const v = await api<{ version: string }>("/system/version");
+                if (v.version && v.version !== startedVersion) {
+                    window.location.reload();
+                    return;
+                }
+            } catch {
+                /* the service is restarting — keep polling */
+            }
+            if (Date.now() < deadline) setTimeout(tick, 6000);
+            else {
+                setRedeploying(false);
+                setRedeployMsg("Still deploying — refresh this page in a minute to see the new version.");
+            }
+        };
+        setTimeout(tick, 10000);
     };
 
     useEffect(() => {
@@ -204,6 +272,11 @@ const UpdatesCard = () => {
                             <Icon className="h-4 w-4 fill-white" name="download" />
                             Upgrade to v{info.latest}
                         </button>
+                    ) : info.deployment === "aio" && info.platformUpdater?.configured ? (
+                        <button type="button" onClick={doPlatformUpdate} disabled={redeploying} className="btn-primary btn-md disabled:opacity-60">
+                            <Icon className={`h-4 w-4 fill-white ${redeploying ? "animate-spin" : ""}`} name="download" />
+                            {redeploying ? "Updating…" : `Update to v${info.latest}`}
+                        </button>
                     ) : info.deployment === "aio" ? (
                         <span className="text-caption-2 text-grey">Managed by {platformLabel(info.platform)}</span>
                     ) : null}
@@ -214,11 +287,43 @@ const UpdatesCard = () => {
                 </p>
             )}
 
-            {info?.deployment === "aio" && (
+            {redeployMsg && <p className="mt-2 text-caption-2 font-medium text-primary dark:text-lilac">{redeployMsg}</p>}
+
+            {info?.deployment === "aio" && info.platformUpdater?.configured && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-lavender-mist/60 px-4 py-3 dark:bg-dark-3">
+                    <p className="text-caption-2 text-grey">
+                        One-click updates are enabled: updating asks {platformLabel(info.platform)} to pull the newest image and restart the service. Migrations apply automatically on boot.
+                    </p>
+                    <button type="button" onClick={disconnectPlatform} className="text-caption-2 font-semibold text-grey underline hover:text-ink dark:hover:text-white">
+                        Disconnect
+                    </button>
+                </div>
+            )}
+
+            {info?.deployment === "aio" && !info.platformUpdater?.configured && (
                 <div className="mt-3 rounded-lg bg-lavender-mist/60 px-4 py-3 dark:bg-dark-3">
                     <p className="text-caption-2 text-grey">
-                        This deployment is managed by {platformLabel(info.platform)}, so Flow CMS can&apos;t upgrade itself in place — {platformLabel(info.platform)} owns the container lifecycle. Move to a newer version by redeploying from {info.platform === "render" ? "Render" : platformLabel(info.platform)}&apos;s dashboard.
+                        This deployment is managed by {platformLabel(info.platform)}. Enable one-click updates so new versions install from right here — no dashboard needed:
+                        {" "}
+                        {info.platform === "railway"
+                            ? "paste a Railway API token (Railway → Account Settings → Tokens, or a project token)."
+                            : "paste this service's Deploy Hook URL (Render → the service → Settings → Deploy Hook)."}
                     </p>
+                    {info.platformUpdater?.reason && <p className="mt-1 text-caption-2 text-grey/80">{info.platformUpdater.reason}</p>}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <input
+                            type="password"
+                            value={secret}
+                            onChange={(e) => setSecret(e.target.value)}
+                            placeholder={info.platform === "railway" ? "Railway API token" : "https://api.render.com/deploy/srv-…"}
+                            className="h-10 w-full max-w-sm rounded-2xl border border-grey-light bg-white px-4 text-caption-1 text-black outline-none transition-colors placeholder:text-grey focus:border-primary dark:border-dark-3 dark:bg-dark-2 dark:text-white"
+                            autoComplete="off"
+                        />
+                        <button type="button" onClick={savePlatformSecret} disabled={savingSecret || !secret.trim()} className="btn-primary btn-md disabled:opacity-60">
+                            {savingSecret ? "Saving…" : "Enable one-click updates"}
+                        </button>
+                    </div>
+                    <p className="mt-1.5 text-caption-2 text-grey/70">Stored encrypted, like every other credential. You can disconnect any time.</p>
                     {info.platform === "railway" ? (
                         <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-caption-2 text-grey">
                             <li>Open your project in the Railway dashboard and select the Flow CMS service.</li>

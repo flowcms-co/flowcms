@@ -266,12 +266,22 @@ async function waitHealthy(seconds) {
 // are refreshed from the release, then Caddy reloads. A file the operator has
 // customized is never overwritten — sync skips it and records a warning.
 const RAW_BASE = process.env.CONFIG_RAW_BASE || "https://raw.githubusercontent.com/flowcms-co/flowcms";
-const SYNC_FILES = ["Caddyfile"]; // extend as more deploy files become release-managed
+const SYNC_FILES = ["Caddyfile", "docker-compose.prod.yml"]; // release-managed deploy files
 const SYNC_STATE_FILE = path.join(BACKUP_DIR, "config-sync.json");
 // sha256 of every stock version ever shipped, so pre-sync installs are
 // recognised as unmodified. (Pre-v1.6.1 Caddyfile.)
 const KNOWN_STOCK = {
-    Caddyfile: ["cd4bba6b9764c02f3a89ac85cb8a984eb674adb7c5e0d72298b4e440c58dedf2"],
+    Caddyfile: [
+        "cd4bba6b9764c02f3a89ac85cb8a984eb674adb7c5e0d72298b4e440c58dedf2", // pre-v1.6.1
+        "ea28007292397d2e3f59c5a18b4cbaf545087e65e8f5db0ff0236a454e050f65", // v1.6.1+
+    ],
+    "docker-compose.prod.yml": [
+        "4e42604d6c19d45954f9b46da35c64964a34ce05b889a71747ec245cfedb6dec",
+        "6c92ec64e555886e9a5fe7e656556bd5d2ea01df735140d3662ecb7be1f655ae",
+        "a9347c36c8778c3131f2ad73669715720f7763aea922bbb061d2d30f6f6adbb2",
+        "ab4525468f73b5528f1bb1ec053ba1e2cc117451b1be7ae009593a620005be9f",
+        "be726966e01c65da5b49ba335c8cf5a9ec71f5f7c3695929ddbecf3b6928f035",
+    ],
 };
 
 const sha256 = (txt) => createHash("sha256").update(txt).digest("hex");
@@ -351,7 +361,7 @@ async function syncDeployConfigs(targetTag, currentTag) {
             }
             await fsp.writeFile(localPath, target);
             state.hashes[file] = targetHash;
-            reload = true;
+            if (file === "Caddyfile") reload = true; // compose changes apply on the next `compose up`
             log(`config-sync: ${file} updated to ${targetTag}`);
             report.push({ file, action: "updated" });
         } catch (e) {
@@ -505,6 +515,13 @@ async function runUpgrade(ctx) {
         ctx.backupId = backup.id;
         await setStatus({ backupId: backup.id });
 
+        // Refresh release-managed deploy configs FIRST, so the rest of the
+        // upgrade (compose pull/up) runs against the new release's compose file
+        // and Caddy routes. Best-effort: a sync hiccup never blocks the upgrade.
+        await setStatus({ step: "config" });
+        const configSync = await syncDeployConfigs(imageTag(ctx.newApi), imageTag(ctx.curApi)).catch(() => []);
+        await setStatus({ configSync });
+
         await setStatus({ step: "download" });
         await writeEnvKeys({ API_IMAGE: ctx.newApi, STUDIO_IMAGE: ctx.newStudio });
         // Pull the new images, retrying a few times so a transient registry/network
@@ -540,13 +557,7 @@ async function runUpgrade(ctx) {
         await setStatus({ step: "verify" });
         if (!(await waitHealthy(HEALTH_TIMEOUT))) throw new Error("the new version did not become healthy in time");
 
-        // Refresh release-managed deploy configs (Caddyfile) and reload the proxy,
-        // so routing fixes ship with the release like everything else. Best-effort:
-        // a config-sync hiccup never fails an otherwise healthy upgrade.
-        await setStatus({ step: "config" });
-        const configSync = await syncDeployConfigs(imageTag(ctx.newApi), imageTag(ctx.curApi)).catch(() => []);
-
-        await setStatus({ status: "success", step: "done", configSync, finishedAt: new Date().toISOString() });
+        await setStatus({ status: "success", step: "done", finishedAt: new Date().toISOString() });
         upgraded = true;
     } catch (e) {
         await rollback(ctx, e?.message || String(e));

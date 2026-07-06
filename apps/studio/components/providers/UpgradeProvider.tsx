@@ -44,6 +44,7 @@ export const useUpgrade = () => {
 const UPGRADE_STEPS: { key: string; label: string; desc: string }[] = [
     { key: "starting", label: "Preparing", desc: "Setting up your environment" },
     { key: "backup", label: "Backing up", desc: "Creating a safe backup" },
+    { key: "config", label: "Refreshing config", desc: "Applying the release's deploy configuration" },
     { key: "download", label: "Downloading", desc: "Fetching the latest version" },
     { key: "migrate", label: "Updating database", desc: "Applying database changes" },
     { key: "verify", label: "Starting & verifying", desc: "Restarting services and running checks" },

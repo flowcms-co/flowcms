@@ -232,6 +232,7 @@ enum IntegrationType {
   CMS_CONNECTOR // strapi, etc.
   SEO_TOOL // pagespeed, keyword_data — BYO-key SEO data providers
   AUTOMATION // slack, zapier — outbound notification / automation connectors
+  HOSTING // railway, render — platform credential for one-click in-app updates
 }
 
 enum IntegrationStatus {

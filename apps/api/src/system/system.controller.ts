@@ -1,15 +1,18 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Res } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { PERMISSIONS } from "@flowcms/shared";
-import { RequirePermissions } from "../auth/decorators";
+import { CurrentUser, RequirePermissions } from "../auth/decorators";
+import type { AuthUser } from "../auth/types";
 import { SystemService } from "./system.service";
 import { UpdaterClient } from "./updater.client";
+import { PlatformUpdaterService } from "./platform.service";
 
 @Controller("system")
 export class SystemController {
     constructor(
         private readonly system: SystemService,
         private readonly updater: UpdaterClient,
+        private readonly platform: PlatformUpdaterService,
     ) {}
 
     /** The running version + how it's deployed (any member can read). */
@@ -22,9 +25,37 @@ export class SystemController {
     /** Whether a newer release is available (admin-only — drives the Updates panel). */
     @Get("updates")
     @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
-    async updates(@Query("force") force?: string) {
+    async updates(@CurrentUser() user: AuthUser, @Query("force") force?: string) {
         const info = await this.system.updates(force === "1" || force === "true");
-        return { ...info, updaterAvailable: this.updater.available() };
+        const platformUpdater = await this.platform.status(user.workspaceId).catch(() => null);
+        return { ...info, updaterAvailable: this.updater.available(), platformUpdater };
+    }
+
+    // ── One-click updates on managed hosts (Railway / Render) ─────────────────
+    @Get("platform-updater")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    platformUpdater(@CurrentUser() user: AuthUser) {
+        return this.platform.status(user.workspaceId);
+    }
+
+    @Put("platform-updater")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    savePlatformUpdater(@CurrentUser() user: AuthUser, @Body() body: { secret?: string }) {
+        return this.platform.save(user.workspaceId, body?.secret || "");
+    }
+
+    @Delete("platform-updater")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    disconnectPlatformUpdater(@CurrentUser() user: AuthUser) {
+        return this.platform.disconnect(user.workspaceId);
+    }
+
+    /** Ask the platform to redeploy with the newest image (the platform pulls and
+     *  restarts; migrations apply on boot — same effect as a dashboard redeploy). */
+    @Post("platform-redeploy")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    platformRedeploy(@CurrentUser() user: AuthUser) {
+        return this.platform.redeploy(user.workspaceId);
     }
 
     // ── Backups (Super-Admin). Performed by the updater sidecar. ──────────────
