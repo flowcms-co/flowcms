@@ -104,10 +104,12 @@ const AssetsPage = () => {
     const missingAlt = items.filter((a) => a.type === "image" && a.altSource === "none").length;
 
     // Folders derived from the real loaded assets: "All" plus any distinct
-    // (non-empty) folder names the API returned. No invented taxonomy.
+    // (non-empty) folder names the API returned. No invented taxonomy. The API
+    // reports unfoldered assets as folder "all" (its catch-all sentinel), so
+    // that value must not become a chip of its own next to "All assets".
     const folders = [
         { id: "all", name: "All assets" },
-        ...Array.from(new Set(items.map((a) => a.folder).filter(Boolean)))
+        ...Array.from(new Set(items.map((a) => a.folder).filter((name) => name && name !== "all")))
             .sort((a, b) => a.localeCompare(b))
             .map((name) => ({ id: name, name })),
     ];

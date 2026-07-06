@@ -46,53 +46,65 @@ function measure(el: Element): Rect {
     return { x: r.left, y: r.top, w: r.width, h: r.height };
 }
 
+/** The on-screen part of the target. Oversized targets (a full-height sidebar,
+ *  a full-width band) get spotlit only where they're visible, so the ring never
+ *  runs past the viewport. */
+function clampToViewport(r: Rect, vw: number, vh: number): Rect {
+    const x = Math.max(0, r.x);
+    const y = Math.max(0, r.y);
+    return { x, y, w: Math.max(0, Math.min(vw, r.x + r.w) - x), h: Math.max(0, Math.min(vh, r.y + r.h) - y) };
+}
+
+/** Nearest scrollable ancestor (falls back to the page scroller). */
+function scrollParentOf(el: Element): Element | null {
+    for (let n = el.parentElement; n; n = n.parentElement) {
+        const s = getComputedStyle(n);
+        if (/auto|scroll|overlay/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 1) return n;
+    }
+    return document.scrollingElement;
+}
+
+/** Keep clear of the mobile sticky header when nudging scroll position. */
+const SAFE_TOP = 88;
+
 /** Chapter images that failed to load (not shipped yet) — fall back to the
  *  SVG spot scene. Module-level so a miss is remembered across steps. */
 const MISSING_IMAGES = new Set<string>();
 
-/** Place the card below the target, else above, else beside; always clamped.
- *  Also computes the caret position so the card visibly points at its target. */
+/** Place the card below the target, else above, else beside — the first spot
+ *  where it fits fully on screen WITHOUT covering the spotlight. Only when no
+ *  clear strip exists (oversized targets) does it overlap at all, and then
+ *  tucked into the corner farthest from the target's center, never on top of
+ *  its middle. Computes the caret so the card visibly points at its target. */
 function cardPosition(rect: Rect, cardH: number, vw: number, vh: number): CardPlacement {
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
-    const below = rect.y + rect.h + PAD + GAP;
-    const above = rect.y - PAD - GAP - cardH;
-    let side: "top" | "bottom" | "left" | "right" | null;
-    let top: number;
-    if (below + cardH + MARGIN <= vh) {
-        top = below;
-        side = "top";
-    } else if (above >= MARGIN) {
-        top = above;
-        side = "bottom";
-    } else {
-        top = Math.max(MARGIN, Math.min(vh - cardH - MARGIN, rect.y));
-        side = null;
-    }
+    const hole = { top: rect.y - PAD, left: rect.x - PAD, right: rect.x + rect.w + PAD, bottom: rect.y + rect.h + PAD };
+    const clampX = (left: number) => Math.max(MARGIN, Math.min(vw - CARD_W - MARGIN, left));
+    const clampY = (top: number) => Math.max(MARGIN, Math.min(vh - cardH - MARGIN, top));
+    const arrowX = (left: number) => Math.max(28, Math.min(CARD_W - 28, cx - left));
+    const arrowY = (top: number) => Math.max(28, Math.min(cardH - 28, cy - top));
 
-    let left = cx - CARD_W / 2;
-    // Vertical stacking failed (tall target): slide out to a side instead.
-    const overlapsV = top < rect.y + rect.h + PAD && top + cardH > rect.y - PAD;
-    if (overlapsV) {
-        if (rect.x + rect.w + PAD + GAP + CARD_W + MARGIN <= vw) {
-            left = rect.x + rect.w + PAD + GAP;
-            side = "left";
-        } else if (rect.x - PAD - GAP - CARD_W >= MARGIN) {
-            left = rect.x - PAD - GAP - CARD_W;
-            side = "right";
-        } else {
-            side = null;
-        }
+    if (hole.bottom + GAP + cardH + MARGIN <= vh) {
+        const left = clampX(cx - CARD_W / 2);
+        return { top: hole.bottom + GAP, left, arrow: { side: "top", x: arrowX(left), y: 0 } };
     }
-    left = Math.max(MARGIN, Math.min(vw - CARD_W - MARGIN, left));
-
-    let arrow: CardPlacement["arrow"] = null;
-    if (side === "top" || side === "bottom") {
-        arrow = { side, x: Math.max(28, Math.min(CARD_W - 28, cx - left)), y: 0 };
-    } else if (side === "left" || side === "right") {
-        arrow = { side, x: 0, y: Math.max(28, Math.min(cardH - 28, cy - top)) };
+    if (hole.top - GAP - cardH >= MARGIN) {
+        const left = clampX(cx - CARD_W / 2);
+        return { top: hole.top - GAP - cardH, left, arrow: { side: "bottom", x: arrowX(left), y: 0 } };
     }
-    return { top, left, arrow };
+    if (hole.right + GAP + CARD_W + MARGIN <= vw) {
+        const top = clampY(cy - cardH / 2);
+        return { top, left: hole.right + GAP, arrow: { side: "left", x: 0, y: arrowY(top) } };
+    }
+    if (hole.left - GAP - CARD_W >= MARGIN) {
+        const top = clampY(cy - cardH / 2);
+        return { top, left: hole.left - GAP - CARD_W, arrow: { side: "right", x: 0, y: arrowY(top) } };
+    }
+    // Oversized target: overlap is unavoidable, so keep it to a corner sliver.
+    const top = vh - hole.bottom >= hole.top ? clampY(hole.bottom + GAP) : clampY(hole.top - GAP - cardH);
+    const left = cx <= vw / 2 ? vw - CARD_W - MARGIN : MARGIN;
+    return { top, left, arrow: null };
 }
 
 /**
@@ -114,49 +126,79 @@ const TourOverlay = () => {
     const stepKey = active ? `${active.chapter.id}:${step?.id}` : null;
 
     const [rect, setRect] = useState<Rect | null>(null);
+    const [vp, setVp] = useState(() =>
+        typeof window === "undefined" ? { w: 0, h: 0 } : { w: window.innerWidth, h: window.innerHeight },
+    );
     const [cardH, setCardH] = useState(300);
     const [celebrating, setCelebrating] = useState(false);
     const [, bumpImages] = useState(0);
     const cardRef = useRef<HTMLDivElement>(null);
 
-    // Locate + track the step target. Retries across a few frames so anchors
-    // that mount late (data fetches) are still found; gives up to a centered card.
+    // Locate + track the step target with a per-frame measure loop. Event
+    // listeners miss layout shifts that fire no scroll/resize (data loading in,
+    // entrance animations settling, panels expanding), which left the spotlight
+    // ring stranded where the target USED to be. One rect read per frame is
+    // cheap, runs only while a chapter plays, and setState bails when nothing
+    // moved. Anchors that mount late are picked up whenever they appear; a
+    // target that never appears leaves rect null (centered card).
     useLayoutEffect(() => {
         setRect(null);
-        if (!step?.target) return;
-        const selector = step.target;
+        const selector = step?.target;
         let cancelled = false;
-        let tries = 0;
+        let raf = 0;
+        let scrolled = false;
 
         const sync = () => {
             if (cancelled) return;
-            const el = document.querySelector(selector);
-            if (el) setRect((prev) => {
-                const nextRect = measure(el);
-                return prev && prev.x === nextRect.x && prev.y === nextRect.y && prev.w === nextRect.w && prev.h === nextRect.h
+            setVp((prev) =>
+                prev.w === window.innerWidth && prev.h === window.innerHeight
                     ? prev
-                    : nextRect;
-            });
-        };
-
-        const locate = () => {
-            if (cancelled) return;
-            const el = document.querySelector(selector);
-            if (!el) {
-                if (++tries < 30) requestAnimationFrame(locate);
-                return;
+                    : { w: window.innerWidth, h: window.innerHeight },
+            );
+            // Keep the card height current too: the one-shot measure effect can
+            // catch the OUTGOING card while AnimatePresence swaps steps, and a
+            // stale height makes the placement math hang the card over the
+            // spotlight.
+            const card = cardRef.current;
+            if (card) {
+                const h = card.offsetHeight;
+                setCardH((prev) => (prev === h ? prev : h));
             }
-            el.scrollIntoView({ block: "center", inline: "nearest", behavior: reduced ? "auto" : "smooth" });
-            sync();
-            // Re-measure once the smooth scroll settles.
-            window.setTimeout(sync, reduced ? 0 : 360);
+            if (!selector) return;
+            const el = document.querySelector(selector);
+            if (!el) return;
+            const next = measure(el);
+            // Hidden or zero-size match: treat as not found (keep last rect).
+            if (next.w <= 0 || next.h <= 0) return;
+            if (!scrolled) {
+                scrolled = true;
+                el.scrollIntoView({ block: "center", inline: "nearest", behavior: reduced ? "auto" : "smooth" });
+            }
+            setRect((prev) =>
+                prev && prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h
+                    ? prev
+                    : next,
+            );
         };
-        locate();
 
+        // Fast path: re-measure every painted frame.
+        const loop = () => {
+            if (cancelled) return;
+            sync();
+            raf = requestAnimationFrame(loop);
+        };
+        loop();
+        // Safety net: browsers suspend rAF in hidden/occluded tabs and can
+        // throttle it (battery saver, embedded frames). The interval keeps the
+        // measurement fresh regardless, and the listeners react instantly.
+        const timer = window.setInterval(sync, 200);
         window.addEventListener("resize", sync);
         window.addEventListener("scroll", sync, true);
+
         return () => {
             cancelled = true;
+            cancelAnimationFrame(raf);
+            window.clearInterval(timer);
             window.removeEventListener("resize", sync);
             window.removeEventListener("scroll", sync, true);
         };
@@ -166,6 +208,45 @@ const TourOverlay = () => {
     useLayoutEffect(() => {
         if (cardRef.current) setCardH(cardRef.current.offsetHeight);
     }, [stepKey, rect, connLoading]);
+
+    // When no clear strip fits the card (large target after the centering
+    // scroll), try to buy one below or above by nudging the scroll position —
+    // once per step, after measurements settle. Only if that's impossible does
+    // the card stay in its minimal-overlap corner.
+    const adjustedFor = useRef<string | null>(null);
+    useEffect(() => {
+        if (!rect || !stepKey || !step?.target || adjustedFor.current === stepKey) return;
+        const selector = step.target;
+        const timer = window.setTimeout(() => {
+            adjustedFor.current = stepKey;
+            const el = document.querySelector(selector);
+            const card = cardRef.current;
+            if (!el || !card) return;
+            const r = el.getBoundingClientRect();
+            const ch = card.offsetHeight;
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            // 8px cushion: a placement that only just fits is one subpixel of
+            // rounding away from falling back to the overlap corner, so treat
+            // near-fits as misses and nudge them into clean fits.
+            const fitsSomewhere =
+                r.bottom + PAD + GAP + ch + MARGIN + 8 <= h ||
+                r.top - PAD - GAP - ch >= MARGIN + 8 ||
+                r.right + PAD + GAP + CARD_W + MARGIN + 8 <= w ||
+                r.left - PAD - GAP - CARD_W >= MARGIN + 8;
+            if (fitsSomewhere) return;
+            const scroller = scrollParentOf(el);
+            if (!scroller) return;
+            const needBelow = r.bottom + PAD + GAP + ch + MARGIN + 8 - h;
+            const needAbove = MARGIN + 8 + ch + GAP + PAD - r.top;
+            if (needBelow > 0 && r.top - needBelow >= SAFE_TOP) {
+                scroller.scrollBy({ top: needBelow, behavior: reduced ? "auto" : "smooth" });
+            } else if (needAbove > 0 && r.bottom + needAbove <= h - MARGIN) {
+                scroller.scrollBy({ top: -needAbove, behavior: reduced ? "auto" : "smooth" });
+            }
+        }, 450);
+        return () => window.clearTimeout(timer);
+    }, [stepKey, rect, cardH, step?.target, reduced]);
 
     const isLast = !!active && active.index === active.chapter.steps.length - 1;
 
@@ -200,9 +281,12 @@ const TourOverlay = () => {
 
     const { chapter, index } = active;
     const met = step.requires ? requirementMet(step.requires, connected) : true;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const pos = rect ? cardPosition(rect, cardH, vw, vh) : null;
+    const vw = vp.w;
+    const vh = vp.h;
+    // The spotlight and the card both aim at the VISIBLE part of the target,
+    // so oversized anchors never push either off-screen.
+    const shown = rect ? clampToViewport(rect, vw, vh) : null;
+    const pos = shown && shown.w > 0 && shown.h > 0 ? cardPosition(shown, cardH, vw, vh) : null;
     const opener = !pos;
     const Scene = TOUR_SCENES[chapter.id];
     const image = chapter.image && !MISSING_IMAGES.has(chapter.image) ? chapter.image : null;
@@ -491,26 +575,31 @@ const TourOverlay = () => {
     );
 
     return (
-        <div className="fixed inset-0 z-[80]">
+        <div className="fixed inset-0 z-[80] overflow-hidden">
             {/* Click shield: the tour owns the screen while a chapter plays. */}
             <div className="absolute inset-0" aria-hidden />
 
-            {rect ? (
+            {shown && pos ? (
                 /* Spotlight: four ink panels dim everything around the hole.
                    (A giant box-shadow spread would be simpler, but Chromium
                    silently drops very large shadow spreads on composited
                    layers, so the dim never painted. Panels always paint.)
                    All five pieces share one transition so the hole glides as
                    a unit between targets. Keys keep React from recycling
-                   these nodes into the centered dim layer below. */
+                   these nodes into the centered dim layer below.
+                   Geometry is whole-pixel (no seams on fractional-DPR
+                   displays) and the hole is clamped to the viewport: where the
+                   target meets an edge, the ring is pushed just past it so no
+                   stray line paints (the root clips overflow). */
                 (() => {
                     const hole = {
-                        top: rect.y - PAD,
-                        left: rect.x - PAD,
-                        right: rect.x + rect.w + PAD,
-                        bottom: rect.y + rect.h + PAD,
-                        h: rect.h + PAD * 2,
+                        top: Math.round(Math.max(shown.y - PAD, -4)),
+                        left: Math.round(Math.max(shown.x - PAD, -4)),
+                        right: Math.round(Math.min(shown.x + shown.w + PAD, vw + 4)),
+                        bottom: Math.round(Math.min(shown.y + shown.h + PAD, vh + 4)),
                     };
+                    const holeW = Math.max(0, hole.right - hole.left);
+                    const holeH = Math.max(0, hole.bottom - hole.top);
                     const glide = reduced ? { duration: 0 } : { duration: 0.45, ease: EASE };
                     return (
                         <>
@@ -532,33 +621,37 @@ const TourOverlay = () => {
                                 key="dim-left"
                                 className="absolute left-0 bg-ink/50 backdrop-blur-sm"
                                 initial={false}
-                                animate={{ top: hole.top, height: hole.h, width: Math.max(0, hole.left) }}
+                                animate={{ top: hole.top, height: holeH, width: Math.max(0, hole.left) }}
                                 transition={glide}
                             />
                             <motion.div
                                 key="dim-right"
                                 className="absolute right-0 bg-ink/50 backdrop-blur-sm"
                                 initial={false}
-                                animate={{ top: hole.top, height: hole.h, width: Math.max(0, vw - hole.right) }}
+                                animate={{ top: hole.top, height: holeH, width: Math.max(0, vw - hole.right) }}
                                 transition={glide}
                             />
                             <motion.div
                                 key="spotlight"
                                 className="pointer-events-none absolute rounded-2xl ring-2 ring-primary/50"
                                 initial={false}
-                                animate={{
-                                    top: hole.top,
-                                    left: hole.left,
-                                    width: rect.w + PAD * 2,
-                                    height: hole.h,
-                                }}
+                                animate={{ top: hole.top, left: hole.left, width: holeW, height: holeH }}
                                 transition={glide}
                             >
-                                {/* Soft halo pulse on the live target (upgrade-overlay signature). */}
+                                {/* Soft halo pulse on the live target. A fixed-spread
+                                    shadow ripple, NOT a scale — scaling a viewport-wide
+                                    ring threw its border tens of pixels outside the
+                                    highlight. Shadow spread is the same few px on any
+                                    target size. */}
                                 {!reduced && (
                                     <motion.span
-                                        className="absolute -inset-1.5 rounded-[1.25rem] border-2 border-primary/60"
-                                        animate={{ opacity: [0.7, 0], scale: [0.98, 1.08] }}
+                                        className="absolute inset-0 rounded-2xl"
+                                        animate={{
+                                            boxShadow: [
+                                                "0 0 0 2px rgba(108, 92, 231, 0.5)",
+                                                "0 0 0 10px rgba(108, 92, 231, 0)",
+                                            ],
+                                        }}
                                         transition={{ duration: 1.6, ease: "easeOut", repeat: Infinity }}
                                     />
                                 )}
