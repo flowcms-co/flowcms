@@ -11,6 +11,12 @@
 :80 {
 	encode zstd gzip
 
+	# Studio-served route; must match before the general /api/* backend route.
+	@appversion path /api/app-version
+	handle @appversion {
+		reverse_proxy studio:3000
+	}
+
 	@backend path /api/* /media/* /socket.io/*
 	handle @backend {
 		reverse_proxy api:4000

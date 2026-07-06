@@ -10,6 +10,14 @@
 {$DOMAIN} {
 	encode zstd gzip
 
+	# /api/app-version is served by the STUDIO's Next server (the stale-shell
+	# healer compares the shell's build id against it), not the NestJS API.
+	# It must be matched before the general /api/* backend route.
+	@appversion path /api/app-version
+	handle @appversion {
+		reverse_proxy studio:3000
+	}
+
 	# API, uploaded media, and websockets -> NestJS backend.
 	@backend path /api/* /media/* /socket.io/*
 	handle @backend {
