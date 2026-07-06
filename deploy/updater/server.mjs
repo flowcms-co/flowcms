@@ -11,6 +11,7 @@
 
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -257,6 +258,113 @@ async function waitHealthy(seconds) {
     return false;
 }
 
+// ── Deploy-config sync ─────────────────────────────────────────────────────────
+// App code ships in images and updates itself; the deploy config files (the
+// Caddyfile) are host state written once at install time, so a release that
+// changes routing used to require a manual SSH edit. This closes that gap: on
+// every upgrade (and on boot after the updater self-updates) the managed files
+// are refreshed from the release, then Caddy reloads. A file the operator has
+// customized is never overwritten — sync skips it and records a warning.
+const RAW_BASE = process.env.CONFIG_RAW_BASE || "https://raw.githubusercontent.com/flowcms-co/flowcms";
+const SYNC_FILES = ["Caddyfile"]; // extend as more deploy files become release-managed
+const SYNC_STATE_FILE = path.join(BACKUP_DIR, "config-sync.json");
+// sha256 of every stock version ever shipped, so pre-sync installs are
+// recognised as unmodified. (Pre-v1.6.1 Caddyfile.)
+const KNOWN_STOCK = {
+    Caddyfile: ["cd4bba6b9764c02f3a89ac85cb8a984eb674adb7c5e0d72298b4e440c58dedf2"],
+};
+
+const sha256 = (txt) => createHash("sha256").update(txt).digest("hex");
+
+/** The ":tag" of an image ref, or null for :latest / untagged (not a release pin). */
+function imageTag(ref) {
+    const slash = ref.lastIndexOf("/");
+    const colon = ref.lastIndexOf(":");
+    const tag = colon > slash ? ref.slice(colon + 1) : "";
+    return tag && tag !== "latest" ? tag : null;
+}
+
+/** Fetch a deploy file from the release tag on GitHub; null when unavailable. */
+async function fetchRaw(tag, rel) {
+    try {
+        const res = await fetch(`${RAW_BASE}/${tag}/deploy/${rel}`, { signal: AbortSignal.timeout(10000) });
+        return res.ok ? await res.text() : null;
+    } catch {
+        return null;
+    }
+}
+
+async function readSyncState() {
+    try {
+        return JSON.parse(await fsp.readFile(SYNC_STATE_FILE, "utf8"));
+    } catch {
+        return { version: null, hashes: {} };
+    }
+}
+
+/** Graceful config reload; falls back to a container restart. Best-effort. */
+async function caddyReload() {
+    try {
+        await compose("exec", "-T", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile");
+    } catch {
+        await compose("restart", "caddy").catch(() => undefined);
+    }
+}
+
+/**
+ * Sync the managed deploy files to `targetTag`. `currentTag` (when known) is
+ * used as one more "is the local file stock?" reference. Never throws; returns
+ * a per-file report for the upgrade status.
+ */
+async function syncDeployConfigs(targetTag, currentTag) {
+    const report = [];
+    if (!targetTag) return report;
+    const state = await readSyncState();
+    let reload = false;
+    for (const file of SYNC_FILES) {
+        try {
+            const target = await fetchRaw(targetTag, file);
+            if (!target) {
+                report.push({ file, action: "skipped_unavailable" });
+                continue;
+            }
+            const localPath = path.join(FLOWCMS_DIR, file);
+            const local = await fsp.readFile(localPath, "utf8").catch(() => null);
+            const targetHash = sha256(target);
+            if (local !== null && sha256(local) === targetHash) {
+                report.push({ file, action: "unchanged" });
+                state.hashes[file] = targetHash;
+                continue;
+            }
+            // Overwrite only when the local file is provably stock: it matches a
+            // hash this updater wrote, a known shipped version, or the file as
+            // released at the currently-running version.
+            let stock = local === null || sha256(local) === state.hashes[file] || (KNOWN_STOCK[file] || []).includes(sha256(local));
+            if (!stock && currentTag) {
+                const cur = await fetchRaw(currentTag, file);
+                stock = cur !== null && sha256(local) === sha256(cur);
+            }
+            if (!stock) {
+                log(`config-sync: ${file} was modified locally; leaving it alone (update it from deploy/${file} at ${targetTag} if wanted)`);
+                report.push({ file, action: "skipped_customized" });
+                continue;
+            }
+            await fsp.writeFile(localPath, target);
+            state.hashes[file] = targetHash;
+            reload = true;
+            log(`config-sync: ${file} updated to ${targetTag}`);
+            report.push({ file, action: "updated" });
+        } catch (e) {
+            report.push({ file, action: "skipped_error", error: e?.message || String(e) });
+        }
+    }
+    if (reload) await caddyReload();
+    state.version = targetTag;
+    await fsp.mkdir(BACKUP_DIR, { recursive: true }).catch(() => undefined);
+    await fsp.writeFile(SYNC_STATE_FILE, JSON.stringify(state)).catch(() => undefined);
+    return report;
+}
+
 let job = null;
 async function setStatus(patch) {
     job = { ...(job || {}), ...patch, updatedAt: new Date().toISOString() };
@@ -432,7 +540,13 @@ async function runUpgrade(ctx) {
         await setStatus({ step: "verify" });
         if (!(await waitHealthy(HEALTH_TIMEOUT))) throw new Error("the new version did not become healthy in time");
 
-        await setStatus({ status: "success", step: "done", finishedAt: new Date().toISOString() });
+        // Refresh release-managed deploy configs (Caddyfile) and reload the proxy,
+        // so routing fixes ship with the release like everything else. Best-effort:
+        // a config-sync hiccup never fails an otherwise healthy upgrade.
+        await setStatus({ step: "config" });
+        const configSync = await syncDeployConfigs(imageTag(ctx.newApi), imageTag(ctx.curApi)).catch(() => []);
+
+        await setStatus({ status: "success", step: "done", configSync, finishedAt: new Date().toISOString() });
         upgraded = true;
     } catch (e) {
         await rollback(ctx, e?.message || String(e));
@@ -553,3 +667,23 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => log(`updater listening on :${PORT} (dir=${FLOWCMS_DIR})`));
+
+// Boot-time config sync: after an upgrade the updater self-updates and restarts,
+// so a NEW updater's first boot is the moment to apply any deploy-config changes
+// the running release ships (installs that upgraded before config-sync existed
+// pick up pending fixes here, with no manual work). Skips while an upgrade runs.
+(async () => {
+    try {
+        const cur = await currentImages();
+        const tag = imageTag(cur.api) || process.env.FLOWCMS_VERSION || null;
+        if (!tag) return;
+        const state = await readSyncState();
+        if (state.version === tag) return; // already synced for this release
+        const status = await getStatus();
+        if (status?.status === "running") return; // an upgrade will sync when it finishes
+        log(`config-sync: boot check for ${tag} (last synced: ${state.version || "never"})`);
+        await syncDeployConfigs(tag, state.version);
+    } catch (e) {
+        log("config-sync: boot check failed:", e?.message || e);
+    }
+})();
