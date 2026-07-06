@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime";
+import { useAuth } from "@/components/providers/AuthProvider";
 
 export type JobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "PARTIAL";
 export type JobFailure = { id: string; label: string; reason: string };
@@ -49,12 +50,15 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
-    // Seed only ACTIVE jobs on mount (terminal ones live in the bell, not the toaster).
+    // Seed only ACTIVE jobs once signed in (terminal ones live in the bell, not
+    // the toaster). Gated on auth so the login screen makes no /jobs request.
+    const { status: authStatus } = useAuth();
     useEffect(() => {
+        if (authStatus !== "authenticated") return;
         api<Job[]>("/jobs")
             .then((list) => setJobs((Array.isArray(list) ? list : []).filter((j) => ACTIVE.has(j.status))))
             .catch(() => undefined);
-    }, []);
+    }, [authStatus]);
 
     useRealtime<Partial<Job> & { id: string }>("job:update", (p) => upsert(p), []);
     useRealtime<Job>("job:done", (j) => upsert(j), []);

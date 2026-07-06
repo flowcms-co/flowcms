@@ -141,8 +141,17 @@ export class AuthController {
         return this.auth.resetPassword(dto.token, dto.password);
     }
 
+    /** The session probe. Anonymous is a valid answer here — the studio calls
+     *  this on every load (including the login screen) to decide auth state, so
+     *  an unauthenticated request returns 200 `{ user: null }` rather than a 401
+     *  that lands in the browser console as a failed request. */
+    @Public()
     @Get("me")
-    me(@CurrentUser() user: AuthUser) {
+    async me(@Req() req: Request) {
+        const cookieToken = (req as Request & { cookies?: Record<string, string> }).cookies?.[SESSION_COOKIE];
+        const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null;
+        const token = cookieToken ?? bearer;
+        const user = token ? await this.auth.validate(token, req.ip) : null;
         return { user };
     }
 

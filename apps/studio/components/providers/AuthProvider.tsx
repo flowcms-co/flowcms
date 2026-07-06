@@ -45,9 +45,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const refresh = useCallback(async () => {
         try {
-            const { user } = await api<{ user: AuthUser }>("/auth/me");
-            setUser(user);
-            setStatus("authenticated");
+            // /auth/me answers 200 for everyone: `user` is null when anonymous.
+            const { user } = await api<{ user: AuthUser | null }>("/auth/me");
+            setUser(user ?? null);
+            setStatus(user ? "authenticated" : "guest");
         } catch {
             setUser(null);
             setStatus("guest");

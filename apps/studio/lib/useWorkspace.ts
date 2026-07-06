@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/components/providers/AuthProvider";
 
 export type Workspace = {
     id: string;
@@ -27,19 +28,22 @@ export const LOCALE_NAMES: Record<string, string> = {
 };
 export const localeName = (code: string) => LOCALE_NAMES[code] ?? code;
 
-/** Fetch the current workspace's settings (locales etc.), module-cached. */
+/** Fetch the current workspace's settings (locales etc.), module-cached.
+ *  Gated on auth so components rendered before sign-in (e.g. on the login
+ *  screen) don't fire a request that 401s in the console. */
 export function useWorkspace() {
     const [ws, setWs] = useState<Workspace | null>(cache);
+    const { status } = useAuth();
 
     useEffect(() => {
-        if (cache) return;
+        if (cache || status !== "authenticated") return;
         api<Workspace>("/workspace")
             .then((w) => {
                 cache = w;
                 setWs(w);
             })
             .catch(() => {});
-    }, []);
+    }, [status]);
 
     return ws;
 }

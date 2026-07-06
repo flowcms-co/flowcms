@@ -5,8 +5,15 @@ import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { api } from "@/lib/api";
 import Icon from "@/components/ui/Icon";
+import { useAuth } from "@/components/providers/AuthProvider";
 import { useBrand } from "@/lib/useBrand";
 import { cn } from "@/lib/cn";
+
+/** Set while an upgrade this browser started is (or may still be) running, so a
+ *  reload mid-upgrade resumes the progress overlay. Its absence means no mount
+ *  time status request at all — deployments without the updater (managed PaaS)
+ *  never see a 503 in the console. */
+const INFLIGHT_KEY = "fc-upgrade-inflight";
 
 gsap.registerPlugin(useGSAP);
 
@@ -64,6 +71,11 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
                 setProgress(s);
                 if (["success", "rolled_back", "failed"].includes(s.status)) {
                     polling.current = false;
+                    try {
+                        localStorage.removeItem(INFLIGHT_KEY);
+                    } catch {
+                        /* storage unavailable */
+                    }
                     // Hard-reload on success so the browser fetches the new build's
                     // studio bundle + API (a soft refetch would keep stale assets).
                     if (s.status === "success") setTimeout(() => window.location.reload(), 2500);
@@ -80,16 +92,34 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     // Resume an already-running upgrade (e.g. the tab was reloaded mid-upgrade).
+    // Only asks the server when signed in AND this browser actually started an
+    // upgrade (the in-flight flag) — so normal loads, the login screen and
+    // managed deployments without the updater make no status request at all.
+    const { status: authStatus } = useAuth();
     useEffect(() => {
+        if (authStatus !== "authenticated") return;
+        let inflight = false;
+        try {
+            inflight = !!localStorage.getItem(INFLIGHT_KEY);
+        } catch {
+            /* storage unavailable */
+        }
+        if (!inflight) return;
         api<UpgradeStatus>("/system/upgrade/status")
             .then((s) => {
                 if (s && ["running", "rolling_back"].includes(s.status)) {
                     setProgress(s);
                     poll();
+                } else {
+                    try {
+                        localStorage.removeItem(INFLIGHT_KEY);
+                    } catch {
+                        /* storage unavailable */
+                    }
                 }
             })
             .catch(() => undefined);
-    }, [poll]);
+    }, [authStatus, poll]);
 
     // Freeze background scroll while the overlay is up.
     useEffect(() => {
@@ -104,6 +134,11 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
     const startUpgrade = useCallback(
         async (toVersion: string) => {
             setProgress({ status: "running", step: "starting", toVersion });
+            try {
+                localStorage.setItem(INFLIGHT_KEY, "1");
+            } catch {
+                /* storage unavailable — resume-after-reload just won't arm */
+            }
             try {
                 await api("/system/upgrade", { method: "POST", body: JSON.stringify({ toVersion }) });
             } catch {
