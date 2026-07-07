@@ -3,7 +3,7 @@ import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { AuthService } from "./auth.service";
 import { SESSION_COOKIE, sessionCookieOptions } from "./constants";
-import { CurrentUser, Public } from "./decorators";
+import { CurrentUser, Public, RequirePermissions } from "./decorators";
 import {
     ChangePasswordDto,
     DeleteAccountDto,
@@ -17,6 +17,7 @@ import {
     UpdateProfileDto,
 } from "./dto";
 import type { AuthUser } from "./types";
+import { PERMISSIONS } from "@flowcms/shared";
 
 @Controller("auth")
 export class AuthController {
@@ -62,6 +63,14 @@ export class AuthController {
         const result = await this.auth.deleteAccount(user.id, dto.password);
         res.clearCookie(SESSION_COOKIE, { ...sessionCookieOptions(), maxAge: undefined });
         return result;
+    }
+
+    /** The workspace's consent evidence trail (admins): who accepted the terms
+     *  and product emails, when, from which IPs and which browser/OS/device. */
+    @Get("consent-records")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    consentRecords() {
+        return this.auth.listConsentRecords();
     }
 
     /** Record Terms acceptance + email opt-in for the signed-in user. Shown as a
