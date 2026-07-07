@@ -220,7 +220,6 @@ const Security = () => {
                     <div data-tour="security-audit">
                         <AuditLog />
                     </div>
-                    <ConsentRecords />
                     <UpgradeLock
                         feature="audit_export"
                         icon="download"
@@ -235,88 +234,6 @@ const Security = () => {
                 </>
             )}
         </div>
-    );
-};
-
-type ConsentRow = {
-    id: string;
-    user: { name: string | null; email: string };
-    source: string;
-    termsAccepted: boolean;
-    marketingAccepted: boolean;
-    ip: string | null;
-    clientIp: string | null;
-    browser: string | null;
-    os: string | null;
-    device: string | null;
-    createdAt: string;
-};
-
-const CONSENT_SOURCE: Record<string, string> = { setup: "First-run setup", signup: "Signup", prompt: "In-app prompt" };
-
-/** Consent evidence trail (admins): every Terms + email-consent acceptance with
- *  the request IP, the browser-reported public IP and the parsed device. */
-const ConsentRecords = () => {
-    const [rows, setRows] = useState<ConsentRow[] | null>(null);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        api<ConsentRow[]>("/auth/consent-records")
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            .then(setRows)
-            .catch((e) => setError(e instanceof Error ? e.message : "Could not load consent records."));
-    }, []);
-
-    return (
-        <Card>
-            <div>
-                <h2 className="text-h5 text-black dark:text-white">Consent records</h2>
-                <p className="mt-1 text-caption-2 text-grey">
-                    Every acceptance of the Terms and email consent, with the evidence recorded at the moment it happened: when, from
-                    which IP (as the server saw it and as the browser reported itself), and on which browser and device.
-                </p>
-            </div>
-
-            {error && <div className="mt-4 rounded-lg bg-error/10 px-4 py-3 text-body-sm font-medium text-error">{error}</div>}
-            {rows && rows.length === 0 && <p className="mt-4 text-body-sm text-grey">No consent records yet.</p>}
-
-            {!!rows?.length && (
-                <div className="mt-4 overflow-x-auto">
-                    <table className="w-full text-left text-body-sm">
-                        <thead>
-                            <tr className="border-b border-grey-light text-caption-2 uppercase tracking-wide text-grey dark:border-grey-light/10">
-                                <th className="pb-2 pr-4 font-semibold">Person</th>
-                                <th className="pb-2 pr-4 font-semibold">Accepted</th>
-                                <th className="pb-2 pr-4 font-semibold">When</th>
-                                <th className="pb-2 pr-4 font-semibold">IP (server)</th>
-                                <th className="pb-2 pr-4 font-semibold">IP (browser)</th>
-                                <th className="pb-2 pr-4 font-semibold">Device</th>
-                                <th className="pb-2 font-semibold">Where</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rows.map((r) => (
-                                <tr key={r.id} className="border-b border-grey-light/60 last:border-b-0 dark:border-grey-light/5">
-                                    <td className="py-2.5 pr-4">
-                                        <span className="block text-black dark:text-white">{r.user.name || r.user.email}</span>
-                                        {r.user.name && <span className="block text-caption-2 text-grey">{r.user.email}</span>}
-                                    </td>
-                                    <td className="py-2.5 pr-4 whitespace-nowrap text-grey">
-                                        {r.termsAccepted && <span className="mr-2 inline-flex items-center gap-1 text-success"><Icon name="check" className="h-3.5 w-3.5 fill-success" />Terms</span>}
-                                        {r.marketingAccepted && <span className="inline-flex items-center gap-1 text-success"><Icon name="check" className="h-3.5 w-3.5 fill-success" />Emails</span>}
-                                    </td>
-                                    <td className="py-2.5 pr-4 whitespace-nowrap text-grey">{new Date(r.createdAt).toLocaleString()}</td>
-                                    <td className="py-2.5 pr-4 font-mono text-caption-1 text-grey">{r.ip || "—"}</td>
-                                    <td className="py-2.5 pr-4 font-mono text-caption-1 text-grey">{r.clientIp || "—"}</td>
-                                    <td className="py-2.5 pr-4 text-grey">{[r.browser, r.os, r.device].filter(Boolean).join(" · ") || "—"}</td>
-                                    <td className="py-2.5 text-grey">{CONSENT_SOURCE[r.source] ?? r.source}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </Card>
     );
 };
 

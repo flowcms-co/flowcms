@@ -109,29 +109,6 @@ export class AuthService {
         }
     }
 
-    /** Consent evidence for the whole workspace, newest first (admin view). */
-    async listConsentRecords() {
-        const rows = await this.prisma.consentRecord.findMany({
-            orderBy: { createdAt: "desc" },
-            take: 200,
-            include: { user: { select: { name: true, email: true } } },
-        });
-        return rows.map((r) => ({
-            id: r.id,
-            user: { name: r.user.name, email: r.user.email },
-            source: r.source,
-            termsAccepted: r.termsAccepted,
-            marketingAccepted: r.marketingAccepted,
-            ip: r.ip,
-            clientIp: r.clientIp,
-            browser: r.browser,
-            os: r.os,
-            device: r.device,
-            userAgent: r.userAgent,
-            createdAt: r.createdAt,
-        }));
-    }
-
     /** Record Terms acceptance + email opt-in for the signed-in user (accounts
      *  created before consent capture existed are asked once in-app). The
      *  original timestamps are kept if consent was somehow already recorded. */

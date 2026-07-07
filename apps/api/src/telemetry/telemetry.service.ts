@@ -12,9 +12,10 @@ import { LicenseService } from "../license/license.service";
  */
 const FIRST_DELAY_MS = 30_000;
 const INTERVAL_MS = 12 * 60 * 60 * 1000; // twice daily
-const ADMIN_URL = (process.env.FLOWCMS_ADMIN_URL || "https://admin.flowcms.co").replace(/\/+$/, "");
-const VERSION = (process.env.FLOWCMS_VERSION || "0.1.0").replace(/^v/, "");
-const SITE_URL = (process.env.STUDIO_URL || "").replace(/\/+$/, ""); // this install's public origin
+// Read at call time, not module scope: env files load after module imports in dev.
+const adminUrl = () => (process.env.FLOWCMS_ADMIN_URL || "https://admin.flowcms.co").replace(/\/+$/, "");
+const appVersion = () => (process.env.FLOWCMS_VERSION || "0.1.0").replace(/^v/, "");
+const siteUrl = () => (process.env.STUDIO_URL || "").replace(/\/+$/, ""); // this install's public origin
 
 type HeartbeatResponse = { ok: true; latestVersion?: string; license?: { status: string; token?: string } };
 
@@ -89,12 +90,17 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     private async profile() {
         try {
             const [owner, ws, org] = await Promise.all([
-                this.prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, email: true, termsAcceptedAt: true, marketingOptInAt: true } }),
+                this.prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true, name: true, email: true, termsAcceptedAt: true, marketingOptInAt: true } }),
                 this.prisma.workspace.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, brandName: true } }),
                 this.prisma.orgProfile.findUnique({ where: { id: "singleton" } }),
             ]);
+            // Evidence behind the owner's acceptance (latest record), reported to
+            // the vendor with the consent timestamps it substantiates.
+            const consentRecord = owner
+                ? await this.prisma.consentRecord.findFirst({ where: { userId: owner.id }, orderBy: { createdAt: "desc" } }).catch(() => null)
+                : null;
             return {
-                siteUrl: SITE_URL || undefined,
+                siteUrl: siteUrl() || undefined,
                 owner: owner
                     ? {
                           name: owner.name ?? undefined,
@@ -103,6 +109,18 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
                           // and the product/marketing opt-in, so the vendor's lists stay right.
                           termsAcceptedAt: owner.termsAcceptedAt?.toISOString(),
                           marketingOptInAt: owner.marketingOptInAt?.toISOString(),
+                          consent: consentRecord
+                              ? {
+                                    at: consentRecord.createdAt.toISOString(),
+                                    source: consentRecord.source,
+                                    ip: consentRecord.ip ?? undefined,
+                                    clientIp: consentRecord.clientIp ?? undefined,
+                                    userAgent: consentRecord.userAgent ?? undefined,
+                                    browser: consentRecord.browser ?? undefined,
+                                    os: consentRecord.os ?? undefined,
+                                    device: consentRecord.device ?? undefined,
+                                }
+                              : undefined,
                       }
                     : undefined,
                 // The friendly workspace name from setup, reported distinctly so the vendor can
@@ -112,7 +130,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
                 org: org ? { legalName: org.legalName ?? undefined, addressLines: org.addressLines, taxId: org.taxId ?? undefined, billingEmail: org.billingEmail ?? undefined } : undefined,
             };
         } catch {
-            return { siteUrl: SITE_URL || undefined };
+            return { siteUrl: siteUrl() || undefined };
         }
     }
 
@@ -124,12 +142,12 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
             const body = {
                 instanceId: await this.instanceId(),
                 edition,
-                version: VERSION,
+                version: appVersion(),
                 licenseToken: (await this.rawToken()) ?? undefined,
                 metrics: await this.metrics(),
                 ...(await this.profile()),
             };
-            const res = await fetch(`${ADMIN_URL}/api/ingest/heartbeat`, {
+            const res = await fetch(`${adminUrl()}/api/ingest/heartbeat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
