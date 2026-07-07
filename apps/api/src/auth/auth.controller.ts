@@ -11,7 +11,7 @@ import {
     NotificationPrefsDto,
     ResetPasswordDto,
     SigninDto,
-    SignupDto,
+    
     TwoFactorCodeDto,
     UpdateAvatarDto,
     UpdateProfileDto,
@@ -64,12 +64,15 @@ export class AuthController {
         return result;
     }
 
-    @Public()
-    @Throttle({ default: { limit: 10, ttl: 60_000 } })
-    @Post("signup")
-    async signup(@Body() dto: SignupDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-        const { token, user } = await this.auth.signup(dto, this.meta(req));
-        res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
+    /** Record Terms acceptance + email opt-in for the signed-in user. Shown as a
+     *  one-time prompt to accounts that predate consent capture. */
+    @Post("consent")
+    async consent(@CurrentUser() me: AuthUser, @Body() body: { clientIp?: string }, @Req() req: Request) {
+        const user = await this.auth.acceptConsent(me.id, {
+            ip: req.ip,
+            clientIp: typeof body?.clientIp === "string" ? body.clientIp : undefined,
+            userAgent: req.headers["user-agent"],
+        });
         return { user };
     }
 

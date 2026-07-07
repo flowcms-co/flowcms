@@ -147,11 +147,10 @@ const UpdatesCard = () => {
     const [checking, setChecking] = useState(false);
     const [secret, setSecret] = useState("");
     const [savingSecret, setSavingSecret] = useState(false);
-    const [redeploying, setRedeploying] = useState(false);
-    const [redeployMsg, setRedeployMsg] = useState<string | null>(null);
+    const [secretMsg, setSecretMsg] = useState<string | null>(null);
     // The upgrade itself is owned by the app-wide UpgradeProvider, so its progress
     // overlay locks the whole studio (not just this card) until it finishes.
-    const { progress, startUpgrade } = useUpgrade();
+    const { progress, startUpgrade, startPlatformUpdate } = useUpgrade();
 
     const load = (force?: boolean) => {
         setChecking(true);
@@ -164,12 +163,13 @@ const UpdatesCard = () => {
     const savePlatformSecret = async () => {
         if (!secret.trim()) return;
         setSavingSecret(true);
+        setSecretMsg(null);
         try {
             await api("/system/platform-updater", { method: "PUT", body: JSON.stringify({ secret }) });
             setSecret("");
             load();
         } catch (e) {
-            setRedeployMsg(e instanceof Error ? e.message : "Couldn't save the credential.");
+            setSecretMsg(e instanceof Error ? e.message : "Couldn't save the credential.");
         } finally {
             setSavingSecret(false);
         }
@@ -180,8 +180,8 @@ const UpdatesCard = () => {
         load();
     };
 
-    /** One-click update on a managed host: the platform pulls the newest image and
-     *  restarts; we poll the version and reload the studio when the new one is live. */
+    /** One-click update on a managed host: same locked full-screen overlay as a
+     *  compose upgrade (UpgradeProvider drives the redeploy, polling and reload). */
     const doPlatformUpdate = async () => {
         if (!info?.latest) return;
         if (
@@ -192,35 +192,7 @@ const UpdatesCard = () => {
             }))
         )
             return;
-        setRedeploying(true);
-        setRedeployMsg(`Asking ${platformLabel(info.platform)} to redeploy…`);
-        try {
-            await api("/system/platform-redeploy", { method: "POST", body: JSON.stringify({}) });
-        } catch (e) {
-            setRedeploying(false);
-            setRedeployMsg(e instanceof Error ? e.message : "The platform rejected the redeploy.");
-            return;
-        }
-        setRedeployMsg(`${platformLabel(info.platform)} is deploying the new version — this page reloads automatically when it's live.`);
-        const startedVersion = info.current;
-        const deadline = Date.now() + 8 * 60 * 1000;
-        const tick = async () => {
-            try {
-                const v = await api<{ version: string }>("/system/version");
-                if (v.version && v.version !== startedVersion) {
-                    window.location.reload();
-                    return;
-                }
-            } catch {
-                /* the service is restarting — keep polling */
-            }
-            if (Date.now() < deadline) setTimeout(tick, 6000);
-            else {
-                setRedeploying(false);
-                setRedeployMsg("Still deploying — refresh this page in a minute to see the new version.");
-            }
-        };
-        setTimeout(tick, 10000);
+        await startPlatformUpdate(info.latest, info.platform);
     };
 
     useEffect(() => {
@@ -273,9 +245,9 @@ const UpdatesCard = () => {
                             Upgrade to v{info.latest}
                         </button>
                     ) : info.deployment === "aio" && info.platformUpdater?.configured ? (
-                        <button type="button" onClick={doPlatformUpdate} disabled={redeploying} className="btn-primary btn-md disabled:opacity-60">
-                            <Icon className={`h-4 w-4 fill-white ${redeploying ? "animate-spin" : ""}`} name="download" />
-                            {redeploying ? "Updating…" : `Update to v${info.latest}`}
+                        <button type="button" onClick={doPlatformUpdate} disabled={!!progress} className="btn-primary btn-md disabled:opacity-60">
+                            <Icon className="h-4 w-4 fill-white" name="rocket" />
+                            {`Update to v${info.latest}`}
                         </button>
                     ) : info.deployment === "aio" ? (
                         <span className="text-caption-2 text-grey">Managed by {platformLabel(info.platform)}</span>
@@ -287,7 +259,6 @@ const UpdatesCard = () => {
                 </p>
             )}
 
-            {redeployMsg && <p className="mt-2 text-caption-2 font-medium text-primary dark:text-lilac">{redeployMsg}</p>}
 
             {info?.deployment === "aio" && info.platformUpdater?.configured && (
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-lavender-mist/60 px-4 py-3 dark:bg-dark-3">
@@ -323,6 +294,7 @@ const UpdatesCard = () => {
                             {savingSecret ? "Saving…" : "Enable one-click updates"}
                         </button>
                     </div>
+                    {secretMsg && <p className="mt-1.5 text-caption-2 font-medium text-error">{secretMsg}</p>}
                     <p className="mt-1.5 text-caption-2 text-grey/70">Stored encrypted, like every other credential. You can disconnect any time.</p>
                     {info.platform === "railway" ? (
                         <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-caption-2 text-grey">

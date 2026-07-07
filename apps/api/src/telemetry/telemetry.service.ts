@@ -89,13 +89,22 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     private async profile() {
         try {
             const [owner, ws, org] = await Promise.all([
-                this.prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, email: true } }),
+                this.prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, email: true, termsAcceptedAt: true, marketingOptInAt: true } }),
                 this.prisma.workspace.findFirst({ orderBy: { createdAt: "asc" }, select: { name: true, brandName: true } }),
                 this.prisma.orgProfile.findUnique({ where: { id: "singleton" } }),
             ]);
             return {
                 siteUrl: SITE_URL || undefined,
-                owner: owner ? { name: owner.name ?? undefined, email: owner.email } : undefined,
+                owner: owner
+                    ? {
+                          name: owner.name ?? undefined,
+                          email: owner.email,
+                          // Consent capture: ToS acceptance (incl. essential service emails)
+                          // and the product/marketing opt-in, so the vendor's lists stay right.
+                          termsAcceptedAt: owner.termsAcceptedAt?.toISOString(),
+                          marketingOptInAt: owner.marketingOptInAt?.toISOString(),
+                      }
+                    : undefined,
                 // The friendly workspace name from setup, reported distinctly so the vendor can
                 // personalize the install-welcome email (company below is a broader legal/brand name).
                 workspace: ws?.name || undefined,

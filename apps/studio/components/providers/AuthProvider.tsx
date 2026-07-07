@@ -12,6 +12,8 @@ export type AuthUser = {
     avatarStyle?: string | null;
     avatarBg?: string | null;
     twoFactorEnabled?: boolean;
+    /** Terms acceptance timestamp; null = the one-time consent prompt shows. */
+    termsAcceptedAt?: string | null;
     workspaceId: string;
     role: {
         id: string;
@@ -31,7 +33,6 @@ type AuthContextValue = {
     user: AuthUser | null;
     status: AuthStatus;
     signin: (email: string, password: string, code?: string) => Promise<{ twoFactorRequired?: boolean }>;
-    signup: (name: string, email: string, password: string, vibe?: { avatarStyle?: string; gender?: string; avatarBg?: string }) => Promise<void>;
     signout: () => Promise<void>;
     refresh: () => Promise<void>;
     can: (permission: string) => boolean;
@@ -75,15 +76,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return {};
     }, []);
 
-    const signup = useCallback(async (name: string, email: string, password: string, vibe?: { avatarStyle?: string; gender?: string; avatarBg?: string }) => {
-        const { user } = await api<{ user: AuthUser }>("/auth/signup", {
-            method: "POST",
-            body: JSON.stringify({ name, email, password, ...vibe }),
-        });
-        setUser(user);
-        setStatus("authenticated");
-    }, []);
-
     const signout = useCallback(async () => {
         try {
             await api("/auth/signout", { method: "POST" });
@@ -102,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     return (
-        <AuthContext.Provider value={{ user, status, signin, signup, signout, refresh, can }}>
+        <AuthContext.Provider value={{ user, status, signin, signout, refresh, can }}>
             {children}
         </AuthContext.Provider>
     );

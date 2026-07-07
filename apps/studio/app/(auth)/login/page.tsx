@@ -137,12 +137,7 @@ export default function LoginPage() {
                 </>
             )}
 
-            <p className="mt-6 text-center text-body-sm text-grey">
-                New here?{" "}
-                <Link href="/signup" className="font-semibold text-primary hover:opacity-70">
-                    Create an account
-                </Link>
-            </p>
+
 
             {process.env.NODE_ENV !== "production" && (
                 <p className="mt-6 rounded-2xl bg-lavender-mist px-4 py-3 text-center text-caption-1 text-grey dark:bg-dark-2">

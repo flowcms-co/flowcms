@@ -9,6 +9,7 @@ import { JobsProvider } from "@/components/providers/JobsProvider";
 import { ConfirmProvider } from "@/components/providers/ConfirmProvider";
 import { UpgradeProvider } from "@/components/providers/UpgradeProvider";
 import FirstRunGate from "@/components/providers/FirstRunGate";
+import ConsentGate from "@/components/providers/ConsentGate";
 import SilenceChartWarning from "@/components/providers/SilenceChartWarning";
 import VersionGate from "@/components/providers/VersionGate";
 import type { LicenseCookie } from "@/lib/brand";
@@ -29,7 +30,10 @@ export function Providers({ children, initialLicense }: { children: ReactNode; i
                         <JobsProvider>
                             <ConfirmProvider>
                                 <UpgradeProvider>
-                                    <FirstRunGate>{children}</FirstRunGate>
+                                    <FirstRunGate>
+                                        <ConsentGate />
+                                        {children}
+                                    </FirstRunGate>
                                 </UpgradeProvider>
                             </ConfirmProvider>
                         </JobsProvider>

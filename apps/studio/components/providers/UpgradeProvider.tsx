@@ -14,6 +14,9 @@ import { cn } from "@/lib/cn";
  *  time status request at all — deployments without the updater (managed PaaS)
  *  never see a 503 in the console. */
 const INFLIGHT_KEY = "fc-upgrade-inflight";
+/** Same idea for one-click updates on managed hosts (Railway / Render): the
+ *  platform rollout survives a tab reload, so the overlay must too. */
+const PLATFORM_INFLIGHT_KEY = "fc-platform-update-inflight";
 
 gsap.registerPlugin(useGSAP);
 
@@ -25,13 +28,22 @@ export type UpgradeStatus = {
     finishedAt?: string | null;
     reconnecting?: boolean;
     backupId?: string | null;
+    /** "platform" = managed-host redeploy (no updater sidecar, no backup). */
+    mode?: "updater" | "platform";
+    /** Display name of the managed host driving the rollout. */
+    platform?: string | null;
 };
+
+export type PlatformKind = "railway" | "render" | null;
 
 type Ctx = {
     progress: UpgradeStatus | null;
     restoring: boolean;
     startUpgrade: (toVersion: string) => Promise<void>;
+    startPlatformUpdate: (toVersion: string, platform: PlatformKind) => Promise<void>;
 };
+
+const platformName = (p: PlatformKind) => (p === "railway" ? "Railway" : p === "render" ? "Render" : "your platform");
 
 const UpgradeContext = createContext<Ctx | null>(null);
 
@@ -48,6 +60,14 @@ const UPGRADE_STEPS: { key: string; label: string; desc: string }[] = [
     { key: "download", label: "Downloading", desc: "Fetching the latest version" },
     { key: "migrate", label: "Updating database", desc: "Applying database changes" },
     { key: "verify", label: "Starting & verifying", desc: "Restarting services and running checks" },
+];
+
+/** Managed-host rollouts report no fine-grained progress, so the tracker shows
+ *  the three phases the studio can actually observe. */
+const platformSteps = (platform: string): { key: string; label: string; desc: string }[] => [
+    { key: "request", label: "Requesting deploy", desc: `Asking ${platform} to roll out the new version` },
+    { key: "deploy", label: `${platform} is deploying`, desc: "The new image is being pulled and built" },
+    { key: "verify", label: "Restarting & verifying", desc: "Waiting for the new version to come live" },
 ];
 
 /**
@@ -92,6 +112,86 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
         setTimeout(tick, 2000);
     }, []);
 
+    /** Watch /system/version until the managed host serves a different build.
+     *  The endpoint going unreachable is the restart itself, not an error. */
+    const pollPlatform = useCallback((toVersion: string, startedVersion: string | null, platform: string, deadline: number) => {
+        if (polling.current) return;
+        polling.current = true;
+        const clear = () => {
+            polling.current = false;
+            try {
+                localStorage.removeItem(PLATFORM_INFLIGHT_KEY);
+            } catch {
+                /* storage unavailable */
+            }
+        };
+        const tick = async () => {
+            try {
+                const v = await api<{ version: string }>("/system/version");
+                const changed = v.version && (startedVersion ? v.version !== startedVersion : v.version === toVersion.replace(/^v/, ""));
+                if (changed) {
+                    clear();
+                    setProgress({ status: "success", toVersion: v.version, mode: "platform", platform });
+                    // Hard-reload so the browser picks up the new build's assets.
+                    setTimeout(() => window.location.reload(), 2500);
+                    return;
+                }
+                setProgress((prev) => (prev ? { ...prev, step: "deploy", reconnecting: false } : prev));
+            } catch {
+                // The service is swapping over to the new build.
+                setProgress((prev) => ({ ...(prev ?? { status: "running", toVersion, mode: "platform" as const, platform }), step: "verify", reconnecting: true }));
+            }
+            if (Date.now() < deadline) setTimeout(tick, 6000);
+            else {
+                clear();
+                setProgress((prev) => ({
+                    ...(prev ?? { toVersion, mode: "platform" as const, platform }),
+                    status: "failed",
+                    error: `${platform} is still rolling out. Nothing is wrong with your site; refresh this page in a minute and the new version appears once the rollout completes.`,
+                }));
+            }
+        };
+        setTimeout(tick, 8000);
+    }, []);
+
+    /** One-click update on a managed host: ask the platform to redeploy with the
+     *  newest image, then hold the same full-screen lock as a compose upgrade
+     *  until the new version answers. */
+    const startPlatformUpdate = useCallback(
+        async (toVersion: string, platformKind: PlatformKind) => {
+            const platform = platformName(platformKind);
+            setProgress({ status: "running", step: "request", toVersion, mode: "platform", platform });
+            let startedVersion: string | null = null;
+            try {
+                startedVersion = (await api<{ version: string }>("/system/version")).version ?? null;
+            } catch {
+                /* fall back to matching the target version */
+            }
+            try {
+                await api("/system/platform-redeploy", { method: "POST", body: JSON.stringify({}) });
+            } catch (e) {
+                setProgress({
+                    status: "failed",
+                    step: "request",
+                    toVersion,
+                    mode: "platform",
+                    platform,
+                    error: e instanceof Error ? e.message : `${platform} rejected the redeploy request.`,
+                });
+                return;
+            }
+            const deadline = Date.now() + 10 * 60 * 1000;
+            try {
+                localStorage.setItem(PLATFORM_INFLIGHT_KEY, JSON.stringify({ toVersion, startedVersion, platformKind, deadline }));
+            } catch {
+                /* storage unavailable — resume-after-reload just won't arm */
+            }
+            setProgress((prev) => (prev ? { ...prev, step: "deploy" } : prev));
+            pollPlatform(toVersion, startedVersion, platform, deadline);
+        },
+        [pollPlatform],
+    );
+
     // Resume an already-running upgrade (e.g. the tab was reloaded mid-upgrade).
     // Only asks the server when signed in AND this browser actually started an
     // upgrade (the in-flight flag) — so normal loads, the login screen and
@@ -121,6 +221,50 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
             })
             .catch(() => undefined);
     }, [authStatus, poll]);
+
+    // Resume a managed-host rollout after a reload. If this load already runs
+    // the new version, the rollout finished while the tab was away — clear the
+    // flag silently (this page IS the new build).
+    useEffect(() => {
+        if (authStatus !== "authenticated") return;
+        let raw: string | null = null;
+        try {
+            raw = localStorage.getItem(PLATFORM_INFLIGHT_KEY);
+        } catch {
+            /* storage unavailable */
+        }
+        if (!raw) return;
+        const drop = () => {
+            try {
+                localStorage.removeItem(PLATFORM_INFLIGHT_KEY);
+            } catch {
+                /* storage unavailable */
+            }
+        };
+        let saved: { toVersion: string; startedVersion: string | null; platformKind: PlatformKind; deadline: number } | null = null;
+        try {
+            saved = JSON.parse(raw);
+        } catch {
+            /* corrupt flag */
+        }
+        if (!saved?.toVersion || !saved.deadline || Date.now() > saved.deadline) {
+            drop();
+            return;
+        }
+        const platform = platformName(saved.platformKind);
+        const { toVersion, startedVersion, deadline } = saved;
+        api<{ version: string }>("/system/version")
+            .then((v) => {
+                const changed = v.version && (startedVersion ? v.version !== startedVersion : v.version === toVersion.replace(/^v/, ""));
+                if (changed) {
+                    drop();
+                    return;
+                }
+                setProgress({ status: "running", step: "deploy", toVersion, mode: "platform", platform });
+                pollPlatform(toVersion, startedVersion, platform, deadline);
+            })
+            .catch(() => undefined);
+    }, [authStatus, pollPlatform]);
 
     // Freeze background scroll while the overlay is up.
     useEffect(() => {
@@ -163,7 +307,7 @@ export function UpgradeProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     return (
-        <UpgradeContext.Provider value={{ progress, restoring, startUpgrade }}>
+        <UpgradeContext.Provider value={{ progress, restoring, startUpgrade, startPlatformUpdate }}>
             {children}
             {progress && <UpgradeModal p={progress} onRestore={restoreBackup} restoring={restoring} onClose={() => setProgress(null)} />}
         </UpgradeContext.Provider>
@@ -197,9 +341,13 @@ const UpgradeModal = ({ p, onRestore, restoring, onClose }: { p: UpgradeStatus; 
     const active = p.status === "running" || p.status === "rolling_back";
     const terminal = done || failed || rolledBack;
 
+    // Managed-host rollouts show the phases the studio can observe; updater
+    // upgrades show the sidecar's full pipeline.
+    const steps = p.mode === "platform" ? platformSteps(p.platform || "Your platform") : UPGRADE_STEPS;
+
     // `success` lights every step; a known step lights that row and completes the
     // ones before it. An unknown step (-1) leaves the first row as the active one.
-    const idx = done ? UPGRADE_STEPS.length : Math.max(0, UPGRADE_STEPS.findIndex((s) => s.key === p.step));
+    const idx = done ? steps.length : Math.max(0, steps.findIndex((s) => s.key === p.step));
 
     // One-shot entrance: backdrop fade, card settle, header + step stagger, footer.
     useGSAP(
@@ -272,9 +420,9 @@ const UpgradeModal = ({ p, onRestore, restoring, onClose }: { p: UpgradeStatus; 
                     <>
                         {/* Step tracker */}
                         <ol className="mt-6 flex flex-col">
-                            {UPGRADE_STEPS.map((s, i) => {
+                            {steps.map((s, i) => {
                                 const state = i < idx ? "done" : i === idx ? "active" : "pending";
-                                const isLast = i === UPGRADE_STEPS.length - 1;
+                                const isLast = i === steps.length - 1;
                                 return (
                                     <li key={s.key} className="u-row relative flex gap-3.5 pb-5 last:pb-0">
                                         {!isLast && (

@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsObject, IsOptional, IsString, MinLength } from "class-validator";
+import { Equals, IsEmail, IsIn, IsObject, IsOptional, IsString, MinLength } from "class-validator";
 
 export class UpdateProfileDto {
     @IsOptional() @IsString() name?: string;
@@ -18,23 +18,6 @@ export class NotificationPrefsDto {
 
 export class DeleteAccountDto {
     @IsString() password!: string;
-}
-
-export class SignupDto {
-    @IsOptional()
-    @IsString()
-    name?: string;
-
-    @IsEmail()
-    email!: string;
-
-    @MinLength(12, { message: "Password must be at least 12 characters." })
-    password!: string;
-
-    // Avatar "vibe" answers (optional — a default avatar is created either way).
-    @IsOptional() @IsString() avatarStyle?: string;
-    @IsOptional() @IsString() gender?: string;
-    @IsOptional() @IsString() avatarBg?: string;
 }
 
 export class UpdateAvatarDto {

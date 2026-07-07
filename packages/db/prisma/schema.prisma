@@ -92,6 +92,12 @@ model User {
   avatarSeed       String?
   avatarBg         String?
   emailVerifiedAt  DateTime?
+  // Consent capture: when the user accepted the Terms of Service (+ essential
+  // service emails) and opted into product/marketing emails. Recorded at
+  // first-run claim / signup; existing accounts are asked once in-app.
+  termsAcceptedAt  DateTime?
+  marketingOptInAt DateTime?
+  consents         ConsentRecord[]
   twoFactorSecret  String? // TOTP secret, AES-256-GCM encrypted; null until enrolled
   twoFactorEnabled Boolean   @default(false)
   twoFactorBackupCodes Json   @default("[]") // hashed one-time recovery codes
@@ -772,4 +778,27 @@ model Job {
 
   @@index([workspaceId, userId, status])
   @@index([workspaceId, createdAt])
+}
+
+
+// Immutable audit trail of consent events: one row per acceptance (first-run
+// claim, public signup, or the in-app prompt for pre-existing accounts). The
+// request IP, the public IP the browser observed for itself, and the parsed
+// user agent are captured so each acceptance is evidenced.
+model ConsentRecord {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source            String // "setup" | "signup" | "prompt"
+  termsAccepted     Boolean  @default(true)
+  marketingAccepted Boolean  @default(true)
+  ip                String? // request IP as seen by the server
+  clientIp          String? // public IP self-reported by the browser (free lookup)
+  userAgent         String? // raw User-Agent header
+  browser           String? // parsed via ua-parser-js, e.g. "Chrome 138"
+  os                String? // e.g. "macOS 15"
+  device            String? // e.g. "desktop" | "mobile" | "tablet"
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
 }

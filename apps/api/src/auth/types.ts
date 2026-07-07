@@ -8,6 +8,8 @@ export interface AuthUser {
     avatarStyle: string | null;
     avatarBg: string | null;
     twoFactorEnabled: boolean;
+    /** Terms acceptance timestamp; null = the consent prompt must be shown. */
+    termsAcceptedAt: Date | null;
     workspaceId: string;
     role: {
         id: string;

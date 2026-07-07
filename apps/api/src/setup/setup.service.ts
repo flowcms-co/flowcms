@@ -3,6 +3,7 @@ import { hashPassword } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthService } from "../auth/auth.service";
 import { AvatarsService } from "../avatars/avatars.service";
+import { TelemetryService } from "../telemetry/telemetry.service";
 import type { ClaimDto } from "./dto";
 
 const DEFAULT_SLUG = "default";
@@ -13,6 +14,7 @@ export class SetupService {
         private readonly prisma: PrismaService,
         private readonly auth: AuthService,
         private readonly avatars: AvatarsService,
+        private readonly telemetry: TelemetryService,
     ) {}
 
     /** Has the instance been claimed yet? Claimed = a super_admin exists in the
@@ -61,6 +63,9 @@ export class SetupService {
                             name: dto.name?.trim() || "Administrator",
                             passwordHash: hashPassword(dto.password),
                             emailVerifiedAt: new Date(),
+                            // Consent is validated as required on the DTO.
+                            termsAcceptedAt: new Date(),
+                            marketingOptInAt: new Date(),
                             ...avatar,
                             memberships: { create: { workspaceId: ws.id, roleId: role.id } },
                         },
@@ -82,6 +87,10 @@ export class SetupService {
             });
 
         const token = await this.auth.createSession(userId, meta);
+        await this.auth.recordConsent(userId, "setup", { ip: meta?.ip, clientIp: dto.clientIp, userAgent: meta?.userAgent });
+        // Tell the vendor right away (owner + consent ride the regular heartbeat
+        // payload) instead of waiting up to 12h for the next scheduled beat.
+        void this.telemetry.beat().catch(() => undefined);
         return { token, user: await this.auth.getAuthUser(userId) };
     }
 }

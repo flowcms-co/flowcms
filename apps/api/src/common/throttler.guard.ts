@@ -8,7 +8,7 @@ import { SESSION_COOKIE } from "../auth/constants";
  *   1. Bearer API token  → per-token  (public/agent/Strapi/GraphQL delivery)
  *   2. session cookie     → per-session (a logged-in studio user — so many users
  *      behind ONE office NAT IP don't share, and can't starve, a bucket)
- *   3. client IP          → unauthenticated routes (signin/signup/forgot/reset),
+ *   3. client IP          → unauthenticated routes (signin/forgot/reset),
  *      which is exactly where per-IP brute-force throttling belongs.
  *
  * Secrets are hashed before they're used as a key, so a raw token/session value

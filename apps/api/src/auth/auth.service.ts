@@ -17,7 +17,7 @@ import { MailService } from "../mail/mail.service";
 import { AvatarsService } from "../avatars/avatars.service";
 import { AuditService } from "../audit/audit.service";
 import { SESSION_IDLE_TTL_MS, SESSION_TTL_MS } from "./constants";
-import { SigninDto, SignupDto, UpdateAvatarDto } from "./dto";
+import { SigninDto, UpdateAvatarDto } from "./dto";
 import { SESSION_POLICY_PORT, type SessionPolicyPort } from "./session-policy.port";
 import type { AuthUser } from "./types";
 
@@ -74,6 +74,55 @@ export class AuthService {
                 ...(dto.title !== undefined ? { title: dto.title.trim() || null } : {}),
             },
         });
+        return this.buildAuthUser(userId);
+    }
+
+    /** Evidence trail for a consent event: server-observed IP, the public IP the
+     *  browser reported for itself (free lookup, best-effort), and the user agent
+     *  parsed with ua-parser-js. Append-only; never throws. */
+    async recordConsent(
+        userId: string,
+        source: "setup" | "prompt",
+        meta?: { ip?: string; clientIp?: string; userAgent?: string },
+    ) {
+        try {
+            // Loaded on demand: consent events are rare (once per account), so the
+            // parser never costs boot time or memory on the hot path.
+            const { UAParser } = meta?.userAgent ? await import("ua-parser-js") : { UAParser: null };
+            const ua = UAParser && meta?.userAgent ? new UAParser(meta.userAgent).getResult() : null;
+            await this.prisma.consentRecord.create({
+                data: {
+                    userId,
+                    source,
+                    termsAccepted: true,
+                    marketingAccepted: true,
+                    ip: meta?.ip?.slice(0, 64) || null,
+                    clientIp: meta?.clientIp?.slice(0, 64) || null,
+                    userAgent: meta?.userAgent?.slice(0, 512) || null,
+                    browser: ua?.browser?.name ? `${ua.browser.name}${ua.browser.version ? ` ${ua.browser.version}` : ""}`.slice(0, 120) : null,
+                    os: ua?.os?.name ? `${ua.os.name}${ua.os.version ? ` ${ua.os.version}` : ""}`.slice(0, 120) : null,
+                    device: (ua?.device?.type || (ua?.browser?.name ? "desktop" : null))?.slice(0, 40) || null,
+                },
+            });
+        } catch {
+            /* the acceptance itself must never fail on evidence writing */
+        }
+    }
+
+    /** Record Terms acceptance + email opt-in for the signed-in user (accounts
+     *  created before consent capture existed are asked once in-app). The
+     *  original timestamps are kept if consent was somehow already recorded. */
+    async acceptConsent(userId: string, meta?: { ip?: string; clientIp?: string; userAgent?: string }) {
+        const now = new Date();
+        const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { termsAcceptedAt: true, marketingOptInAt: true } });
+        await this.prisma.user.update({
+            where: { id: userId },
+            data: {
+                termsAcceptedAt: u?.termsAcceptedAt ?? now,
+                marketingOptInAt: u?.marketingOptInAt ?? now,
+            },
+        });
+        await this.recordConsent(userId, "prompt", meta);
         return this.buildAuthUser(userId);
     }
 
@@ -142,41 +191,6 @@ export class AuthService {
             );
         }
         return ws;
-    }
-
-    async signup(dto: SignupDto, meta?: { userAgent?: string; ip?: string }) {
-        // Public self-registration is OFF by default (SECURITY_AUDIT_REPORT F-02):
-        // every signup landed as an editor with media.manage + content.create, which
-        // is an open door on a public CMS. Operators who want open signup opt in with
-        // SIGNUP_ENABLED=true; otherwise users are added via admin invite, and the
-        // very first admin is created through the /setup/welcome first-run flow.
-        if (process.env.SIGNUP_ENABLED !== "true") {
-            throw new ForbiddenException("Public registration is disabled. Ask an admin to invite you.");
-        }
-        const email = dto.email.toLowerCase().trim();
-        if (await this.prisma.user.findUnique({ where: { email } })) {
-            throw new ConflictException("An account with this email already exists.");
-        }
-        const ws = await this.defaultWorkspace();
-        // New public signups land as Editors; an admin can elevate them later.
-        const role = await this.prisma.role.findUnique({
-            where: { workspaceId_key: { workspaceId: ws.id, key: "editor" } },
-        });
-        if (!role) {
-            throw new InternalServerErrorException("Default role missing. Run `npm run db:seed`.");
-        }
-        const avatar = this.avatars.profileFrom({ style: dto.avatarStyle, gender: dto.gender, bg: dto.avatarBg, name: dto.name ?? null, email });
-        const user = await this.prisma.user.create({
-            data: {
-                email,
-                name: dto.name ?? null,
-                passwordHash: hashPassword(dto.password),
-                ...avatar,
-                memberships: { create: { workspaceId: ws.id, roleId: role.id } },
-            },
-        });
-        const token = await this.createSession(user.id, meta);
-        return { token, user: await this.buildAuthUser(user.id) };
     }
 
     async signin(
@@ -477,6 +491,7 @@ export class AuthService {
             avatarStyle: user.avatarStyle,
             avatarBg: user.avatarBg,
             twoFactorEnabled: user.twoFactorEnabled,
+            termsAcceptedAt: user.termsAcceptedAt,
             workspaceId: membership.workspaceId,
             role: {
                 id: role.id,

@@ -10,6 +10,8 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import { useSetupStatus, setSetupStatus } from "@/lib/useSetupStatus";
 import { IdentityScene } from "@/templates/setup/illustrations";
 import { cn } from "@/lib/cn";
+import ConsentChecks from "@/components/auth/ConsentChecks";
+import { getClientIp } from "@/lib/clientIp";
 import type { AuthUser } from "@/components/providers/AuthProvider";
 
 gsap.registerPlugin(useGSAP, SplitText);
@@ -70,6 +72,8 @@ export default function WelcomeWizard() {
     const [showConfirm, setShowConfirm] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
+    const [acceptTerms, setAcceptTerms] = useState(false);
+    const [acceptMarketing, setAcceptMarketing] = useState(false);
 
     useGSAP(
         () => {
@@ -113,8 +117,13 @@ export default function WelcomeWizard() {
             setError("Passwords do not match.");
             return;
         }
+        if (!acceptTerms || !acceptMarketing) {
+            setError("Please accept the terms and email updates to continue.");
+            return;
+        }
         setBusy(true);
         try {
+            const clientIp = await getClientIp();
             await api<{ user: AuthUser }>("/setup/claim", {
                 method: "POST",
                 body: JSON.stringify({
@@ -122,6 +131,9 @@ export default function WelcomeWizard() {
                     password,
                     name: name.trim(),
                     workspaceName: workspaceName.trim(),
+                    acceptTerms,
+                    acceptMarketing,
+                    ...(clientIp ? { clientIp } : {}),
                 }),
             });
             // Mark the instance claimed SYNCHRONOUSLY so the first-run gate updates
@@ -236,9 +248,17 @@ export default function WelcomeWizard() {
                         <input type={showConfirm ? "text" : "password"} required value={confirm} onChange={(e) => setConfirm(e.target.value)} className={cn(inputBase, "pr-11")} placeholder="Re-enter your password" autoComplete="new-password" />
                     </Field>
 
+                    <ConsentChecks
+                        terms={acceptTerms}
+                        marketing={acceptMarketing}
+                        onTerms={setAcceptTerms}
+                        onMarketing={setAcceptMarketing}
+                        className="step-stagger"
+                    />
+
                     <button
                         type="submit"
-                        disabled={busy}
+                        disabled={busy || !acceptTerms || !acceptMarketing}
                         className="step-stagger mt-1 inline-flex h-[52px] items-center justify-center gap-2.5 rounded-xl bg-[linear-gradient(120deg,#7A68F0_0%,#6C5CE7_55%,#5A4BD4_100%)] font-bold text-white shadow-glow transition-[transform,filter] hover:brightness-[1.06] active:scale-[0.99] disabled:opacity-60"
                     >
                         {busy ? (

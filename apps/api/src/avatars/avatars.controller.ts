@@ -6,7 +6,7 @@ import { AvatarsService } from "./avatars.service";
 /**
  * Avatar images — public SVGs (non-sensitive, embeddable in-app and in email).
  *   GET /avatars/u/:userId    → that user's stored illustrated avatar
- *   GET /avatars/preview      → ?style=&seed=&bg= live preview (signup picker)
+ *   GET /avatars/preview      → ?style=&seed=&bg= live preview (avatar picker)
  */
 @Controller("avatars")
 @Public()
