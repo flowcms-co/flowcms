@@ -24,6 +24,8 @@ export type ConfirmOptions = {
     cancelLabel?: string;
     /** "danger" renders a destructive (red) confirm button. */
     tone?: "default" | "danger";
+    /** Notice mode: a single OK button (the on-brand replacement for window.alert). */
+    noticeOnly?: boolean;
 };
 
 type ConfirmFn = (opts: ConfirmOptions) => Promise<boolean>;
@@ -37,14 +39,18 @@ export const useConfirm = (): ConfirmFn => {
 };
 
 // Imperative bridge (toast-style): the mounted provider registers its requester
-// here so any module can `await confirm(...)` without the hook. Falls back to the
-// native dialog if the provider isn't mounted (e.g. outside the app shell).
+// here so any module can `await confirm(...)` without the hook. Native browser
+// dialogs (window.confirm / alert / prompt) are BANNED in this codebase; if the
+// provider isn't mounted the request fails safe with "no".
 let imperative: ConfirmFn | null = null;
 export const confirm: ConfirmFn = (opts) => {
     if (imperative) return imperative(opts);
-    if (typeof window !== "undefined") return Promise.resolve(window.confirm([opts.title, opts.message].filter(Boolean).join("\n\n")));
     return Promise.resolve(false);
 };
+
+/** On-brand replacement for window.alert: a single-button notice dialog. */
+export const notice = (opts: Omit<ConfirmOptions, "noticeOnly" | "cancelLabel">): Promise<void> =>
+    confirm({ confirmLabel: "OK", ...opts, noticeOnly: true }).then(() => undefined);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
     const [open, setOpen] = useState(false);
@@ -122,11 +128,13 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                                     </div>
 
                                     <div className="mt-6 flex gap-3">
-                                        <button type="button" onClick={() => settle(false)} className="btn-secondary grow">
-                                            {opts.cancelLabel ?? "Cancel"}
-                                        </button>
+                                        {!opts.noticeOnly && (
+                                            <button type="button" onClick={() => settle(false)} className="btn-secondary grow">
+                                                {opts.cancelLabel ?? "Cancel"}
+                                            </button>
+                                        )}
                                         <button type="button" onClick={() => settle(true)} className={cn("grow", danger ? "btn-danger-solid" : "btn-primary")} autoFocus>
-                                            {opts.confirmLabel ?? "Confirm"}
+                                            {opts.confirmLabel ?? (opts.noticeOnly ? "OK" : "Confirm")}
                                         </button>
                                     </div>
                                 </Dialog.Panel>

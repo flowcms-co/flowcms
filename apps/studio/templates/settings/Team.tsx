@@ -11,7 +11,7 @@ import Select from "@/components/ui/Select";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 // Community has no seat cap; once a team grows past this many members we show a
 // dismissible, non-blocking suggestion to consider Pro (for governance, not seats).
@@ -204,7 +204,7 @@ const Team = () => {
             await api(`/users/${m.id}`, { method: "DELETE" });
             await load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not remove this member.");
+            void notice({ title: "Could not remove this member", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         }
     };
 

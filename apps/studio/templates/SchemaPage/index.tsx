@@ -32,7 +32,7 @@ import { cn } from "@/lib/cn";
 // accent (so white-label types aren't stuck on Flow CMS purple); a color the user
 // explicitly customized is kept as-is.
 const typeColor = (c?: string) => (!c || c.toLowerCase() === "#6c5ce7" ? "var(--color-primary)" : c);
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 let idSeq = 0;
 // Globally-unique id. A plain counter ("nf-1") resets to 0 each page load, so a
@@ -230,7 +230,7 @@ const SchemaPage = () => {
             );
             setDirty(false);
         } catch (e) {
-            window.alert(e instanceof Error ? e.message : "Could not save.");
+            void notice({ title: "Could not save", message: e instanceof Error ? e.message : "Please try again.", tone: "danger" });
         } finally {
             setSaving(false);
         }
@@ -247,7 +247,7 @@ const SchemaPage = () => {
             setActiveId(next[0]?.id ?? null);
             setDirty(false);
         } catch (e) {
-            window.alert(e instanceof Error ? e.message : "Could not delete.");
+            void notice({ title: "Could not delete", message: e instanceof Error ? e.message : "Please try again.", tone: "danger" });
         }
     };
 

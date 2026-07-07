@@ -5,7 +5,7 @@ import Card from "@/components/ui/Card";
 import UpgradeLock from "@/components/ui/UpgradeLock";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { api, ApiError, API_ORIGIN } from "@/lib/api";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 type ScimToken = { id: string; name: string; prefix: string; lastUsedAt: string | null; createdAt: string };
 type Minted = { token: string; id: string; name: string; prefix: string };
@@ -59,7 +59,7 @@ const ScimCard = () => {
             await api(`/ee/scim/tokens/${id}`, { method: "DELETE" });
             load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not revoke.");
+            void notice({ title: "Could not revoke", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         }
     };
 

@@ -7,7 +7,7 @@ import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { api, ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 type Hook = { id: string; name: string; url: string; events: string[]; enabled: boolean; hasSecret: boolean; createdAt: string; deliveries: number };
 type Delivery = { id: string; event: string; statusCode: number | null; success: boolean; responseBody: string | null; attempt: number; createdAt: string };
@@ -70,7 +70,7 @@ const Webhooks = () => {
             setOpen(false);
             await load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not save webhook.");
+            void notice({ title: "Could not save webhook", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         } finally {
             setSaving(false);
         }

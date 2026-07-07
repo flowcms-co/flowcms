@@ -10,7 +10,7 @@ import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import UpgradeLock from "@/components/ui/UpgradeLock";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 type RoleRow = {
     id: string;
@@ -174,7 +174,7 @@ const Roles = () => {
             await api(`/roles/${r.id}`, { method: "DELETE" });
             await load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not delete this role.");
+            void notice({ title: "Could not delete this role", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         }
     };
 

@@ -23,7 +23,7 @@ import CountUp from "@/components/motion/CountUp";
 import { useWorkspace, localeName } from "@/lib/useWorkspace";
 import { cn } from "@/lib/cn";
 import { useScrollResetOnChange } from "@/lib/useScroll";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 const PAGE_SIZE = 15;
 
@@ -245,7 +245,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
             if (failed.length) {
                 const first = failed[0] as PromiseRejectedResult;
                 const msg = first.reason instanceof ApiError ? first.reason.message : "Some items couldn't be scheduled.";
-                window.alert(failed.length === ids.length ? msg : `${ids.length - failed.length} scheduled. ${failed.length} couldn't be: ${msg}`);
+                void notice({ title: "Scheduling issue", message: failed.length === ids.length ? msg : `${ids.length - failed.length} scheduled. ${failed.length} couldn't be: ${msg}`, tone: "danger" });
             }
             setSelected(new Set());
             await load();

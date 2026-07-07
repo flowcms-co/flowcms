@@ -6,7 +6,7 @@ import UpgradeLock from "@/components/ui/UpgradeLock";
 import Icon from "@/components/ui/Icon";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { api, ApiError } from "@/lib/api";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 type Policy = { ipAllowlist: string[]; sessionMaxHours: number | null; sessionIdleMinutes: number | null };
 
@@ -64,9 +64,9 @@ const IpPolicyCard = () => {
         setRevoking(true);
         try {
             const r = await api<{ revoked: number }>("/ee/ip-policies/revoke-sessions", { method: "POST" });
-            window.alert(`Signed out ${r.revoked} session(s). You'll be signed out shortly.`);
+            void notice({ title: "Sessions signed out", message: `Signed out ${r.revoked} session(s). You'll be signed out shortly.` });
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not revoke sessions.");
+            void notice({ title: "Could not revoke sessions", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         } finally {
             setRevoking(false);
         }

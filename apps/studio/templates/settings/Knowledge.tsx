@@ -7,7 +7,7 @@ import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 type KFile = {
     id: string;
@@ -136,7 +136,7 @@ const Knowledge = () => {
             setOpen(false);
             await load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not save.");
+            void notice({ title: "Could not save", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         } finally {
             setSaving(false);
         }
@@ -173,7 +173,7 @@ const Knowledge = () => {
             await api(`/knowledge/${f.id}`, { method: "DELETE" });
             await load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not delete.");
+            void notice({ title: "Could not delete", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         }
     };
 

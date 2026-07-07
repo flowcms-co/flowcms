@@ -8,7 +8,7 @@ import Select from "@/components/ui/Select";
 import { api, ApiError } from "@/lib/api";
 import { useDisplayBase } from "@/lib/useDisplayBase";
 import { formatDate } from "@/lib/format";
-import { confirm } from "@/components/providers/ConfirmProvider";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
 type Token = {
     id: string;
@@ -70,7 +70,7 @@ const ApiKeys = () => {
             setCreated({ token: res.token, name: res.name });
             await load();
         } catch (e) {
-            window.alert(e instanceof ApiError ? e.message : "Could not create token.");
+            void notice({ title: "Could not create token", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
         } finally {
             setSaving(false);
         }
