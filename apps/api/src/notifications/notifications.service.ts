@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { escapeHtml } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { MailService } from "../mail/mail.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
@@ -168,8 +169,4 @@ export class NotificationsService {
         }
         return { processed: users.length, sent };
     }
-}
-
-function escapeHtml(s: string): string {
-    return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
 }

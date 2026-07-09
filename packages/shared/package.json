@@ -12,6 +12,10 @@
     "./permissions": {
       "types": "./dist/permissions.d.ts",
       "default": "./dist/permissions.js"
+    },
+    "./strings": {
+      "types": "./dist/strings.d.ts",
+      "default": "./dist/strings.js"
     }
   },
   "files": [

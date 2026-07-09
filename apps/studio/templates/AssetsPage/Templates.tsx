@@ -7,6 +7,7 @@ import Icon from "@/components/ui/Icon";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { confirm } from "@/components/providers/ConfirmProvider";
+import { slugify } from "@flowcms/shared/strings";
 
 type Template = {
     id: string;
@@ -18,8 +19,6 @@ type Template = {
     typeName: string;
     body: string;
 };
-
-const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "page";
 
 /**
  * Page Templates — reusable starter presets. "Use" scaffolds the target content
@@ -82,7 +81,7 @@ const Templates = () => {
                 body: JSON.stringify({
                     name: form.name.trim(),
                     description: form.description.trim() || undefined,
-                    typeApiId: slugify(typeName),
+                    typeApiId: slugify(typeName, { fallback: "page" }),
                     typeName,
                     body: form.body,
                 }),

@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { ContentStatus } from "@flowcms/db";
+import { slugify as toSlug, stripTags } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { safeFetch } from "../common/ssrf";
 import { pluralize } from "../content/pluralize";
@@ -86,9 +87,7 @@ function richTextToPlain(v: unknown): string {
     return "";
 }
 
-const slugify = (s: string) =>
-    s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || null;
-const stripTags = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const slugify = (s: string) => toSlug(s, { max: 80 }) || null;
 const decode = (s: string) =>
     (s ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#8217;/g, "’").replace(/&#8211;/g, "–").replace(/&quot;/g, '"').replace(/&#039;/g, "'");
 

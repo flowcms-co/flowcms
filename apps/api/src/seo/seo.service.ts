@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { IntegrationType } from "@flowcms/db";
-import { decryptSecret, encryptSecret } from "@flowcms/shared";
+import { decryptSecret, encryptSecret, stripTags } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { KnowledgeService, SEO_LEARN_START, SEO_LEARN_END } from "../knowledge/knowledge.service";
@@ -79,10 +79,6 @@ export class SeoService {
         };
     }
 
-    private stripHtml(html: string) {
-        return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    }
-
     async internalLinks(workspaceId: string): Promise<{ opportunities: LinkOpportunity[]; pages: number }> {
         const entries = await this.prisma.contentEntry.findMany({
             where: { workspaceId, status: "PUBLISHED" },
@@ -110,7 +106,7 @@ export class SeoService {
             // Match only in UNLINKED text: drop existing <a>…</a> first, so we never
             // offer to link a phrase that's already a link (apply would then fail to
             // find a free occurrence). Mirrors insertLink, which skips existing anchors.
-            const text = this.stripHtml(body.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, " "));
+            const text = stripTags(body.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, " "));
             const lowerBody = body.toLowerCase();
             for (const t of targets) {
                 if (t.id === e.id) continue;

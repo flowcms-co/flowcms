@@ -11,6 +11,7 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
 import { confirm } from "@/components/providers/ConfirmProvider";
+import { escapeHtml } from "@flowcms/shared/strings";
 
 type PanelTab = "seo" | "ai" | "review" | "schema" | "versions";
 type EntryData = Record<string, unknown>;
@@ -24,7 +25,6 @@ const TABS: { id: PanelTab; label: string; icon: string }[] = [
 ];
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
-const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const toHtml = (text: string) =>
     text
         .split(/\n{2,}/)

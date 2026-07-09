@@ -20,6 +20,7 @@ import { cn } from "@/lib/cn";
 import type { SchemaField } from "@/mocks/schema";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
+import { slugify } from "@flowcms/shared/strings";
 
 /** Approval summary for an entry (GET /entries/:id/reviews). `enforced` is true only
  *  when the workspace is licensed for approval workflows. */
@@ -42,14 +43,6 @@ type ApiEntry = {
 type ApiType = { id: string; name: string; fields: SchemaField[] };
 /** Reusable component as returned by /content-types/components. */
 type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
-
-/** Turn a page title into a URL slug: "Storm Damage Restoration" → "storm-damage-restoration". */
-const slugify = (s: string) =>
-    s
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
 
 const STATUS_PILL: Record<string, PillStatus> = {
     DRAFT: "draft",

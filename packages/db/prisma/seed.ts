@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { SYSTEM_ROLES, hashPassword } from "@flowcms/shared";
+import { SYSTEM_ROLES, hashPassword, slugify } from "@flowcms/shared";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,8 +88,6 @@ const TYPES = [
 ];
 
 const LEGACY_TYPES = ["doc", "help_category", "help_article"];
-
-const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 const body = (lead: string) =>
     `<p>${lead}</p>` +

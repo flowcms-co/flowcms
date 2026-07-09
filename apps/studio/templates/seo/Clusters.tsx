@@ -5,7 +5,6 @@ import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import ScoreRing from "@/components/ui/ScoreRing";
 import CountUp from "@/components/motion/CountUp";
-import Reveal from "@/components/ui/Reveal";
 import EmptyState from "@/components/ui/EmptyState";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -607,14 +606,40 @@ const ClusterRow = ({
 };
 
 /* ─── Live API shape ─── */
+/** The live endpoint returns a thinner cluster than ClusterRich (`coverage`
+ *  instead of `coveragePercent`; no gaps/authority/links yet). */
+type LiveCluster = Partial<ClusterRich> & { id: string; pillar: string; pages: number; coverage?: number };
 type LiveResp = {
     hasData: boolean;
     authorityScore?: number;
     clustersTracked?: number;
     contentGaps?: number;
     estTrafficGain?: number;
-    clusters?: ClusterRich[];
+    clusters?: LiveCluster[];
 };
+
+/** Fill the ClusterRich fields the UI dereferences with safe defaults so a
+ *  partial live cluster can't crash the page; provided fields win. */
+const toClusterRich = (c: LiveCluster): ClusterRich => ({
+    icon: "grid",
+    color: "#6C5CE7",
+    subtopics: 0,
+    authorityScore: 0,
+    authorityLabel: "Needs work",
+    coveragePercent: c.coverage ?? 0,
+    coveredTopics: 0,
+    totalTopics: 0,
+    internalLinks: 0,
+    internalLinksLabel: "Weak",
+    contentGaps: 0,
+    estTrafficGain: 0,
+    coveredTopicsList: [],
+    mapTopics: [],
+    gaps: [],
+    suggestions: [],
+    topLinkedPages: [],
+    ...c,
+});
 
 /* ─── Main component ─── */
 const Clusters = () => {
@@ -633,7 +658,7 @@ const Clusters = () => {
     }, []);
 
     const isLive = !!live && !!live.clusters?.length;
-    const clusters: ClusterRich[] = isLive ? (live!.clusters as ClusterRich[]) : [];
+    const clusters: ClusterRich[] = isLive ? live!.clusters!.map(toClusterRich) : [];
 
     // Overview KPIs, derived from the live crawl.
     const overview = {
@@ -695,244 +720,238 @@ const Clusters = () => {
     return (
         <div className="flex flex-col gap-6">
             {/* ─── 1. Topical Authority Overview ─── */}
-            <Reveal index={0}>
-                <Card>
-                    <div className="mb-5 flex items-center gap-2.5">
-                        <h2 className="text-h5 text-black dark:text-white">
-                            Topical Authority Overview
-                        </h2>
+            <Card>
+                <div className="mb-5 flex items-center gap-2.5">
+                    <h2 className="text-h5 text-black dark:text-white">
+                        Topical Authority Overview
+                    </h2>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-6 gap-y-6 sm:grid-cols-4 xl:grid-cols-[repeat(4,1fr)_minmax(11rem,1.3fr)]">
+                    <OverviewKpi
+                        icon="compass"
+                        color="#6C5CE7"
+                        label="Topical Authority Score"
+                        delta={overview.authorityScoreDelta}
+                    >
+                        <CountUp
+                            value={overview.authorityScore}
+                            className="font-poppins text-[1.75rem] font-extrabold leading-none text-black dark:text-white"
+                        />
+                        <span className="font-poppins text-base font-normal text-grey">
+                            {" "} / 100
+                        </span>
+                    </OverviewKpi>
+
+                    <OverviewKpi
+                        icon="grid"
+                        color="#3B82F6"
+                        label="Clusters Tracked"
+                        delta={overview.clustersTrackedDelta}
+                    >
+                        <CountUp
+                            value={overview.clustersTracked}
+                            className="font-poppins text-[1.75rem] font-extrabold leading-none text-black dark:text-white"
+                        />
+                    </OverviewKpi>
+
+                    <OverviewKpi
+                        icon="document"
+                        color="#F5A623"
+                        label="Content Gaps"
+                        delta={overview.contentGapsDelta}
+                        goodWhenUp={false}
+                    >
+                        <CountUp
+                            value={overview.contentGaps}
+                            className="font-poppins text-[1.75rem] font-extrabold leading-none text-black dark:text-white"
+                        />
+                    </OverviewKpi>
+
+                    <OverviewKpi
+                        icon="chart"
+                        color="#00B894"
+                        label="Estimated Traffic Gain"
+                        delta={overview.estTrafficGainDelta}
+                    >
+                        <CountUp
+                            value={overview.estTrafficGain / 1000}
+                            decimals={1}
+                            prefix="+"
+                            suffix="K"
+                            className="font-poppins text-[1.75rem] font-extrabold leading-none text-success"
+                        />
+                    </OverviewKpi>
+
+                    {/* Explainer card */}
+                    <div className="col-span-2 rounded-2xl bg-lavender-mist p-4 dark:bg-dark-3 sm:col-span-4 xl:col-span-1">
+                        <p className="mb-1.5 text-caption-1 font-semibold text-primary dark:text-lilac">
+                            What is a topical cluster?
+                        </p>
+                        <p className="text-caption-2 leading-relaxed text-grey">
+                            Clusters help search engines understand your expertise. Cover all important subtopics to build topical authority.
+                        </p>
+                        <button className="mt-3 inline-flex items-center gap-1 text-caption-2 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
+                            Learn more
+                            <Icon className="h-3 w-3 fill-primary dark:fill-lilac" name="external" />
+                        </button>
                     </div>
-
-                    <div className="grid grid-cols-2 gap-x-6 gap-y-6 sm:grid-cols-4 xl:grid-cols-[repeat(4,1fr)_minmax(11rem,1.3fr)]">
-                        <OverviewKpi
-                            icon="compass"
-                            color="#6C5CE7"
-                            label="Topical Authority Score"
-                            delta={overview.authorityScoreDelta}
-                        >
-                            <CountUp
-                                value={overview.authorityScore}
-                                className="font-poppins text-[1.75rem] font-extrabold leading-none text-black dark:text-white"
-                            />
-                            <span className="font-poppins text-base font-normal text-grey">
-                                {" "} / 100
-                            </span>
-                        </OverviewKpi>
-
-                        <OverviewKpi
-                            icon="grid"
-                            color="#3B82F6"
-                            label="Clusters Tracked"
-                            delta={overview.clustersTrackedDelta}
-                        >
-                            <CountUp
-                                value={overview.clustersTracked}
-                                className="font-poppins text-[1.75rem] font-extrabold leading-none text-black dark:text-white"
-                            />
-                        </OverviewKpi>
-
-                        <OverviewKpi
-                            icon="document"
-                            color="#F5A623"
-                            label="Content Gaps"
-                            delta={overview.contentGapsDelta}
-                            goodWhenUp={false}
-                        >
-                            <CountUp
-                                value={overview.contentGaps}
-                                className="font-poppins text-[1.75rem] font-extrabold leading-none text-black dark:text-white"
-                            />
-                        </OverviewKpi>
-
-                        <OverviewKpi
-                            icon="chart"
-                            color="#00B894"
-                            label="Estimated Traffic Gain"
-                            delta={overview.estTrafficGainDelta}
-                        >
-                            <CountUp
-                                value={overview.estTrafficGain / 1000}
-                                decimals={1}
-                                prefix="+"
-                                suffix="K"
-                                className="font-poppins text-[1.75rem] font-extrabold leading-none text-success"
-                            />
-                        </OverviewKpi>
-
-                        {/* Explainer card */}
-                        <div className="col-span-2 rounded-2xl bg-lavender-mist p-4 dark:bg-dark-3 sm:col-span-4 xl:col-span-1">
-                            <p className="mb-1.5 text-caption-1 font-semibold text-primary dark:text-lilac">
-                                What is a topical cluster?
-                            </p>
-                            <p className="text-caption-2 leading-relaxed text-grey">
-                                Clusters help search engines understand your expertise. Cover all important subtopics to build topical authority.
-                            </p>
-                            <button className="mt-3 inline-flex items-center gap-1 text-caption-2 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
-                                Learn more
-                                <Icon className="h-3 w-3 fill-primary dark:fill-lilac" name="external" />
-                            </button>
-                        </div>
-                    </div>
-                </Card>
-            </Reveal>
+                </div>
+            </Card>
 
             {/* ─── 2. Topic Map + Top Opportunities ─── */}
-            <Reveal index={1}>
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[55fr_45fr]">
-                    {/* Topic Map */}
-                    <Card className="flex flex-col">
-                        <div className="mb-3 flex items-center gap-2">
-                            <h2 className="text-h5 text-black dark:text-white">Topic Map</h2>
-                        </div>
-                        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-caption-2 text-grey">
-                            <span className="flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-[#00B894]" />
-                                Strong coverage
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-[#F5A623]" />
-                                Partial coverage
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-[#E24B4A]" />
-                                Missing
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-grey-light dark:bg-dark-3" />
-                                No content
-                            </span>
-                        </div>
-                        <TopicMap clusters={clusters} />
-                    </Card>
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[55fr_45fr]">
+                {/* Topic Map */}
+                <Card className="flex flex-col">
+                    <div className="mb-3 flex items-center gap-2">
+                        <h2 className="text-h5 text-black dark:text-white">Topic Map</h2>
+                    </div>
+                    <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-caption-2 text-grey">
+                        <span className="flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-[#00B894]" />
+                            Strong coverage
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-[#F5A623]" />
+                            Partial coverage
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-[#E24B4A]" />
+                            Missing
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-grey-light dark:bg-dark-3" />
+                            No content
+                        </span>
+                    </div>
+                    <TopicMap clusters={clusters} />
+                </Card>
 
-                    {/* Top Opportunities */}
-                    <Card className="flex flex-col">
-                        <div className="mb-4 flex items-center gap-2">
-                            <h2 className="text-h5 text-black dark:text-white">Top Opportunities</h2>
-                        </div>
-                        <div className="flex flex-col gap-2.5">
-                            {topicalOpportunities.map((opp, i) => (
-                                <OpportunityRow
-                                    key={i}
-                                    title={opp.title}
-                                    clusterPillar={opp.clusterPillar}
-                                    estClicks={opp.estClicks}
-                                    color={clusterColorMap[opp.clusterId] ?? "#6C5CE7"}
-                                />
-                            ))}
-                        </div>
-                        <button className="mt-4 inline-flex items-center gap-1.5 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
-                            View all opportunities
-                            <Icon className="h-3.5 w-3.5 fill-primary dark:fill-lilac" name="external" />
-                        </button>
-                    </Card>
-                </div>
-            </Reveal>
+                {/* Top Opportunities */}
+                <Card className="flex flex-col">
+                    <div className="mb-4 flex items-center gap-2">
+                        <h2 className="text-h5 text-black dark:text-white">Top Opportunities</h2>
+                    </div>
+                    <div className="flex flex-col gap-2.5">
+                        {topicalOpportunities.map((opp, i) => (
+                            <OpportunityRow
+                                key={i}
+                                title={opp.title}
+                                clusterPillar={opp.clusterPillar}
+                                estClicks={opp.estClicks}
+                                color={clusterColorMap[opp.clusterId] ?? "#6C5CE7"}
+                            />
+                        ))}
+                    </div>
+                    <button className="mt-4 inline-flex items-center gap-1.5 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
+                        View all opportunities
+                        <Icon className="h-3.5 w-3.5 fill-primary dark:fill-lilac" name="external" />
+                    </button>
+                </Card>
+            </div>
 
             {/* ─── 3. Topical Clusters table ─── */}
-            <Reveal index={2}>
-                <Card className="!p-0 overflow-hidden">
-                    {/* Table header bar */}
-                    <div className="flex flex-wrap items-center gap-3 p-5">
-                        <h2 className="text-h5 text-black dark:text-white">
-                            Topical Clusters
-                            <span className="ml-1.5 font-normal text-grey">({filtered.length})</span>
-                        </h2>
-                        <div className="relative ml-auto">
-                            <Icon
-                                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-grey"
-                                name="search"
-                            />
-                            <input
-                                type="text"
-                                placeholder="Search clusters..."
-                                value={query}
-                                onChange={(e) => {
-                                    setQuery(e.target.value);
-                                    setExpandedId(null);
-                                }}
-                                className="h-9 w-52 rounded-[0.625rem] bg-lavender-mist pl-9 pr-3 text-body-sm text-black outline-none placeholder:text-grey focus:ring-1 focus:ring-primary dark:bg-dark-3 dark:text-white"
-                            />
-                        </div>
+            <Card className="!p-0 overflow-hidden">
+                {/* Table header bar */}
+                <div className="flex flex-wrap items-center gap-3 p-5">
+                    <h2 className="text-h5 text-black dark:text-white">
+                        Topical Clusters
+                        <span className="ml-1.5 font-normal text-grey">({filtered.length})</span>
+                    </h2>
+                    <div className="relative ml-auto">
+                        <Icon
+                            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 fill-grey"
+                            name="search"
+                        />
+                        <input
+                            type="text"
+                            placeholder="Search clusters..."
+                            value={query}
+                            onChange={(e) => {
+                                setQuery(e.target.value);
+                                setExpandedId(null);
+                            }}
+                            className="h-9 w-52 rounded-[0.625rem] bg-lavender-mist pl-9 pr-3 text-body-sm text-black outline-none placeholder:text-grey focus:ring-1 focus:ring-primary dark:bg-dark-3 dark:text-white"
+                        />
                     </div>
+                </div>
 
-                    {/* Column headers (desktop only) */}
-                    <div
-                        className={cn(
-                            "hidden border-y border-grey-light px-5 py-2.5 dark:border-grey-light/10 md:grid",
-                            COL,
-                            "items-center gap-4",
-                        )}
-                    >
-                        <span className="text-caption-2 text-grey">Cluster</span>
-                        <SortBtn
-                            col="authorityScore"
-                            label="Authority Score"
-                            sortKey={sortKey}
-                            sortDir={sortDir}
-                            onSort={toggleSort}
-                        />
-                        <SortBtn
-                            col="coveragePercent"
-                            label="Coverage"
-                            sortKey={sortKey}
-                            sortDir={sortDir}
-                            onSort={toggleSort}
-                        />
-                        <SortBtn
-                            col="internalLinks"
-                            label="Internal Links"
-                            sortKey={sortKey}
-                            sortDir={sortDir}
-                            onSort={toggleSort}
-                        />
-                        <SortBtn
-                            col="contentGaps"
-                            label="Content Gaps"
-                            sortKey={sortKey}
-                            sortDir={sortDir}
-                            onSort={toggleSort}
-                        />
-                        <SortBtn
-                            col="estTrafficGain"
-                            label="Est. Traffic Gain"
-                            sortKey={sortKey}
-                            sortDir={sortDir}
-                            onSort={toggleSort}
-                        />
-                        <span />
-                    </div>
-
-                    {/* Rows */}
-                    {sorted.length === 0 ? (
-                        <div className="px-5 py-12 text-center text-body text-grey">
-                            No clusters match your search.
-                        </div>
-                    ) : (
-                        sorted.map((c) => (
-                            <ClusterRow
-                                key={c.id}
-                                cluster={c}
-                                expanded={expandedId === c.id}
-                                onToggle={() =>
-                                    setExpandedId((prev) => (prev === c.id ? null : c.id))
-                                }
-                            />
-                        ))
+                {/* Column headers (desktop only) */}
+                <div
+                    className={cn(
+                        "hidden border-y border-grey-light px-5 py-2.5 dark:border-grey-light/10 md:grid",
+                        COL,
+                        "items-center gap-4",
                     )}
+                >
+                    <span className="text-caption-2 text-grey">Cluster</span>
+                    <SortBtn
+                        col="authorityScore"
+                        label="Authority Score"
+                        sortKey={sortKey}
+                        sortDir={sortDir}
+                        onSort={toggleSort}
+                    />
+                    <SortBtn
+                        col="coveragePercent"
+                        label="Coverage"
+                        sortKey={sortKey}
+                        sortDir={sortDir}
+                        onSort={toggleSort}
+                    />
+                    <SortBtn
+                        col="internalLinks"
+                        label="Internal Links"
+                        sortKey={sortKey}
+                        sortDir={sortDir}
+                        onSort={toggleSort}
+                    />
+                    <SortBtn
+                        col="contentGaps"
+                        label="Content Gaps"
+                        sortKey={sortKey}
+                        sortDir={sortDir}
+                        onSort={toggleSort}
+                    />
+                    <SortBtn
+                        col="estTrafficGain"
+                        label="Est. Traffic Gain"
+                        sortKey={sortKey}
+                        sortDir={sortDir}
+                        onSort={toggleSort}
+                    />
+                    <span />
+                </div>
 
-                    {/* Footer */}
-                    <div className="px-5 py-4">
-                        <button className="inline-flex items-center gap-1.5 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
-                            View all {overview.clustersTracked} clusters
-                            <Icon
-                                className="h-3.5 w-3.5 fill-primary dark:fill-lilac"
-                                name="external"
-                            />
-                        </button>
+                {/* Rows */}
+                {sorted.length === 0 ? (
+                    <div className="px-5 py-12 text-center text-body text-grey">
+                        No clusters match your search.
                     </div>
-                </Card>
-            </Reveal>
+                ) : (
+                    sorted.map((c) => (
+                        <ClusterRow
+                            key={c.id}
+                            cluster={c}
+                            expanded={expandedId === c.id}
+                            onToggle={() =>
+                                setExpandedId((prev) => (prev === c.id ? null : c.id))
+                            }
+                        />
+                    ))
+                )}
+
+                {/* Footer */}
+                <div className="px-5 py-4">
+                    <button className="inline-flex items-center gap-1.5 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
+                        View all {overview.clustersTracked} clusters
+                        <Icon
+                            className="h-3.5 w-3.5 fill-primary dark:fill-lilac"
+                            name="external"
+                        />
+                    </button>
+                </div>
+            </Card>
         </div>
     );
 };

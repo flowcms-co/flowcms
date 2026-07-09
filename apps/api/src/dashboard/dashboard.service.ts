@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { stripTags } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { CacheService } from "../cache/cache.service";
 
@@ -13,7 +14,7 @@ const TASK_STATE: Record<string, string> = { DRAFT: "draft", IN_REVIEW: "review"
 function wordCountOf(data: unknown): number {
     const body = (data as { body?: unknown } | null)?.body;
     if (typeof body !== "string") return 0;
-    const text = body.replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+    const text = stripTags(body);
     return text ? text.split(" ").length : 0;
 }
 

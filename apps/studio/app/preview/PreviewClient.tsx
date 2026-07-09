@@ -157,7 +157,7 @@ const rebuildArray = (original: unknown, items: ArrayItemMsg[]): unknown[] => {
         if (rec.value !== undefined && (!rec.fields || !Object.keys(rec.fields).length)) return rec.value;
         const srcIdx = rec.index != null ? rec.index : rec.clonedFrom;
         const source = srcIdx != null ? orig[srcIdx] : undefined;
-        let base: Record<string, unknown> = source && typeof source === "object" && !Array.isArray(source) ? (JSON.parse(JSON.stringify(source)) as Record<string, unknown>) : {};
+        let base: Record<string, unknown> = source && typeof source === "object" && !Array.isArray(source) ? structuredClone(source as Record<string, unknown>) : {};
         // A newly added item was cloned from an existing one — regenerate its ids.
         if (rec.index == null) base = freshenIds(base);
         if (rec.fields) for (const [sub, val] of Object.entries(rec.fields)) setPath(base, sub, val);
@@ -397,7 +397,7 @@ const PreviewClient = () => {
      *  editor so its fields update live. */
     const broadcastFromNodes = () => {
         if (!syncRef.current || !entry) return;
-        const data: Record<string, unknown> = JSON.parse(JSON.stringify(entry.data ?? {}));
+        const data: Record<string, unknown> = structuredClone(entry.data ?? {});
         if (summaryRef.current) data.summary = summaryRef.current.textContent ?? "";
         if (articleRef.current) data.body = articleRef.current.innerHTML ?? "";
         const nextTitle = titleRef.current ? titleRef.current.textContent ?? entry.title : entry.title;
@@ -679,7 +679,7 @@ const PreviewClient = () => {
         // reconstructed object (a clone of the current data with edits applied),
         // which is the only safe way to change a nested field without dropping its
         // siblings.
-        const nextData: Record<string, unknown> = JSON.parse(JSON.stringify(entry?.data ?? {}));
+        const nextData: Record<string, unknown> = structuredClone(entry?.data ?? {});
         const patch: Record<string, unknown> = {};
         let newTitle = "";
         let changedData = false;

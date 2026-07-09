@@ -17,6 +17,8 @@
  * and the auto-pluraliser would otherwise double it ("blogs" -> "blogss").
  */
 
+import { slugify } from "@flowcms/shared";
+
 type TypeIds = {
     apiId?: string | null;
     pluralApiId?: string | null;
@@ -83,13 +85,6 @@ function buildReferencePath(pattern: string, slug?: string | null, locale?: stri
     p = p.replace(/\/{2,}/g, "/").replace(/(.)\/+$/, "$1");
     return p || "/";
 }
-
-const slugify = (s: string): string =>
-    s
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
 
 /** Whether a content type represents the site homepage (root, slug-less). An
  *  explicit page type wins: "home" is the root; any other preset is never the home.

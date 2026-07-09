@@ -3,8 +3,7 @@
 # Stop:              npm run infra:down
 #
 # Only Postgres is strictly required. Redis (queues/cache/throttle) is optional —
-# the platform degrades gracefully without it. Meilisearch is scaffolded here for a
-# future search upgrade but is NOT yet wired into the API (search runs on Postgres).
+# the platform degrades gracefully without it.
 
 services:
   postgres:
@@ -41,19 +40,6 @@ services:
       timeout: 5s
       retries: 10
 
-  meilisearch:
-    image: getmeili/meilisearch:v1.11
-    container_name: flowcms-meilisearch
-    restart: unless-stopped
-    environment:
-      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-flowcms_dev_master_key}
-      MEILI_ENV: development
-    ports:
-      - "127.0.0.1:${MEILI_PORT:-7700}:7700"
-    volumes:
-      - flowcms_meilidata:/meili_data
-
 volumes:
   flowcms_pgdata:
   flowcms_redisdata:
-  flowcms_meilidata:

@@ -18,6 +18,7 @@ import { MediaField } from "@/components/ui/MediaPicker";
 import { api } from "@/lib/api";
 import RichTextField from "./RichTextField";
 import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
+import { stripTags as stripHtml } from "@flowcms/shared/strings";
 
 type Json = Record<string, unknown>;
 
@@ -36,9 +37,6 @@ const useComponentSubFields = (field: SchemaField): SchemaField[] => {
     const defs = useContext(ComponentDefsContext);
     return field.componentApiId ? defs[field.componentApiId] ?? [] : field.fields ?? [];
 };
-
-/** Strip tags/whitespace from rich-text HTML so it can preview on a collapsed header. */
-const stripHtml = (s: string) => s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 
 /** A short, human preview of a component item's content — the first non-empty
  *  text-ish field — shown next to the title when a section is collapsed so authors

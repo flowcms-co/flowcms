@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { SYSTEM_ROLES } from "@flowcms/shared";
+import { SYSTEM_ROLES, slugify } from "@flowcms/shared";
 import { PrismaService } from "../../prisma/prisma.service";
 
 /**
@@ -44,12 +44,7 @@ export class MultiWorkspaceService {
 
     /** Slugify the name and append -2, -3, … until it's free (slug is unique). */
     private async uniqueSlug(base: string): Promise<string> {
-        const root =
-            base
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "-")
-                .replace(/^-+|-+$/g, "")
-                .slice(0, 40) || "workspace";
+        const root = slugify(base, { max: 40, fallback: "workspace" });
         let slug = root;
         let n = 1;
         while (await this.prisma.workspace.findUnique({ where: { slug }, select: { id: true } })) {

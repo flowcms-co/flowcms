@@ -9,7 +9,7 @@
 #   docker compose -f docker-compose.prod.yml up -d --build      # build from source
 #   docker compose -f docker-compose.prod.yml up -d              # use prebuilt images
 #
-# Optional services:  --profile cache (redis)   --profile search (meilisearch)
+# Optional services:  --profile cache (redis)
 # Hardened socket access (recommended): --profile secure-socket  (see the updater notes).
 #
 # Resource limits, log rotation, capabilities, healthchecks, graceful shutdown and a
@@ -290,37 +290,10 @@ services:
         limits:
           memory: ${REDIS_MEM_LIMIT:-320M} # a little above maxmemory for overhead
 
-  # ── Scaffolding (NOT yet used): Meilisearch. The API does not integrate it yet
-  #    — search currently runs on Postgres, so enabling `--profile search` has no
-  #    effect on the app. Reserved for a future search upgrade; leave it off.
-  meilisearch:
-    <<: *hardened
-    image: getmeili/meilisearch:v1.11
-    profiles: ["search"]
-    cap_drop: [ALL]
-    environment:
-      # Set MEILI_MASTER_KEY in .env before enabling the `search` profile.
-      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-}
-      MEILI_ENV: production
-    volumes:
-      - meili_data:/meili_data
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7700/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    networks: [backend]
-    labels:
-      com.flowcms.service: meilisearch
-    deploy:
-      resources:
-        limits:
-          memory: ${MEILI_MEM_LIMIT:-512M}
-
 networks:
   frontend: # edge + egress (caddy, studio, api, updater, socket-proxy)
   backend:
-    internal: true # data tier (postgres/redis/meili): no route to the internet
+    internal: true # data tier (postgres/redis): no route to the internet
 
 volumes:
   caddy_data:
@@ -328,4 +301,3 @@ volumes:
   pg_data:
   media_data:
   redis_data:
-  meili_data:

@@ -55,23 +55,11 @@ export interface CanonicalContent {
 
 // ── pure HTML helpers (shared; re-exported via parse-content for back-compat) ──
 
+import { stripTags } from "@flowcms/shared";
+export { stripTags };
+
 export function str(v: unknown): string {
     return typeof v === "string" ? v : "";
-}
-
-export function stripTags(html: string): string {
-    return html
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&#39;|&rsquo;|&lsquo;/g, "'")
-        .replace(/&quot;|&ldquo;|&rdquo;/g, '"')
-        .replace(/\s+/g, " ")
-        .trim();
 }
 
 function attr(tag: string, name: string): string | undefined {
