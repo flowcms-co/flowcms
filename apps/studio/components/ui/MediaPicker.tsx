@@ -83,22 +83,29 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
     const [url, setUrl] = useState(value ?? "");
     const [q, setQ] = useState("");
 
+    // Search runs server-side (debounced): only one page of the library is
+    // loaded, so filtering it locally would never find older images.
     useEffect(() => {
         let off = false;
-        api<Asset[] | { data?: Asset[]; items?: Asset[] }>("/assets?limit=100")
-            .then((r) => {
-                if (off) return;
-                const list = Array.isArray(r) ? r : r.data ?? r.items ?? [];
-                setAssets(list.filter((a) => a.type === "image"));
-            })
-            .catch(() => undefined)
-            .finally(() => !off && setLoading(false));
+        const search = q.trim();
+        const t = setTimeout(
+            () =>
+                api<Asset[] | { data?: Asset[]; items?: Asset[] }>(`/assets?limit=100${search ? `&q=${encodeURIComponent(search)}` : ""}`)
+                    .then((r) => {
+                        if (off) return;
+                        const list = Array.isArray(r) ? r : r.data ?? r.items ?? [];
+                        setAssets(list.filter((a) => a.type === "image"));
+                    })
+                    .catch(() => undefined)
+                    .finally(() => !off && setLoading(false)),
+            search ? 250 : 0,
+        );
         return () => {
             off = true;
+            clearTimeout(t);
         };
-    }, []);
+    }, [q]);
 
-    const shown = assets.filter((a) => !q || a.name.toLowerCase().includes(q.toLowerCase()));
     const trimmed = url.trim();
     const valid = isImg(trimmed);
     const commitUrl = () => {
@@ -143,14 +150,14 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                             <div className="grid place-items-center py-16">
                                 <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-lavender-mist border-t-primary" />
                             </div>
-                        ) : shown.length === 0 ? (
+                        ) : assets.length === 0 ? (
                             <div className="grid place-items-center gap-2 py-12 text-center">
                                 <Icon className="h-6 w-6 fill-grey" name="image" />
-                                <p className="text-caption-1 text-grey">{assets.length ? "No matches." : "No images in your library yet. Paste a URL instead."}</p>
+                                <p className="text-caption-1 text-grey">{q.trim() ? "No matches." : "No images in your library yet. Paste a URL instead."}</p>
                             </div>
                         ) : (
                             <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-3 content-start gap-3 overflow-y-auto scrollbar-thin sm:grid-cols-4">
-                                {shown.map((a) => (
+                                {assets.map((a) => (
                                     <button
                                         key={a.id}
                                         type="button"

@@ -72,16 +72,30 @@ const AssetsPage = () => {
     const imageIdsRef = useRef<string[]>([]);
     const { enqueue } = useJobs();
 
-    const load = () =>
-        api<LiveAsset[]>("/assets")
-            .then((d) => setItems(d))
-            .catch(() => setItems([]))
+    // Search runs server-side: the list endpoint returns one capped page, so
+    // filtering only what is loaded would never find older assets.
+    const loadSeq = useRef(0);
+    const load = () => {
+        const seq = ++loadSeq.current;
+        const search = query.trim();
+        return api<LiveAsset[]>(`/assets${search ? `?q=${encodeURIComponent(search)}` : ""}`)
+            .then((d) => seq === loadSeq.current && setItems(d))
+            .catch(() => seq === loadSeq.current && setItems([]))
             .finally(() => setLoading(false));
+    };
+
+    // Global search links here as /assets?q=<name>.
+    useEffect(() => {
+        const initial = new URLSearchParams(window.location.search).get("q");
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        if (initial) setQuery(initial);
+    }, []);
 
     useEffect(() => {
-        void load();
+        const t = setTimeout(() => void load(), query ? 250 : 0);
+        return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [query]);
 
     // Warn before leaving while uploads are still in flight: the file bytes live in
     // this tab and can't resume after a refresh. (Queued AI alt-text jobs DO continue
@@ -96,10 +110,9 @@ const AssetsPage = () => {
         return () => window.removeEventListener("beforeunload", warn);
     }, [pending]);
 
-    const q = query.trim().toLowerCase();
-    const visible = items.filter(
-        (a) => (folder === "all" || a.folder === folder) && (!q || a.name.toLowerCase().includes(q)),
-    );
+    // The folder filter still runs client-side over the one loaded page (500);
+    // pass ?folder= to the API and page with offset if libraries outgrow that.
+    const visible = items.filter((a) => folder === "all" || a.folder === folder);
     const selected = items.find((a) => a.id === selectedId) ?? null;
     const missingAlt = items.filter((a) => a.type === "image" && a.altSource === "none").length;
 
@@ -331,7 +344,7 @@ const AssetsPage = () => {
                     <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-lavender-mist dark:bg-dark-3">
                         <Icon className="h-6 w-6 fill-primary" name="image" />
                     </span>
-                    <p className="text-body text-grey">{items.length === 0 ? "No assets yet: upload your first file." : "No assets in this folder."}</p>
+                    <p className="text-body text-grey">{query.trim() ? "No assets match your search." : items.length === 0 ? "No assets yet: upload your first file." : "No assets in this folder."}</p>
                     <button type="button" onClick={() => fileRef.current?.click()} className="btn-primary">
                         <Icon className="w-5 h-5 fill-white" name="plus" />
                         Upload
