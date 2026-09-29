@@ -429,13 +429,20 @@ export class ContentEntriesService {
         return this.author(workspaceId, id);
     }
 
+    /** Full entries (with their bodies), newest first, at most 500 per call. List
+     *  screens use ContentListService.page instead, which scales to large workspaces. */
     async list(workspaceId: string, opts: { typeId?: string; status?: string; q?: string; locale?: string; authorId?: string; limit?: number; offset?: number }, role?: RoleRules) {
         const where: Prisma.ContentEntryWhereInput = { workspaceId };
         if (opts.typeId) where.contentTypeId = opts.typeId;
         if (opts.status) where.status = opts.status as ContentStatus;
         if (opts.locale) where.locale = opts.locale;
         const mode = await this.authorMode(workspaceId);
-        if (opts.authorId) where.AND = [authorWhere(opts.authorId, mode)];
+        const and: Prisma.ContentEntryWhereInput[] = [];
+        if (opts.authorId) and.push(authorWhere(opts.authorId, mode));
+        // Search runs in the database, over every entry, not over one page of results.
+        const q = opts.q?.trim();
+        if (q) and.push({ OR: [{ slug: { contains: q, mode: "insensitive" } }, { data: { path: ["title"], string_contains: q, mode: "insensitive" } }] });
+        if (and.length) where.AND = and;
         // advanced_rbac (Pro): scope a role to its allowed content types.
         const allowed = this.rbac && role ? await this.rbac.allowedTypeIds(role) : null;
         if (allowed) {
@@ -452,7 +459,9 @@ export class ContentEntriesService {
         const rows = await this.prisma.contentEntry.findMany({
             where,
             include: { contentType: { select: CT_SELECT } },
-            orderBy: { updatedAt: "desc" },
+            // Tie-break on id so paging is stable when entries share a timestamp
+            // (bulk imports), and no entry is skipped or repeated between pages.
+            orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
             take,
             skip,
         });
@@ -471,9 +480,7 @@ export class ContentEntriesService {
             const u = userById.get(id);
             return u ? (u.name ?? u.email ?? undefined) : undefined;
         };
-        const q = opts.q?.toLowerCase().trim();
-        return rows
-            .map((r) => {
+        return rows.map((r) => {
                 const authorId = effectiveAuthorId(r, mode);
                 const s = this.shape(r, nameOf(authorId));
                 const u = authorId ? userById.get(authorId) : null;
@@ -483,8 +490,7 @@ export class ContentEntriesService {
                         ? { id: authorId, name: s.author.name, title: u?.title ?? null, avatarUrl: u?.avatarUrl ?? null, avatarStyle: u?.avatarStyle ?? null }
                         : null,
                 };
-            })
-            .filter((r) => !q || r.title.toLowerCase().includes(q) || (r.slug ?? "").toLowerCase().includes(q));
+            });
     }
 
     async get(workspaceId: string, id: string) {

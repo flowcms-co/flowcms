@@ -15,7 +15,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { MediaField, pickImagePatch } from "@/components/ui/MediaPicker";
-import { api } from "@/lib/api";
+import { fetchEntryPage } from "@/lib/entries";
 import RichTextField from "./RichTextField";
 import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
 import { stripTags as stripHtml } from "@flowcms/shared/strings";
@@ -208,26 +208,41 @@ const ReferenceField = ({
         };
     }, [open, reposition]);
 
+    // The target type can hold thousands of entries (every city, every tag), so the
+    // picker never loads them all: it asks the server for matches as you type, and
+    // separately for the entries already picked so their names can be shown.
+    const toRef = (r: ApiListEntry): RefEntry => ({ id: r.id, title: r.title, slug: r.slug, typeName: r.contentType?.name ?? "" });
+    const [picked, setPicked] = useState<RefEntry[]>([]);
+    const selectedKey = selected.join(",");
     useEffect(() => {
-        const ids = typeIdsKey ? typeIdsKey.split(",") : [];
-        if (!ids.length) return;
+        if (!selectedKey) return;
         let cancelled = false;
-        Promise.all(
-            ids.map((tid) => api<ApiListEntry[]>(`/entries?typeId=${encodeURIComponent(tid)}`).catch(() => [] as ApiListEntry[])),
-        ).then((lists) => {
-            if (cancelled) return;
-            setEntries(lists.flat().map((r) => ({ id: r.id, title: r.title, slug: r.slug, typeName: r.contentType?.name ?? "" })));
-        });
+        fetchEntryPage<ApiListEntry>({ ids: selectedKey, pageSize: 500 })
+            .then((r) => !cancelled && setPicked(r.items.map(toRef)))
+            .catch(() => {});
         return () => {
             cancelled = true;
         };
-    }, [typeIdsKey]);
+    }, [selectedKey]);
+    useEffect(() => {
+        if (!typeIdsKey) return;
+        let cancelled = false;
+        const t = setTimeout(() => {
+            fetchEntryPage<ApiListEntry>({ typeId: typeIdsKey, q: query.trim(), sort: "title", dir: "asc", pageSize: 50 })
+                .then((r) => !cancelled && setEntries(r.items.map(toRef)))
+                .catch(() => {});
+        }, 200);
+        return () => {
+            cancelled = true;
+            clearTimeout(t);
+        };
+    }, [typeIdsKey, query]);
 
     if (!typeIds.length) {
         return <p className="text-caption-2 text-grey">Pick the referenced content type for this field in the Schema Builder.</p>;
     }
 
-    const entryFor = (id: string) => entries.find((e) => e.id === id);
+    const entryFor = (id: string) => picked.find((e) => e.id === id) ?? entries.find((e) => e.id === id);
     // Display label: the entry title, or its slug when the target type has no title
     // field (e.g. a Geo Library city keyed by city_name/slug → title is "Untitled").
     const labelOf = (e?: RefEntry) => {
@@ -235,10 +250,8 @@ const ReferenceField = ({
         return t && t.toLowerCase() !== "untitled" ? t : (e?.slug ?? "");
     };
     const titleFor = (id: string) => labelOf(entryFor(id)) || id;
-    const q = query.trim().toLowerCase();
-    const available = entries.filter(
-        (e) => !selected.includes(e.id) && (!q || e.title.toLowerCase().includes(q) || (e.slug ?? "").toLowerCase().includes(q)),
-    );
+    // `entries` is already the server's matches for the current search.
+    const available = entries.filter((e) => !selected.includes(e.id));
 
     const add = (id: string) => {
         onChange(multiple ? [...selected, id] : id);
@@ -288,7 +301,7 @@ const ReferenceField = ({
                         }}
                         onFocus={() => setOpen(true)}
                         onBlur={() => setTimeout(() => setOpen(false), 150)}
-                        placeholder={entries.length ? "Search entries to link…" : "No entries to link yet"}
+                        placeholder={entries.length || query ? "Search entries to link…" : "No entries to link yet"}
                     />
                     {open && available.length > 0 && menuRect && typeof document !== "undefined" &&
                         createPortal(

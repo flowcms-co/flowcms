@@ -16,6 +16,7 @@ import BulkActionBar, { type BulkAction } from "@/templates/ContentPage/BulkActi
 import VersionsModal from "@/templates/ContentPage/VersionsModal";
 import ScheduleModal from "@/components/editor/ScheduleModal";
 import { api, ApiError } from "@/lib/api";
+import { fetchEntryPage } from "@/lib/entries";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useJobs } from "@/components/providers/JobsProvider";
 import { formatDate } from "@/lib/format";
@@ -91,6 +92,9 @@ const mapEntry = (e: ApiEntry): EntryRow => ({
     views: typeof e.data?.views === "number" ? (e.data.views as number) : 0,
 });
 
+/** A status filter in the UI, as the database statuses it stands for. */
+const STATUS_QUERY: Record<string, string> = { live: "PUBLISHED", scheduled: "SCHEDULED", review: "IN_REVIEW", draft: "DRAFT,ARCHIVED" };
+
 const STATUS_PARAMS: readonly string[] = ["live", "scheduled", "review", "draft"];
 const statusFromParam = (s: string | null): Filters["status"] =>
     s && STATUS_PARAMS.includes(s) ? (s as Filters["status"]) : "all";
@@ -123,7 +127,13 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const ws = useWorkspace();
     const searchParams = useSearchParams();
 
-    const [items, setItems] = useState<EntryRow[]>([]);
+    // One page of rows at a time: the server searches, filters, sorts and pages, so
+    // the list works the same with fifty entries or fifty thousand.
+    const [rows, setRows] = useState<EntryRow[]>([]);
+    const [total, setTotal] = useState(0);
+    const [stats, setStats] = useState<Record<string, number>>({});
+    const [authorOptions, setAuthorOptions] = useState<{ id: string; name: string }[]>([]);
+    const loadSeq = useRef(0);
     const [types, setTypes] = useState<{ id: string; name: string; pageType?: string }[]>([]);
     const [loading, setLoading] = useState(true);
     // The All-content list keeps its view (search, filters, sort, page) in the URL, so
@@ -191,25 +201,56 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const multiLocale = (ws?.locales.length ?? 1) > 1;
     const { enqueue } = useJobs();
 
+    // Search waits for a pause in typing, so each keystroke isn't a request.
+    const [query, setQuery] = useState(filters.query);
+    useEffect(() => {
+        const t = setTimeout(() => setQuery(filters.query), 250);
+        return () => clearTimeout(t);
+    }, [filters.query]);
+
     const load = useCallback(async () => {
+        const seq = ++loadSeq.current;
         try {
-            const [entries, cts] = await Promise.all([
-                api<ApiEntry[]>(`/entries${mineOnly ? "?author=me" : ""}`),
-                api<{ id: string; name: string; pageType?: string }[]>("/content-types"),
-            ]);
-            setItems(entries.map(mapEntry));
-            setTypes(cts.map((t) => ({ id: t.id, name: t.name, pageType: t.pageType })));
+            const res = await fetchEntryPage<ApiEntry>({
+                q: query.trim(),
+                // A type-locked list (a Reference sub-tab) shows that type only; the
+                // All Content view shows everything except reference types.
+                typeId: lockedTypeId ?? (filters.type !== "all" ? filters.type : undefined),
+                scope: lockedTypeId ? undefined : "content",
+                status: STATUS_QUERY[filters.status],
+                author: mineOnly ? "me" : filters.author !== "all" ? filters.author : undefined,
+                locale: localeFilter !== "all" ? localeFilter : undefined,
+                sort: sort.key,
+                dir: sort.dir,
+                page,
+                pageSize: PAGE_SIZE,
+                facets: true,
+            });
+            if (seq !== loadSeq.current) return; // a newer request is on its way
+            setRows(res.items.map(mapEntry));
+            setTotal(res.total);
+            setStats(res.stats ?? {});
+            setAuthorOptions([...(res.authors ?? [])].sort((a, b) => (a.id === "none" ? 1 : b.id === "none" ? -1 : a.name.localeCompare(b.name))));
+            // The last page emptied (rows deleted or moved): step back to the new last page.
+            const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
+            if (page > last) setPage(last);
         } catch {
             /* content.read required */
         } finally {
-            setLoading(false);
+            if (seq === loadSeq.current) setLoading(false);
         }
-    }, [mineOnly]);
+    }, [query, filters.type, filters.status, filters.author, localeFilter, sort, page, mineOnly, lockedTypeId]);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on change; state is set after the request resolves
         void load();
     }, [load]);
+
+    useEffect(() => {
+        api<{ id: string; name: string; pageType?: string }[]>("/content-types")
+            .then((cts) => setTypes(cts.map((t) => ({ id: t.id, name: t.name, pageType: t.pageType }))))
+            .catch(() => {});
+    }, []);
 
     useEffect(() => {
         const t = setTimeout(() => setSkelVisible(true), 250);
@@ -302,58 +343,12 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     /* ─── derived data ────────────────────────────────────── */
 
     // Reference-page types (tags, cities, …) are managed under the dedicated Reference
-    // tab, so their entries are kept out of the general "All Content" view.
-    const referenceTypeIds = useMemo(() => new Set(types.filter((t) => t.pageType === "reference").map((t) => t.id)), [types]);
+    // tab, so the type filter of the All Content view leaves them out.
+    const filterableTypes = useMemo(() => types.filter((t) => t.pageType !== "reference"), [types]);
 
-    // When scoped to a single type (a Reference sub-tab), restrict the dataset to that
-    // type; otherwise show everything except reference-type entries.
-    const all = useMemo(
-        () => (lockedTypeId ? items.filter((i) => i.typeId === lockedTypeId) : items.filter((i) => !referenceTypeIds.has(i.typeId))),
-        [items, lockedTypeId, referenceTypeIds],
-    );
-
-    // Type-filter dropdown lists only the types shown in this view (reference types are
-    // excluded from the All Content view, since they live under the Reference tab).
-    const filterableTypes = useMemo(() => types.filter((t) => !referenceTypeIds.has(t.id)), [types, referenceTypeIds]);
-
-    // Author filter options: everyone who has content in this view, "Unassigned" last.
-    const authorOptions = useMemo(() => {
-        const byId = new Map<string, string>();
-        for (const r of all) byId.set(r.author.id ?? "none", r.author.id ? r.author.name : "Unassigned");
-        return [...byId]
-            .map(([id, name]) => ({ id, name }))
-            .sort((a, b) => (a.id === "none" ? 1 : b.id === "none" ? -1 : a.name.localeCompare(b.name)));
-    }, [all]);
-
-    const rows = useMemo(() => {
-        const q = filters.query.trim().toLowerCase();
-        const filtered = all.filter((c) => {
-            if (filters.type !== "all" && c.typeId !== filters.type) return false;
-            if (filters.status !== "all" && c.status !== filters.status) return false;
-            if (filters.author !== "all" && (c.author.id ?? "none") !== filters.author) return false;
-            if (localeFilter !== "all" && c.locale !== localeFilter) return false;
-            if (q && !c.title.toLowerCase().includes(q) && !c.slug.toLowerCase().includes(q)) return false;
-            return true;
-        });
-        const dir = sort.dir === "asc" ? 1 : -1;
-        return [...filtered].sort((a, b) => {
-            switch (sort.key) {
-                case "title":
-                    return a.title.localeCompare(b.title) * dir;
-                case "seoScore":
-                    return ((a.seoScore ?? -1) - (b.seoScore ?? -1)) * dir;
-                case "views":
-                    return (a.views - b.views) * dir;
-                case "updated":
-                default:
-                    return (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()) * dir;
-            }
-        });
-    }, [all, filters, localeFilter, sort]);
-
-    const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const current = Math.min(page, totalPages);
-    const pagedRows = rows.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+    const pagedRows = rows;
 
     const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
     const someSelected = rows.some((r) => selected.has(r.id));
@@ -372,9 +367,11 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
 
     /* ─── stat bar ────────────────────────────────────────── */
 
-    const statLive = all.filter((r) => r.status === "live").length;
-    const statScheduled = all.filter((r) => r.status === "scheduled").length;
-    const statDraftReview = all.filter((r) => r.status === "draft" || r.status === "review").length;
+    const n = (k: string) => stats[k] ?? 0;
+    const statAll = n("total");
+    const statLive = n("PUBLISHED");
+    const statScheduled = n("SCHEDULED");
+    const statDraftReview = n("DRAFT") + n("ARCHIVED") + n("IN_REVIEW");
 
     /* ─── locale options for FilterBar ───────────────────── */
 
@@ -404,7 +401,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
             {!lockedTypeId && (
                 <Card id="tour-content-overview" className="!p-5">
                     <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
-                        <StatTile icon={STAT_PATHS.all} color="var(--color-primary)" value={all.length} label="All content" />
+                        <StatTile icon={STAT_PATHS.all} color="var(--color-primary)" value={statAll} label="All content" />
                         <StatTile icon={STAT_PATHS.live} color="#00B894" value={statLive} label="Live" />
                         <StatTile icon={STAT_PATHS.calendar} color="#3B82F6" value={statScheduled} label="Publishing this week" />
                         <StatTile icon={STAT_PATHS.clock} color="#F5A623" value={statDraftReview} label="Draft and review" />
@@ -416,7 +413,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
             <FilterBar
                 filters={filters}
                 onChange={(next) => { setFilters(next); setPage(1); }}
-                total={rows.length}
+                total={total}
                 types={filterableTypes}
                 authors={authorOptions}
                 localeOptions={multiLocale ? localeOptions : []}
@@ -448,7 +445,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
                     </div>
                 ) : rows.length === 0 ? (
                     <div className="px-5 py-16 text-center text-body text-grey">
-                        {all.length === 0 ? "No content yet: create your first piece." : "No content matches your filters."}
+                        {statAll === 0 ? "No content yet: create your first piece." : "No content matches your filters."}
                     </div>
                 ) : (
                     <>
@@ -481,7 +478,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
             {!loading && (
                 <div className="flex flex-wrap items-center justify-between gap-3 text-caption-1 text-grey">
                     <span>
-                        Showing {rows.length === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}&ndash;{Math.min(current * PAGE_SIZE, rows.length)} of {rows.length}
+                        Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}&ndash;{Math.min(current * PAGE_SIZE, total)} of {total.toLocaleString()}
                     </span>
                     {totalPages > 1 && (
                         <Pagination page={current} totalPages={totalPages} onChange={setPage} />
@@ -495,7 +492,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
 
             <VersionsModal
                 entryId={historyId}
-                title={all.find((i) => i.id === historyId)?.title ?? ""}
+                title={rows.find((i) => i.id === historyId)?.title ?? ""}
                 onClose={() => setHistoryId(null)}
                 onRestored={load}
             />

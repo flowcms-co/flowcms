@@ -14,6 +14,7 @@ import {
 } from "@headlessui/react";
 import Icon from "@/components/ui/Icon";
 import { api } from "@/lib/api";
+import { fetchEntryPage } from "@/lib/entries";
 import { cn } from "@/lib/cn";
 
 type SearchItem = {
@@ -81,7 +82,7 @@ const GlobalSearch = () => {
         setLoading(true);
         const t = setTimeout(async () => {
             const [entries, assets] = await Promise.all([
-                api<ApiEntry[]>(`/entries?q=${encodeURIComponent(q)}`).catch(() => [] as ApiEntry[]),
+                fetchEntryPage<ApiEntry>({ q, pageSize: 8 }).then((r) => r.items).catch(() => [] as ApiEntry[]),
                 api<ApiAsset[]>(`/assets?q=${encodeURIComponent(q)}&limit=8`).catch(() => [] as ApiAsset[]),
             ]);
             if (cancel) return;

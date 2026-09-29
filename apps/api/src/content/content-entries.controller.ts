@@ -5,6 +5,7 @@ import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { CreateEntryDto, SetAuthorDto, UpdateEntryDto } from "./entries.dto";
 import { ContentEntriesService } from "./content-entries.service";
+import { ContentListService } from "./content-list.service";
 import { JobsService } from "../jobs/jobs.service";
 
 class ReviewDto {
@@ -20,8 +21,39 @@ class BulkIdsDto {
 export class ContentEntriesController {
     constructor(
         private readonly entries: ContentEntriesService,
+        private readonly lists: ContentListService,
         private readonly jobs: JobsService,
     ) {}
+
+    /** One page of entries for list screens: searched, filtered, sorted and paged in
+     *  the database. Declared before the `:id` routes so it isn't matched as an id. */
+    @Get("page")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    page(@CurrentUser() user: AuthUser, @Query() q: Record<string, string | undefined>) {
+        const list = (v?: string) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined);
+        const int = (v?: string) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+        const date = (v?: string) => (v && !Number.isNaN(new Date(v).getTime()) ? new Date(v) : undefined);
+        return this.lists.page(
+            user.workspaceId,
+            {
+                q: q.q,
+                typeIds: list(q.typeId),
+                statuses: list(q.status),
+                author: q.author === "me" ? user.id : q.author || undefined,
+                locale: q.locale || undefined,
+                ids: list(q.ids),
+                from: date(q.from),
+                to: date(q.to),
+                scope: q.scope === "content" ? "content" : undefined,
+                sort: q.sort,
+                dir: q.dir === "asc" ? "asc" : "desc",
+                page: int(q.page),
+                pageSize: int(q.pageSize),
+                facets: q.facets === "1",
+            },
+            user.role,
+        );
+    }
 
     @Get()
     @RequirePermissions(PERMISSIONS.CONTENT_READ)
@@ -32,10 +64,14 @@ export class ContentEntriesController {
         @Query("q") q?: string,
         @Query("locale") locale?: string,
         @Query("author") author?: string,
+        @Query("limit") limit?: string,
+        @Query("offset") offset?: string,
     ) {
         // `author=me` scopes the list to the signed-in user's own entries.
         const authorId = author === "me" ? user.id : author || undefined;
-        return this.entries.list(user.workspaceId, { typeId, status, q, locale, authorId }, user.role);
+        // Pages of up to 500; callers walk ?offset= to read everything.
+        const num = (v?: string) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+        return this.entries.list(user.workspaceId, { typeId, status, q, locale, authorId, limit: num(limit), offset: num(offset) }, user.role);
     }
 
     // ── Bulk actions → background jobs (so the app is never locked). Declared

@@ -11,7 +11,7 @@ import StatusPill from "@/components/ui/StatusPill";
 import { typeColor, type CalEvent } from "@/mocks/calendar";
 import type { ContentType } from "@/mocks/content";
 import type { PillStatus } from "@/components/ui/StatusPill";
-import { api } from "@/lib/api";
+import { fetchEntryPage } from "@/lib/entries";
 import { cn } from "@/lib/cn";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -37,7 +37,27 @@ const mapStatus = (s: string): Exclude<PillStatus, "approved"> => {
     if (s === "IN_REVIEW") return "review";
     return "draft";
 };
+const MONTH_LIMIT = 500; // the most items drawn for one month
+
 const fmtTime = (d: Date) => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+/** An entry as a calendar event, placed on its scheduled (else published) date. */
+const toEv = (e: Entry): Ev | null => {
+    const iso = e.scheduledAt ?? e.publishedAt;
+    if (!iso) return null;
+    const d = new Date(iso);
+    return {
+        id: e.id,
+        title: e.title,
+        type: mapType(e.contentType?.name ?? ""),
+        day: d.getDate(),
+        time: fmtTime(d),
+        status: mapStatus(e.status),
+        author: { name: e.author?.name ?? "—" },
+        year: d.getFullYear(),
+        month: d.getMonth(),
+    } as Ev;
+};
 
 /**
  * Content calendar — a navigable month grid with type-colored event chips plus a
@@ -53,32 +73,36 @@ const CalendarPage = () => {
     const [cursor, setCursor] = useState({ year: now.getFullYear(), month: now.getMonth() });
     const [view, setView] = useState<"month" | "list">("month");
 
+    const [monthTotal, setMonthTotal] = useState(0);
+    // Only the month on screen is loaded, so the calendar stays quick however much
+    // content the workspace holds.
     useEffect(() => {
-        api<Entry[]>("/entries")
-            .then((rows) => {
-                const evs: Ev[] = rows
-                    .map((e) => {
-                        const iso = e.scheduledAt ?? e.publishedAt;
-                        if (!iso) return null;
-                        const d = new Date(iso);
-                        return {
-                            id: e.id,
-                            title: e.title,
-                            type: mapType(e.contentType?.name ?? ""),
-                            day: d.getDate(),
-                            time: fmtTime(d),
-                            status: mapStatus(e.status),
-                            author: { name: e.author?.name ?? "—" },
-                            year: d.getFullYear(),
-                            month: d.getMonth(),
-                        } as Ev;
-                    })
-                    .filter((e): e is Ev => e !== null);
-                setEvents(evs);
+        let off = false;
+        const from = new Date(cursor.year, cursor.month, 1);
+        const to = new Date(cursor.year, cursor.month + 1, 1);
+        // ponytail: one request, the month's first 500 items by date. A month busier
+        // than that says so below the grid; a per-day "show more" is the upgrade.
+        fetchEntryPage<Entry>({ from: from.toISOString(), to: to.toISOString(), sort: "date", dir: "asc", pageSize: MONTH_LIMIT })
+            .then((r) => {
+                if (off) return;
+                setEvents(r.items.map(toEv).filter((e): e is Ev => e !== null));
+                setMonthTotal(r.total);
             })
             .catch(() => {})
-            .finally(() => setLoaded(true));
-    }, []);
+            .finally(() => !off && setLoaded(true));
+        return () => {
+            off = true;
+        };
+    }, [cursor]);
+
+    // Upcoming: the next scheduled posts across all months, soonest first.
+    const [comingUp, setComingUp] = useState<Ev[]>([]);
+    useEffect(() => {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        fetchEntryPage<Entry>({ status: "SCHEDULED", from: today.toISOString(), sort: "date", dir: "asc", pageSize: 8 })
+            .then((r) => setComingUp(r.items.map(toEv).filter((e): e is Ev => e !== null)))
+            .catch(() => {});
+    }, [now]);
 
     const todayDay = now.getDate();
     const todayInView = cursor.year === now.getFullYear() && cursor.month === now.getMonth();
@@ -103,16 +127,6 @@ const CalendarPage = () => {
             if (m > 11) return { year: c.year + 1, month: 0 };
             return { year: c.year, month: m };
         });
-
-    // Upcoming: next scheduled posts across all months, soonest first.
-    const comingUp = useMemo(() => {
-        const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        return events
-            .filter((e) => e.status === "scheduled")
-            .filter((e) => new Date(e.year, e.month, e.day) >= ref)
-            .sort((a, b) => +new Date(a.year, a.month, a.day) - +new Date(b.year, b.month, b.day))
-            .slice(0, 8);
-    }, [events, now]);
 
     const listDays = useMemo(() => {
         const days = [...new Set(monthEvents.map((e) => e.day))].sort((a, b) => a - b);
@@ -218,6 +232,11 @@ const CalendarPage = () => {
                         </motion.div>
                     )}
                 </AnimatePresence>
+                )}
+                {monthTotal > MONTH_LIMIT && (
+                    <p className="border-t border-grey-light px-5 py-3 text-caption-2 text-grey dark:border-grey-light/10">
+                        Showing the first {MONTH_LIMIT} of {monthTotal.toLocaleString()} items this month. Use the content list to find the rest.
+                    </p>
                 )}
             </Card>
 

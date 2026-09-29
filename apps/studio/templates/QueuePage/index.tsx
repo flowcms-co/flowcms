@@ -10,6 +10,7 @@ import Select from "@/components/ui/Select";
 import CountUp from "@/components/motion/CountUp";
 import ScheduleModal from "@/components/editor/ScheduleModal";
 import { api } from "@/lib/api";
+import { fetchAllEntries } from "@/lib/entries";
 import { cn } from "@/lib/cn";
 
 /* ---------------- types + data mapping ---------------- */
@@ -123,7 +124,7 @@ const QueuePage = () => {
 
     const load = useCallback(async () => {
         try {
-            const entries = await api<ApiEntry[]>("/entries");
+            const entries = await fetchAllEntries<ApiEntry>({ status: "DRAFT,IN_REVIEW,APPROVED,SCHEDULED" });
             const mapped: Row[] = entries
                 .filter((e) => STATUS_MAP[e.status])
                 .map((e) => {

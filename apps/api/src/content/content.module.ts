@@ -7,6 +7,7 @@ import { ContentTypesController } from "./content-types.controller";
 import { ContentTypesService } from "./content-types.service";
 import { ContentEntriesController } from "./content-entries.controller";
 import { ContentEntriesService } from "./content-entries.service";
+import { ContentListService } from "./content-list.service";
 import { ApiTokensController } from "./api-tokens.controller";
 import { ApiTokensService } from "./api-tokens.service";
 import { PublicController } from "./public.controller";
@@ -37,6 +38,7 @@ import { ContentJobHandlers } from "./content-job.handlers";
     providers: [
         ContentTypesService,
         ContentEntriesService,
+        ContentListService,
         ApiTokensService,
         PublicQueryService,
         RelationSyncService,

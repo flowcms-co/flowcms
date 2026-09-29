@@ -140,7 +140,7 @@ const FilterBar = ({
 
                 <div className="ml-auto flex items-center gap-3">
                     <span className="text-caption-1 text-grey whitespace-nowrap">
-                        {total} {total === 1 ? "item" : "items"}
+                        {total.toLocaleString()} {total === 1 ? "item" : "items"}
                     </span>
                     <div className="flex items-center gap-1.5">
                         <span className="text-caption-2 text-grey">Sort:</span>
