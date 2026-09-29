@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { authorWhere, effectiveAuthorId } from "../content/author";
 import { stripTags } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { CacheService } from "../cache/cache.service";
@@ -35,10 +36,10 @@ export class DashboardService {
         // Lightweight bulk load WITHOUT the entry `data` body (the dominant memory
         // cost). Titles are resolved for only the bounded set actually rendered (see
         // titleById below), and word counts come from a bounded per-user query.
-        const [entries, types, memberships, aiGenerations, workspace] = await Promise.all([
+        const [rawEntries, types, memberships, aiGenerations, workspace] = await Promise.all([
             this.prisma.contentEntry.findMany({
                 where: { workspaceId },
-                select: { id: true, status: true, authorId: true, publishedAt: true, scheduledAt: true, updatedAt: true, contentTypeId: true },
+                select: { id: true, status: true, authorId: true, lastEditorId: true, authorOverrideId: true, publishedAt: true, scheduledAt: true, updatedAt: true, contentTypeId: true },
                 orderBy: { updatedAt: "desc" },
             }),
             this.prisma.contentType.findMany({ where: { workspaceId }, select: { id: true, name: true } }),
@@ -47,8 +48,12 @@ export class DashboardService {
                 include: { user: { select: { id: true, name: true, email: true, avatarUrl: true, avatarStyle: true } }, role: { select: { key: true, name: true } } },
             }),
             this.prisma.usageRecord.count({ where: { workspaceId, userId, createdAt: { gte: new Date(since(30)) } } }),
-            this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { defaultWeeklyGoal: true } }),
+            this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { defaultWeeklyGoal: true, authorMode: true } }),
         ]);
+        // Every figure below counts an entry for its author as the workspace defines
+        // it (creator, latest editor, or a hand-picked one), same as the content list.
+        const mode = workspace?.authorMode ?? "creator";
+        const entries = rawEntries.map((e) => ({ ...e, authorId: effectiveAuthorId(e, mode) }));
 
         const typeName = new Map(types.map((t) => [t.id, t.name]));
         const member = new Map(memberships.map((m) => [m.user.id, { name: m.user.name || m.user.email, role: m.role.key, avatarUrl: m.user.avatarUrl, avatarStyle: m.user.avatarStyle }]));
@@ -80,7 +85,7 @@ export class DashboardService {
         // Words written this month: bounded to the current user's entries updated in
         // the last 30 days (loads only this small slice of bodies, not every entry).
         const myRecentBodies = await this.prisma.contentEntry.findMany({
-            where: { workspaceId, authorId: userId, updatedAt: { gte: new Date(since30) } },
+            where: { workspaceId, ...authorWhere(userId, mode), updatedAt: { gte: new Date(since30) } },
             select: { data: true },
         });
         const wordsThisMonth = myRecentBodies.reduce((s, e) => s + wordCountOf(e.data), 0);

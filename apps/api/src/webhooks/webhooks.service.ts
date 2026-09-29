@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { Queue, Worker, type ConnectionOptions, type Job as BullJob } from "bullmq";
 import { Webhook } from "@flowcms/db";
 import { decryptSecret, encryptSecret } from "@flowcms/shared";
@@ -96,13 +96,22 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
         return rows.map((w) => this.shape(w));
     }
 
+    /** A webhook with no address can never deliver, so an empty one is refused;
+     *  private/internal targets are rejected up-front. Returns the trimmed URL. */
+    private async checkUrl(url: string | undefined): Promise<string> {
+        const u = url?.trim();
+        if (!u) throw new BadRequestException("A webhook needs a URL to deliver to.");
+        await assertPublicUrl(u);
+        return u;
+    }
+
     async create(workspaceId: string, input: UpsertWebhookInput) {
-        if (input.url) await assertPublicUrl(input.url); // reject private/internal targets up-front
+        const url = await this.checkUrl(input.url);
         const w = await this.prisma.webhook.create({
             data: {
                 workspaceId,
                 name: input.name?.trim() || "Endpoint",
-                url: input.url ?? "",
+                url,
                 events: (input.events ?? []) as object,
                 secret: input.secret?.trim() ? encryptSecret(input.secret.trim()) : null,
                 enabled: input.enabled ?? true,
@@ -114,10 +123,9 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
     async update(workspaceId: string, id: string, input: UpsertWebhookInput) {
         const existing = await this.prisma.webhook.findFirst({ where: { id, workspaceId, deletedAt: null } });
         if (!existing) throw new NotFoundException("Webhook not found.");
-        if (input.url) await assertPublicUrl(input.url); // reject private/internal targets up-front
         const data: Record<string, unknown> = {};
         if (input.name !== undefined) data.name = input.name;
-        if (input.url !== undefined) data.url = input.url;
+        if (input.url !== undefined) data.url = await this.checkUrl(input.url);
         if (input.events !== undefined) data.events = input.events;
         if (input.enabled !== undefined) data.enabled = input.enabled;
         if (input.secret !== undefined) data.secret = input.secret.trim() ? encryptSecret(input.secret.trim()) : null;
@@ -220,7 +228,7 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
 
     /** Send a sample ping to verify an endpoint. */
     async test(workspaceId: string, id: string) {
-        const webhook = await this.prisma.webhook.findFirst({ where: { id, workspaceId } });
+        const webhook = await this.prisma.webhook.findFirst({ where: { id, workspaceId, deletedAt: null } });
         if (!webhook) throw new NotFoundException("Webhook not found.");
         return this.deliver(webhook, "ping", { message: "Test delivery from Flow CMS", workspaceId });
     }
@@ -231,7 +239,8 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
             where: { id: deliveryId },
             include: { webhook: true },
         });
-        if (!delivery || delivery.webhook.workspaceId !== workspaceId) throw new NotFoundException("Delivery not found.");
+        // A deleted webhook keeps its history but must never send again.
+        if (!delivery || delivery.webhook.workspaceId !== workspaceId || delivery.webhook.deletedAt) throw new NotFoundException("Delivery not found.");
         return this.deliver(delivery.webhook, delivery.event, delivery.payload, delivery.attempt + 1);
     }
 }

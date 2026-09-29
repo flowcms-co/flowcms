@@ -9,12 +9,14 @@ import { api, ApiError } from "@/lib/api";
 import { useDisplayBase } from "@/lib/useDisplayBase";
 import { formatDate } from "@/lib/format";
 import { confirm, notice } from "@/components/providers/ConfirmProvider";
+import { PERMISSIONS } from "@flowcms/shared/permissions";
 
 type Token = {
     id: string;
     name: string;
     prefix: string;
     type: "CONTENT" | "PREVIEW" | "AGENT" | "ADMIN";
+    scopes?: string[];
     lastUsedAt: string | null;
     expiresAt: string | null;
     createdAt: string;
@@ -27,6 +29,27 @@ const TYPE_LABEL: Record<Token["type"], string> = {
     ADMIN: "Admin",
 };
 
+/** What an Agent token may do. The API refuses an Agent token with no scopes, so
+ *  the form always sends the ticked ones. Publish and delete start unticked. */
+const AGENT_SCOPES: { key: string; label: string; on: boolean }[] = [
+    { key: PERMISSIONS.CONTENT_READ, label: "Read content", on: true },
+    { key: PERMISSIONS.CONTENT_CREATE, label: "Create content", on: true },
+    { key: PERMISSIONS.CONTENT_UPDATE, label: "Edit content", on: true },
+    { key: PERMISSIONS.CONTENT_PUBLISH, label: "Publish and unpublish", on: false },
+    { key: PERMISSIONS.CONTENT_DELETE, label: "Delete content", on: false },
+];
+const DEFAULT_SCOPES = AGENT_SCOPES.filter((s) => s.on).map((s) => s.key);
+
+/** One line saying what a write token may do, for the token list. Tokens made
+ *  before permissions existed have none stored, which the API treats as everything. */
+const scopeSummary = (t: Token): string | null => {
+    if (t.type !== "AGENT" && t.type !== "ADMIN") return null;
+    const scopes = t.scopes ?? [];
+    if (scopes.length === 0 || scopes.includes("*")) return "Full access";
+    const labels = AGENT_SCOPES.filter((s) => scopes.includes(s.key)).map((s) => s.label.toLowerCase());
+    return `Can: ${labels.join(", ")}`;
+};
+
 const ApiKeys = () => {
     const displayBase = useDisplayBase();
     const [tokens, setTokens] = useState<Token[]>([]);
@@ -36,6 +59,7 @@ const ApiKeys = () => {
     const [open, setOpen] = useState(false);
     const [name, setName] = useState("");
     const [type, setType] = useState<Token["type"]>("CONTENT");
+    const [scopes, setScopes] = useState<string[]>(DEFAULT_SCOPES);
     const [saving, setSaving] = useState(false);
     const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
     const [copied, setCopied] = useState(false);
@@ -63,10 +87,11 @@ const ApiKeys = () => {
         try {
             const res = await api<{ token: string; name: string }>("/api-tokens", {
                 method: "POST",
-                body: JSON.stringify({ name: name.trim(), type }),
+                body: JSON.stringify({ name: name.trim(), type, ...(type === "AGENT" ? { scopes } : {}) }),
             });
             setOpen(false);
             setName("");
+            setScopes(DEFAULT_SCOPES);
             setCreated({ token: res.token, name: res.name });
             await load();
         } catch (e) {
@@ -158,10 +183,12 @@ const ApiKeys = () => {
                                     </span>
                                 </div>
                                 <code className="mt-1 block font-mono text-caption-2 text-grey">{t.prefix}…••••••••</code>
+                                {scopeSummary(t) && <div className="mt-1 text-caption-2 text-grey">{scopeSummary(t)}</div>}
                             </div>
                             <div className="text-caption-2 text-grey text-right">
                                 <div suppressHydrationWarning>Created {formatDate(t.createdAt)}</div>
                                 <div>Last used {t.lastUsedAt ? formatDate(t.lastUsedAt) : "never"}</div>
+                                {t.expiresAt && <div suppressHydrationWarning>{new Date(t.expiresAt) < new Date() ? "Expired" : "Expires"} {formatDate(t.expiresAt)}</div>}
                             </div>
                             <button
                                 type="button"
@@ -254,15 +281,34 @@ curl "${displayBase}/public/articles/your-slug" \\
                                                 options={[
                                                     { value: "CONTENT", label: "Content: read published content" },
                                                     { value: "PREVIEW", label: "Preview: read drafts + published (for previews)" },
-                                                    { value: "AGENT", label: "Agent: for AI agents (Phase 5)" },
+                                                    { value: "AGENT", label: "Agent: for AI agents, with chosen permissions" },
                                                     { value: "ADMIN", label: "Admin: full programmatic access" },
                                                 ]}
                                             />
                                         </label>
+                                        {type === "AGENT" && (
+                                            <fieldset>
+                                                <legend className="mb-1.5 block text-caption-1 text-black dark:text-white">This token can</legend>
+                                                <div className="flex flex-col gap-2 rounded-2xl border border-grey-light p-3 dark:border-grey-light/10">
+                                                    {AGENT_SCOPES.map((s) => (
+                                                        <label key={s.key} className="flex items-center gap-2.5 text-body-sm text-black dark:text-white">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={scopes.includes(s.key)}
+                                                                onChange={(e) => setScopes(e.target.checked ? [...scopes, s.key] : scopes.filter((k) => k !== s.key))}
+                                                                className="h-4 w-4 accent-primary"
+                                                            />
+                                                            {s.label}
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                {scopes.length === 0 && <p className="mt-1.5 text-caption-2 text-error">Pick at least one.</p>}
+                                            </fieldset>
+                                        )}
                                     </div>
                                     <div className="mt-6 flex gap-3">
                                         <button type="button" onClick={() => setOpen(false)} className="btn-secondary grow">Cancel</button>
-                                        <button type="button" onClick={create} disabled={saving || !name.trim()} className="btn-primary grow disabled:opacity-60">
+                                        <button type="button" onClick={create} disabled={saving || !name.trim() || (type === "AGENT" && scopes.length === 0)} className="btn-primary grow disabled:opacity-60">
                                             {saving ? "Creating…" : "Create token"}
                                         </button>
                                     </div>

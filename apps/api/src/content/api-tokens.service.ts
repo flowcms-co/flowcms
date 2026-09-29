@@ -12,6 +12,16 @@ export class CreateApiTokenInput {
     scopes?: string[];
 }
 
+/** Parse a requested expiry. A token that is unreadable as a date, or already
+ *  expired, would be dead on arrival, so both are refused up front. */
+export function parseExpiry(expiresAt: string | undefined, now = new Date()): Date | null {
+    if (!expiresAt) return null;
+    const at = new Date(expiresAt);
+    if (Number.isNaN(at.getTime())) throw new BadRequestException("The expiry date isn’t a valid date.");
+    if (at <= now) throw new BadRequestException("The expiry date must be in the future.");
+    return at;
+}
+
 @Injectable()
 export class ApiTokensService {
     constructor(private readonly prisma: PrismaService) {}
@@ -46,6 +56,7 @@ export class ApiTokensService {
         if (input.type === "AGENT" && (!input.scopes || input.scopes.length === 0)) {
             throw new BadRequestException('AGENT tokens require explicit scopes. Pass ["*"] for full access, or specific permission keys (e.g. "content.read").');
         }
+        const expiresAt = parseExpiry(input.expiresAt);
         const { token, hash, prefix } = generateToken("flw");
         const created = await this.prisma.apiToken.create({
             data: {
@@ -55,7 +66,7 @@ export class ApiTokensService {
                 prefix,
                 type: input.type ?? "CONTENT",
                 scopes: input.scopes ?? [],
-                expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+                expiresAt,
                 createdById: userId,
             },
         });

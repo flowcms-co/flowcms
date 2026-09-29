@@ -263,9 +263,10 @@ export class ContentEntriesService {
 
         if (decision === "request_changes") {
             if (entry.status !== "DRAFT") await this.prisma.contentEntry.update({ where: { id: entryId }, data: { status: "DRAFT" } });
-            if (entry.authorId && entry.authorId !== reviewerId) {
+            const authorId = effectiveAuthorId(entry, await this.authorMode(workspaceId));
+            if (authorId && authorId !== reviewerId) {
                 try {
-                    await this.notifications.create(workspaceId, entry.authorId, {
+                    await this.notifications.create(workspaceId, authorId, {
                         type: "changes_requested",
                         title: "Changes requested",
                         body: `${who} requested changes on “${this.title(entry)}”.`,
@@ -299,7 +300,7 @@ export class ContentEntriesService {
     private async notifyTransition(
         workspaceId: string,
         actorId: string,
-        entry: { id: string; authorId: string | null },
+        entry: { id: string; authorId: string | null; lastEditorId: string | null; authorOverrideId: string | null },
         title: string,
         from: ContentStatus,
         to: ContentStatus,
@@ -309,6 +310,8 @@ export class ContentEntriesService {
         const actor = await this.prisma.user.findUnique({ where: { id: actorId }, select: { name: true, email: true } });
         const who = actor?.name ?? actor?.email ?? "Someone";
         try {
+            // "Your content was ..." goes to the entry's author as the workspace defines it.
+            const authorId = effectiveAuthorId(entry, await this.authorMode(workspaceId));
             if (to === "IN_REVIEW") {
                 const reviewers = await this.notifications.reviewers(workspaceId, actorId);
                 await this.notifications.createMany(workspaceId, reviewers, {
@@ -317,12 +320,12 @@ export class ContentEntriesService {
                     body: `${who} submitted “${title}” for review.`,
                     href: "/content?status=review",
                 });
-            } else if (to === "APPROVED" && entry.authorId && entry.authorId !== actorId) {
-                await this.notifications.create(workspaceId, entry.authorId, { type: "approved", title: "Your content was approved", body: `“${title}” was approved by ${who}.`, href });
-            } else if (to === "PUBLISHED" && entry.authorId && entry.authorId !== actorId) {
-                await this.notifications.create(workspaceId, entry.authorId, { type: "published", title: "Your content was published", body: `“${title}” is now live.`, href });
-            } else if (to === "SCHEDULED" && entry.authorId && entry.authorId !== actorId) {
-                await this.notifications.create(workspaceId, entry.authorId, { type: "scheduled", title: "Your content was scheduled", body: `“${title}” was scheduled by ${who}.`, href });
+            } else if (to === "APPROVED" && authorId && authorId !== actorId) {
+                await this.notifications.create(workspaceId, authorId, { type: "approved", title: "Your content was approved", body: `“${title}” was approved by ${who}.`, href });
+            } else if (to === "PUBLISHED" && authorId && authorId !== actorId) {
+                await this.notifications.create(workspaceId, authorId, { type: "published", title: "Your content was published", body: `“${title}” is now live.`, href });
+            } else if (to === "SCHEDULED" && authorId && authorId !== actorId) {
+                await this.notifications.create(workspaceId, authorId, { type: "scheduled", title: "Your content was scheduled", body: `“${title}” was scheduled by ${who}.`, href });
             }
         } catch {
             /* notifications are best-effort */
