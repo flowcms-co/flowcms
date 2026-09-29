@@ -60,7 +60,6 @@ const InternalLinks = () => {
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         void scan();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const opps = useMemo(() => data?.opportunities ?? [], [data]);
@@ -87,7 +86,6 @@ const InternalLinks = () => {
         setApplyingAll(true);
         for (const o of opps) {
             if (!applied.has(keyOf(o))) {
-                // eslint-disable-next-line no-await-in-loop
                 await applyOne(o);
             }
         }

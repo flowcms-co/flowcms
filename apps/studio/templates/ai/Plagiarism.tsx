@@ -38,7 +38,6 @@ const Plagiarism = () => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<Entry[]>("/entries")
             .then((rows) => setCorpus(rows.map((e) => ({ title: e.title, body: String((e.data as { body?: string })?.body ?? "") }))))
             .catch(() => {});

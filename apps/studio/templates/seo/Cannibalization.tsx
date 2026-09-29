@@ -28,7 +28,6 @@ const Cannibalization = () => {
     const { connections: conn, loading: connLoading } = useConnections();
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<CannibalLive>("/seo/cannibalization")
             .then((d) => setLive(d.hasData ? d : null))
             .catch(() => {})

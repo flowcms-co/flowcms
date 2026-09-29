@@ -41,6 +41,7 @@ export function useSetupStatus(): SetupStatus | null {
 
     useEffect(() => {
         subscribers.add(setStatus);
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from the module cache on mount
         if (cache) setStatus(cache);
         else void fetchStatus().then(setStatus).catch(() => {});
         return () => {

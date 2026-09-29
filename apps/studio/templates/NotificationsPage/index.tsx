@@ -20,7 +20,6 @@ const DigestControl = () => {
     const [msg, setMsg] = useState<string | null>(null);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<{ digestFrequency: DigestFreq }>("/notifications/preferences").then((p) => setFreq(p.digestFrequency)).catch(() => {});
     }, []);
 
@@ -101,8 +100,10 @@ const NotificationsPage = () => {
     const topRef = useRef<HTMLDivElement>(null);
     useScrollResetOnChange(topRef, tab);
 
-    const list: Notif[] = items ?? [];
-    const filtered = useMemo(() => (tab === "unread" ? list.filter((n) => !n.read) : list), [tab, list]);
+    const filtered = useMemo(() => {
+        const list: Notif[] = items ?? [];
+        return tab === "unread" ? list.filter((n) => !n.read) : list;
+    }, [tab, items]);
     const groups = DAY_ORDER.map((day) => ({ day, items: filtered.filter((n) => dayBucket(n.createdAt) === day) })).filter((g) => g.items.length > 0);
 
     return (

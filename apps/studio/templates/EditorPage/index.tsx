@@ -349,6 +349,7 @@ const EditorPage = () => {
     }, [entryId]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; state is set after the request resolves
         void loadReview();
     }, [loadReview, status]);
 

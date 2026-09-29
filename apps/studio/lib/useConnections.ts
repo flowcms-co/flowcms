@@ -79,6 +79,7 @@ export function useConnections(): { connections: Connections; loading: boolean }
         subscribers.add(onUpdate);
 
         if (cache) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from the module cache on mount
             setConnections(cache);
             setLoading(false);
         } else {

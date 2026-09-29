@@ -38,7 +38,6 @@ const ContentGenerator = () => {
     const [providers, setProviders] = useState<Provider[]>([]);
     const [providerId, setProviderId] = useState<string>("");
     const [model, setModel] = useState<string>("");
-    const [loadingProviders, setLoadingProviders] = useState(true);
 
     const [generating, setGenerating] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -56,8 +55,6 @@ const ContentGenerator = () => {
             }
         } catch {
             /* ai.use required; ignore */
-        } finally {
-            setLoadingProviders(false);
         }
     }, []);
 

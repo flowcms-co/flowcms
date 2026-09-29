@@ -24,7 +24,6 @@ const JsonLd = () => {
     const [genPage, setGenPage] = useState<{ path: string; title: string } | null>(null);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<AuditLive>("/seo/audit")
             .then((d) => setLive(d.hasData && d.jsonLdRows ? d : null))
             .catch(() => {})

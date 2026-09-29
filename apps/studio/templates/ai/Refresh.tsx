@@ -36,7 +36,6 @@ const Refresh = () => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<Entry[]>("/entries?status=PUBLISHED")
             .then((rows) => {
                 const now = Date.now();

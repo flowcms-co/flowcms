@@ -1,6 +1,5 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Link from "next/link";
@@ -142,6 +141,7 @@ const TourOverlay = () => {
     // moved. Anchors that mount late are picked up whenever they appear; a
     // target that never appears leaves rect null (centered card).
     useLayoutEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- clear the old spotlight before measuring the new step
         setRect(null);
         const selector = step?.target;
         let cancelled = false;

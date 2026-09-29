@@ -78,63 +78,23 @@ const SPARKS = {
     avgTime: [142, 145, 148, 152, 156, 158, 160, 162, 163, 165, 166, 167],
 };
 
-const AI_PAGES_SAMPLE = [
-    {
-        path: "/free-brand-audit",
-        pageType: "Landing Page",
-        pageIcon: "document" as const,
-        pageColor: "#F5A623",
-        barColor: "#6C5CE7",
-        aiSessions: 512, aiSessionsDelta: 28,
-        engRate: 72.4, engRateDelta: 8,
-        avgTime: "3m 12s", avgTimeDelta: 14,
-        healthScore: 92, healthLabel: "Excellent", healthSub: "High AI readiness", healthColor: "#00B894",
-    },
-    {
-        path: "/services",
-        pageType: "Service Page",
-        pageIcon: "grid" as const,
-        pageColor: "#4285F4",
-        barColor: "#4285F4",
-        aiSessions: 267, aiSessionsDelta: 18,
-        engRate: 68.7, engRateDelta: 6,
-        avgTime: "2m 34s", avgTimeDelta: 11,
-        healthScore: 78, healthLabel: "Good", healthSub: "Needs improvement", healthColor: "#F5A623",
-    },
-    {
-        path: "/blog/rebrand-starts-with-positioning",
-        pageType: "Blog Post",
-        pageIcon: "compass" as const,
-        pageColor: "#00B894",
-        barColor: "#00B894",
-        aiSessions: 186, aiSessionsDelta: -4,
-        engRate: 63.1, engRateDelta: -3,
-        avgTime: "2m 22s", avgTimeDelta: -5,
-        healthScore: 85, healthLabel: "Very Good", healthSub: "Strong performance", healthColor: "#00B894",
-    },
-    {
-        path: "/pricing",
-        pageType: "Pricing Page",
-        pageIcon: "chart" as const,
-        pageColor: "#F5A623",
-        barColor: "#F5A623",
-        aiSessions: 143, aiSessionsDelta: 22,
-        engRate: 66.9, engRateDelta: 7,
-        avgTime: "2m 08s", avgTimeDelta: 10,
-        healthScore: 63, healthLabel: "Needs Work", healthSub: "Optimize content", healthColor: "#E24B4A",
-    },
-    {
-        path: "/features",
-        pageType: "Feature Page",
-        pageIcon: "sparkles" as const,
-        pageColor: "#6C5CE7",
-        barColor: "#6C5CE7",
-        aiSessions: 98, aiSessionsDelta: 15,
-        engRate: 64.3, engRateDelta: 5,
-        avgTime: "1m 55s", avgTimeDelta: 9,
-        healthScore: 81, healthLabel: "Good", healthSub: "Above average", healthColor: "#00B894",
-    },
-];
+type AiPage = {
+    path: string;
+    pageType: string;
+    pageIcon: string;
+    pageColor: string;
+    barColor: string;
+    aiSessions: number;
+    aiSessionsDelta: number;
+    engRate: number;
+    engRateDelta: number;
+    avgTime: string;
+    avgTimeDelta: number;
+    healthScore: number;
+    healthLabel: string;
+    healthSub: string;
+    healthColor: string;
+};
 
 const READINESS_ICONS: Record<string, string> = {
     schema: "grid",
@@ -345,7 +305,7 @@ const Aeo = ({ range = "30" }: { range?: string }) => {
         { key: "avgTime", label: "Avg. Engagement Time", value: "—", delta: "+16%", spark: SPARKS.avgTime, color: "#E91E63", icon: "clock" as const, live: false },
     ];
 
-    const aiPages: typeof AI_PAGES_SAMPLE = [];
+    const aiPages: AiPage[] = [];
     const maxAiSessions = Math.max(1, ...aiPages.map((p) => p.aiSessions));
 
     return (

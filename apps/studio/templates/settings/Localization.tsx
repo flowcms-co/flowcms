@@ -22,7 +22,6 @@ const Localization = () => {
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<{ locales: string[]; defaultLocale: string }>("/workspace")
             .then((w) => {
                 setLocales(w.locales);

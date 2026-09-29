@@ -13,6 +13,7 @@ import { DISPLAY_BASE, browserDisplayBase } from "./api";
 export function useDisplayBase(): string {
     const [base, setBase] = useState(DISPLAY_BASE);
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe init: the real origin is only known after mount
         setBase(browserDisplayBase());
     }, []);
     return base;

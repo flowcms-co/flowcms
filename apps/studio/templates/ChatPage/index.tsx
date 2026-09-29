@@ -97,12 +97,12 @@ const ChatPage = () => {
 
     // Members for @mention autocomplete + highlight.
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<Member[]>("/chat/members").then(setMembers).catch(() => {});
     }, []);
 
     useEffect(() => {
         if (!activeId) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; state is set after the request resolves
         void loadMessages(activeId);
         // Realtime delivers new messages instantly; poll is a slow fallback.
         const t = setInterval(() => loadMessages(activeId), 8000);

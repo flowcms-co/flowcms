@@ -45,6 +45,7 @@ export function useMailStatus(): { connected: boolean; loading: boolean } {
         subscribers.add(onUpdate);
 
         if (cache != null) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from the module cache on mount
             setConnected(cache);
             setLoading(false);
         } else {

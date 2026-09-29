@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Card from "@/components/ui/Card";
-import Icon from "@/components/ui/Icon";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { api } from "@/lib/api";
 import UpgradeLock from "@/components/ui/UpgradeLock";

@@ -38,7 +38,6 @@ const round = (n: number, d = 1) => {
 /** The heterogeneous, JSON-serializable result of a crawl()/vitals() read. An
  *  object type (not bare `any`) so callers' Promise.all tuples stay intact, while
  *  member access stays permissive (matching the pre-cache-refactor behaviour). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SeoCacheResult = Record<string, any>;
 
 @Injectable()
@@ -636,7 +635,7 @@ export class SeoService {
     }
 
     /** KPI strip + health score + dashboard counters (GSC/GA4, no crawl). */
-    async summary(workspaceId: string, days = 30) {
+    async summary(workspaceId: string, _days = 30) {
         const [clicks, impressions, ctr, position, sessions, bounce] = await Promise.all([
             this.dailyTotals(workspaceId, "gsc", "clicks"),
             this.dailyTotals(workspaceId, "gsc", "impressions"),
@@ -806,7 +805,6 @@ export class SeoService {
             this.fetchText(`${root}sitemap.xml`),
             this.fetchText(`${root}llms.txt`),
         ]);
-        const robotsText = robots.text.toLowerCase();
         const aiBots = ["gptbot", "perplexitybot", "claudebot", "google-extended", "ccbot", "oai-searchbot"];
         // "blocked" = an AI bot is explicitly disallowed everywhere.
         const blocksAiBots = aiBots.some((b) => new RegExp(`user-agent:\\s*${b}[\\s\\S]*?disallow:\\s*/\\s`, "i").test(robots.text + "\n"));

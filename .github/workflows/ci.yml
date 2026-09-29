@@ -5,9 +5,9 @@ on:
   pull_request:
 
 jobs:
-  # Primary gate: typecheck + unit tests. Fully offline, no database needed.
+  # Primary gate: typecheck, lint + unit tests. Fully offline, no database needed.
   test:
-    name: Typecheck + unit tests
+    name: Typecheck, lint + unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +36,13 @@ jobs:
 
       - name: Typecheck Studio
         run: npx tsc --noEmit -p apps/studio/tsconfig.json
+
+      # Warnings fail the build too, so lint stays at zero instead of piling up.
+      - name: Lint API
+        run: npm run lint -w @flowcms/api -- --max-warnings 0
+
+      - name: Lint Studio
+        run: npm run lint -w @flowcms/studio -- --max-warnings 0
 
       - name: Unit tests (shared)
         run: npm run test -w @flowcms/shared

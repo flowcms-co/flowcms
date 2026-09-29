@@ -658,7 +658,7 @@ const Clusters = () => {
     }, []);
 
     const isLive = !!live && !!live.clusters?.length;
-    const clusters: ClusterRich[] = isLive ? live!.clusters!.map(toClusterRich) : [];
+    const clusters: ClusterRich[] = useMemo(() => (live?.clusters ?? []).map(toClusterRich), [live]);
 
     // Overview KPIs, derived from the live crawl.
     const overview = {

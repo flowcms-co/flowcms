@@ -146,7 +146,6 @@ export class DashboardService {
             next.setDate(d.getDate() + 1);
             return myPublished.some((e) => +new Date(e.publishedAt!) >= +d && +new Date(e.publishedAt!) < +next);
         });
-        const publishedThisWeek = week.filter(Boolean).length;
         // Consecutive publishing streak: the run of back-to-back days (ending at
         // today) on which something was published. `week` is Mon→Sun, so walk
         // backwards from today's index while days stay published.

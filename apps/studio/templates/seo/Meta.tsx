@@ -26,7 +26,6 @@ const Meta = () => {
     const [fixPage, setFixPage] = useState<{ path: string; title: string; description?: string } | null>(null);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<AuditLive>("/seo/audit")
             .then((d) => setLive(d.hasData && d.metaRows ? d : null))
             .catch(() => {})

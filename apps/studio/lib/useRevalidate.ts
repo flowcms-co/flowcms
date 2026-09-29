@@ -14,7 +14,9 @@ export function useRevalidateOnFocus(refresh: () => void, enabled = true) {
     // Keep the latest callback in a ref so listeners are attached once, not on
     // every render (the handler always calls the current refresh).
     const ref = useRef(refresh);
-    ref.current = refresh;
+    useEffect(() => {
+        ref.current = refresh;
+    });
 
     useEffect(() => {
         if (!enabled) return;

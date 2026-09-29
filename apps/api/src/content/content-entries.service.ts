@@ -839,7 +839,7 @@ export class ContentEntriesService {
 
     /** Approve a published entry's pending draft (step 1 of the two-step Approve →
      *  Publish promotion). Rejects an incomplete draft so Publish can't 400 later. */
-    async approveDraft(workspaceId: string, id: string, actorId?: string) {
+    async approveDraft(workspaceId: string, id: string, _actorId?: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
             include: { contentType: { select: CT_SELECT } },

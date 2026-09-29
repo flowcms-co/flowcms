@@ -54,7 +54,6 @@ const CalendarPage = () => {
     const [view, setView] = useState<"month" | "list">("month");
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<Entry[]>("/entries")
             .then((rows) => {
                 const evs: Ev[] = rows

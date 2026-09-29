@@ -34,7 +34,6 @@ export function useAiProviders() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         api<AiProvider[]>("/ai/providers")
             .then((list) => {
                 setProviders(list);

@@ -37,6 +37,7 @@ const FileGenModal = ({ open, onClose, kind }: { open: boolean; onClose: () => v
     }, [kind]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; state is set after the request resolves
         if (open && kind) void run();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, kind]);

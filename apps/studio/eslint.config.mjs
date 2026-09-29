@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Plain browser scripts served as-is to customer sites (ES5 on purpose),
+    // not app source: the TypeScript rules do not apply to them.
+    "public/**",
   ]),
   {
     rules: {

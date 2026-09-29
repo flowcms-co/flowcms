@@ -45,16 +45,6 @@ const altMeta: Record<AltSource, { label: string; color: string; icon: string }>
     none: { label: "Missing alt", color: "#F5A623", icon: "clock" },
 };
 
-const relTime = (iso: string) => {
-    const diff = Date.now() - new Date(iso).getTime();
-    const m = Math.floor(diff / 60000);
-    if (m < 1) return "just now";
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
-};
-
 /**
  * Assets — the workspace media library, wired to the live backend. Uploads go to
  * the server where Flow CMS runs (POST /assets → stored on disk, served at

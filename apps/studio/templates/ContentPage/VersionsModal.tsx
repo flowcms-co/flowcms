@@ -2,7 +2,6 @@
 
 import { Fragment, useEffect, useState } from "react";
 import { Dialog, Transition } from "@headlessui/react";
-import Icon from "@/components/ui/Icon";
 import StatusPill, { type PillStatus } from "@/components/ui/StatusPill";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/format";
@@ -19,6 +18,7 @@ const VersionsModal = ({ entryId, title, onClose, onRestored }: { entryId: strin
 
     useEffect(() => {
         if (!entryId) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- reset before fetching the next entry's versions
         setVersions(null);
         api<Version[]>(`/entries/${entryId}/versions`).then(setVersions).catch(() => setVersions([]));
     }, [entryId]);
