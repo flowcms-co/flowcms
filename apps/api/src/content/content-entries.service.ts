@@ -336,7 +336,7 @@ export class ContentEntriesService {
     /** Reusable-component definitions for the workspace (apiId → field defs), used
      *  to resolve component references + validate dynamic-zone sections. Reusable
      *  components are content types of kind COMPONENT. */
-    private async componentMap(workspaceId: string): Promise<ComponentMap> {
+    async componentMap(workspaceId: string): Promise<ComponentMap> {
         const comps = await this.prisma.contentType.findMany({
             where: { workspaceId, kind: "COMPONENT" },
             select: { apiId: true, schema: true },

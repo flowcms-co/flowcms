@@ -113,14 +113,20 @@ export class AssetsService {
         return this.storage.publicUrl(key) ?? `${URL_PREFIX}/${key}`;
     }
 
-    /** Hashes shared by 2+ assets in the workspace, i.e. files uploaded more than once. */
-    private async duplicateHashes(workspaceId: string): Promise<Set<string>> {
-        const groups = await this.prisma.media.groupBy({
-            by: ["hash"],
-            where: { workspaceId, hash: { not: null } },
-            having: { hash: { _count: { gt: 1 } } },
-        });
-        return new Set(groups.map((g) => g.hash!));
+    /** Ids of assets that have a twin in the workspace: the same bytes (hash) or the
+     *  same file name, ignoring case. Name matching also covers files uploaded before
+     *  hashes were recorded.
+     *  ponytail: self-join per call, fine at media-library scale; add an index on
+     *  lower(filename) if it ever shows up in a profile. */
+    private async duplicateIds(workspaceId: string): Promise<Set<string>> {
+        const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+            SELECT m.id FROM "Media" m
+            WHERE m."workspaceId" = ${workspaceId} AND EXISTS (
+                SELECT 1 FROM "Media" o
+                WHERE o."workspaceId" = m."workspaceId" AND o.id <> m.id
+                  AND (o.hash = m.hash OR lower(o.filename) = lower(m.filename))
+            )`;
+        return new Set(rows.map((r) => r.id));
     }
 
     private shape(m: Media, duplicate = false) {
@@ -155,22 +161,30 @@ export class AssetsService {
         const take = limit != null ? Math.min(Math.max(1, Math.floor(limit)), 500) : 500;
         const skip = offset != null ? Math.max(0, Math.floor(offset)) : 0;
         const search = q?.trim();
-        const dupes = await this.duplicateHashes(workspaceId);
+        const dupes = await this.duplicateIds(workspaceId);
         const rows = await this.prisma.media.findMany({
             where: {
                 workspaceId,
                 ...(folder && folder !== "all" ? { folder } : {}),
                 ...(search ? { OR: [{ filename: { contains: search, mode: "insensitive" } }, { alt: { contains: search, mode: "insensitive" } }] } : {}),
                 // Duplicates view: only files whose bytes match another asset, grouped together.
-                ...(duplicates ? { hash: { in: [...dupes] } } : {}),
+                ...(duplicates ? { id: { in: [...dupes] } } : {}),
                 // Missing-alt view: raster images with no alt text yet (AND keeps it clear of the search OR).
                 ...(missingAlt ? { mimeType: { startsWith: "image/" }, AND: [{ OR: [{ altSource: "none" }, { altSource: null }] }] } : {}),
             },
-            orderBy: duplicates ? [{ hash: "asc" }, { createdAt: "asc" }] : { createdAt: "desc" },
+            // Duplicates view: same-named copies sit next to each other, oldest first.
+            orderBy: duplicates ? [{ filename: "asc" }, { createdAt: "asc" }] : { createdAt: "desc" },
             take,
             skip,
         });
-        return rows.map((m) => this.shape(m, !!m.hash && dupes.has(m.hash)));
+        // Postgres sorts capitals first, so re-sort ignoring case to keep "Hero" next to "hero".
+        if (duplicates) rows.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { sensitivity: "base" }) || +a.createdAt - +b.createdAt);
+        return rows.map((m) => this.shape(m, dupes.has(m.id)));
+    }
+
+    /** Total assets in the workspace (the list itself is capped at one page). */
+    async count(workspaceId: string) {
+        return { total: await this.prisma.media.count({ where: { workspaceId } }) };
     }
 
     /**
@@ -242,15 +256,19 @@ export class AssetsService {
             throw new BadRequestException("File content does not match its declared type.");
 
         // Hash the original bytes (before WebP re-encoding) so re-uploading the same
-        // file is flagged as a duplicate. It is still stored; the user decides what to delete.
+        // file is flagged as a duplicate, as is a file with an existing name (checked
+        // below). It is still stored; the user decides what to delete.
         const hash = createHash("sha256").update(file.buffer).digest("hex");
-        const duplicate = !!(await this.prisma.media.findFirst({ where: { workspaceId, hash }, select: { id: true } }));
 
         // Gate the CPU/RAM-heavy decode so concurrent uploads can't OOM the API.
         const opt = await imageGate.run(() => this.optimizeImage(file));
         const ext = (extname(opt.filename) || `.${opt.mimetype.split("/")[1] ?? "bin"}`).toLowerCase();
         const stored = `${randomUUID()}${ext}`;
         await this.storage.put(stored, opt.buffer, opt.mimetype);
+        const duplicate = !!(await this.prisma.media.findFirst({
+            where: { workspaceId, OR: [{ hash }, { filename: { equals: opt.filename, mode: "insensitive" } }] },
+            select: { id: true },
+        }));
 
         // Web-friendly thumbnail for images (skip SVG), from the stored bytes.
         if (opt.mimetype.startsWith("image/") && opt.mimetype !== "image/svg+xml") {
@@ -297,7 +315,7 @@ export class AssetsService {
         if (dto.folder !== undefined) data.folder = dto.folder && dto.folder !== "all" ? dto.folder : null;
         if (dto.filename !== undefined) data.filename = dto.filename;
         const m = await this.prisma.media.update({ where: { id }, data });
-        return this.shape(m, !!m.hash && (await this.duplicateHashes(workspaceId)).has(m.hash));
+        return this.shape(m, (await this.duplicateIds(workspaceId)).has(m.id));
     }
 
     async remove(workspaceId: string, id: string) {
@@ -307,6 +325,31 @@ export class AssetsService {
         await this.storage.delete(key, this.thumbKey(key));
         await this.prisma.media.delete({ where: { id } });
         return { ok: true };
+    }
+
+    /**
+     * Which content entries reference each asset, so the studio can warn before a
+     * delete breaks a page. Entries store media as URL strings (fields and body
+     * HTML, relative "/media/<key>" or an absolute CDN URL), so this matches the
+     * unique object key after a "/" in the live and draft JSON.
+     * ponytail: text scan of the workspace's entries per call; fine at CMS scale,
+     * a media↔entry link table would be the upgrade if it ever gets slow.
+     */
+    async usage(workspaceId: string, ids: string[]) {
+        const rows = await this.prisma.media.findMany({ where: { workspaceId, id: { in: ids.slice(0, 500) } }, select: { id: true, url: true } });
+        const out: Record<string, { id: string; title: string }[]> = {};
+        if (!rows.length) return out;
+        const keys = rows.map((m) => ({ id: m.id, pattern: `%/${basename(m.url).replace(/[\\%_]/g, "\\$&")}%` }));
+        const hits = await this.prisma.$queryRaw<{ pattern: string; id: string; title: string | null }[]>`
+            SELECT k.pattern, e.id, e.data->>'title' AS title
+            FROM unnest(${keys.map((k) => k.pattern)}::text[]) AS k(pattern)
+            JOIN "ContentEntry" e ON e."workspaceId" = ${workspaceId}
+             AND (e.data::text LIKE k.pattern OR COALESCE(e."draftData"::text, '') LIKE k.pattern)`;
+        for (const k of keys) {
+            const used = hits.filter((h) => h.pattern === k.pattern).map((h) => ({ id: h.id, title: h.title || "Untitled" }));
+            if (used.length) out[k.id] = used;
+        }
+        return out;
     }
 
     /** Delete many assets at once (multi-select). Ids outside the workspace are ignored. */
@@ -368,6 +411,6 @@ export class AssetsService {
         const alt = (res.text || "").trim().replace(/^["']|["']$/g, "").slice(0, 300);
         if (!alt) throw new BadRequestException("The model returned no alt text. Try a different (vision-capable) provider.");
         const updated = await this.prisma.media.update({ where: { id }, data: { alt, altSource: "ai" } });
-        return { ...this.shape(updated, !!updated.hash && (await this.duplicateHashes(workspaceId)).has(updated.hash)), provider: res.provider, model: res.model };
+        return { ...this.shape(updated, (await this.duplicateIds(workspaceId)).has(updated.id)), provider: res.provider, model: res.model };
     }
 }

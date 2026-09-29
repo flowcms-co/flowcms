@@ -15,7 +15,7 @@ import type { Editor } from "@tiptap/react";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import EditorCanvas from "./EditorCanvas";
-import { MediaField } from "@/components/ui/MediaPicker";
+import { MediaField, pickImagePatch } from "@/components/ui/MediaPicker";
 import { runAi, extractJson, aiErrorMessage } from "@/lib/useAi";
 import { FieldControl, ComponentDefsContext } from "./FieldsForm";
 import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
@@ -55,7 +55,7 @@ const sectionSummary = (def: ComponentDef, section: Section): string => {
 };
 
 /* ── single field control with label + char counter / media preview ── */
-const SectionField = ({ field, value, onChange }: { field: SchemaField; value: unknown; onChange: (v: unknown) => void }) => {
+const SectionField = ({ field, value, onChange }: { field: SchemaField; value: unknown; onChange: (v: unknown, assetAlt?: string) => void }) => {
     const limit = limitFor(field.name);
 
     if (field.type === "Boolean") {
@@ -237,6 +237,7 @@ const SectionCard = ({
     const [ai, setAi] = useState(false);
     const preview = sectionSummary(def, section);
     const set = (name: string, v: unknown) => onChange({ ...section, [name]: v });
+    const autoAlt = useRef<Record<string, string>>({});
     /** Merge AI-generated values (keyed by field name, lenient) into this section. */
     const applyAi = (json: Record<string, unknown>) => {
         const norm = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -317,7 +318,15 @@ const SectionCard = ({
                             {richOnly ? (
                                 <RichTextBody value={str(section[def.fields[0].name])} onChange={(html) => set(def.fields[0].name, html)} />
                             ) : (
-                                def.fields.map((f) => <SectionField key={f.id ?? f.name} field={f} value={section[f.name]} onChange={(v) => set(f.name, v)} />)
+                                def.fields.map((f) => (
+                                    <SectionField
+                                        key={f.id ?? f.name}
+                                        field={f}
+                                        value={section[f.name]}
+                                        // Picking a library image also fills its paired alt field from the asset.
+                                        onChange={(v, assetAlt) => (f.type === "Media" ? onChange({ ...section, ...pickImagePatch(def.fields, f, section, String(v ?? ""), assetAlt, autoAlt.current) }) : set(f.name, v))}
+                                    />
+                                ))
                             )}
                         </div>
                     </motion.div>

@@ -124,8 +124,8 @@ const EditorCanvas = ({
 
     /** Insert an image from the asset library / a URL at the cursor (absolutized so
      *  it loads in the editor across origins). */
-    const insertImage = (url: string) => {
-        if (url) editor.chain().focus().setImage({ src: mediaUrl(url) }).run();
+    const insertImage = (url: string, alt?: string) => {
+        if (url) editor.chain().focus().setImage({ src: mediaUrl(url), alt }).run();
     };
 
     /** Strip all marks + reset nodes to plain paragraphs. Works on the selection, or
@@ -243,7 +243,7 @@ const EditorCanvas = ({
 
             {imgPicker && (
                 <MediaPicker
-                    onSelect={(url) => insertImage(url)}
+                    onSelect={insertImage}
                     onClose={() => setImgPicker(false)}
                 />
             )}

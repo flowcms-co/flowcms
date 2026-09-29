@@ -64,6 +64,13 @@ export class ContentEntriesController {
         return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkDelete", `Delete ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"}`, { ids: dto.ids }, dto.ids.length);
     }
 
+    /** Backfill image alt text on existing pages from the asset library. */
+    @Post("bulk/fill-alt")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    fillAlt(@CurrentUser() user: AuthUser) {
+        return this.jobs.enqueue(user.workspaceId, user.id, "content.fillAltFromAssets", "Fill page alt text from assets", {}, 0);
+    }
+
     // Inline slug uniqueness check for the editor. Declared before `:id` so
     // `/entries/slug-available` isn't swallowed by the `:id` route.
     @Get("slug-available")

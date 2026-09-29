@@ -57,6 +57,11 @@ export class AssetsController {
         return this.assets.list(user.workspaceId, folder, lim, off, q, duplicates === "1" || duplicates === "true", missingAlt === "1" || missingAlt === "true");
     }
 
+    @Get("count")
+    count(@CurrentUser() user: AuthUser) {
+        return this.assets.count(user.workspaceId);
+    }
+
     @Post()
     @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
     @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 26 * 1024 * 1024 } }))
@@ -72,6 +77,13 @@ export class AssetsController {
     @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
     update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateAssetDto) {
         return this.assets.update(user.workspaceId, id, dto);
+    }
+
+    /** Content entries that use each asset (checked before deleting). */
+    @Post("usage")
+    @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
+    usage(@CurrentUser() user: AuthUser, @Body() dto: BulkDeleteDto) {
+        return this.assets.usage(user.workspaceId, dto.ids);
     }
 
     /** Delete several assets in one request (multi-select in the library). */

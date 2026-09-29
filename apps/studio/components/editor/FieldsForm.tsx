@@ -14,7 +14,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
-import { MediaField } from "@/components/ui/MediaPicker";
+import { MediaField, pickImagePatch } from "@/components/ui/MediaPicker";
 import { api } from "@/lib/api";
 import RichTextField from "./RichTextField";
 import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
@@ -333,7 +333,8 @@ export const FieldControl = ({
 }: {
     field: SchemaField;
     value: unknown;
-    onChange: (v: unknown) => void;
+    /** `assetAlt` is set when a library image is picked into a Media field. */
+    onChange: (v: unknown, assetAlt?: string) => void;
     /** Field-keyed validation errors, threaded to nested component fields. */
     errors?: FieldErrors;
     /** This field's error path, used as the prefix for nested component fields. */
@@ -415,6 +416,7 @@ const FieldGroup = ({
     depth?: number;
 }) => {
     const set = (name: string, v: unknown) => onChange({ ...data, [name]: v });
+    const autoAlt = useRef<Record<string, string>>({});
     return (
         <div className="flex min-w-0 flex-col gap-4">
             {fields.map((f) => {
@@ -436,7 +438,15 @@ const FieldGroup = ({
                             )}
                         </span>
                         <span className="-mt-0.5 text-caption-2 text-grey/80">{fieldDescription(f)}</span>
-                        <FieldControl field={f} value={data[f.name]} onChange={(v) => set(f.name, v)} errors={errors} errorPath={path} depth={depth} />
+                        <FieldControl
+                            field={f}
+                            value={data[f.name]}
+                            // Picking a library image also fills its paired alt field from the asset.
+                            onChange={(v, assetAlt) => (f.type === "Media" ? onChange({ ...data, ...pickImagePatch(fields, f, data, String(v ?? ""), assetAlt, autoAlt.current) }) : set(f.name, v))}
+                            errors={errors}
+                            errorPath={path}
+                            depth={depth}
+                        />
                         {error && <span className="text-caption-2 text-error">{error}</span>}
                     </Wrap>
                 );

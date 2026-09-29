@@ -22,6 +22,7 @@ import { formatDate } from "@/lib/format";
 import CountUp from "@/components/motion/CountUp";
 import { useWorkspace, localeName } from "@/lib/useWorkspace";
 import { cn } from "@/lib/cn";
+import { CONTENT_LIST_URL_KEY } from "@/lib/contentListUrl";
 import { useScrollResetOnChange } from "@/lib/useScroll";
 import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
@@ -94,6 +95,8 @@ const STATUS_PARAMS: readonly string[] = ["live", "scheduled", "review", "draft"
 const statusFromParam = (s: string | null): Filters["status"] =>
     s && STATUS_PARAMS.includes(s) ? (s as Filters["status"]) : "all";
 
+const SORT_KEYS: SortKey[] = ["title", "seoScore", "updated", "views"];
+
 const formatTime = (iso: string): string =>
     new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
@@ -123,14 +126,23 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const [items, setItems] = useState<EntryRow[]>([]);
     const [types, setTypes] = useState<{ id: string; name: string; pageType?: string }[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filters, setFilters] = useState<Filters>({
-        query: "",
-        type: "all",
+    // The All-content list keeps its view (search, filters, sort, page) in the URL, so
+    // coming back from the editor or reloading lands on the same place. Type-locked
+    // reference lists don't: they share their page with a tab switcher.
+    const syncUrl = !lockedTypeId;
+    const param = (k: string) => (syncUrl ? searchParams.get(k) : null);
+    const [filters, setFilters] = useState<Filters>(() => ({
+        query: param("q") ?? "",
+        type: param("type") ?? "all",
         status: statusFromParam(searchParams.get("status")),
+        author: param("by") ?? "all",
+    }));
+    const [localeFilter, setLocaleFilter] = useState(() => param("locale") ?? "all");
+    const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(() => {
+        const key = param("sort") as SortKey | null;
+        return { key: key && SORT_KEYS.includes(key) ? key : "updated", dir: param("dir") === "asc" ? "asc" : "desc" };
     });
-    const [localeFilter, setLocaleFilter] = useState("all");
-    const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "updated", dir: "desc" });
-    const [page, setPage] = useState(1);
+    const [page, setPage] = useState(() => Math.max(1, Math.floor(Number(param("page"))) || 1));
     const [skelVisible, setSkelVisible] = useState(false);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [historyId, setHistoryId] = useState<string | null>(null);
@@ -150,6 +162,30 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setFilters((f) => (f.status === next ? f : { ...f, status: next }));
     }, [searchParams]);
+
+    // Mirror the view into the URL (replaceState: no history entry per keystroke) and
+    // remember it for the editor's back button. Defaults are left out to keep URLs clean.
+    useEffect(() => {
+        if (!syncUrl) return;
+        const params = new URLSearchParams(window.location.search);
+        const set = (k: string, v: string, def: string) => (v && v !== def ? params.set(k, v) : params.delete(k));
+        set("q", filters.query.trim(), "");
+        set("type", filters.type, "all");
+        set("status", filters.status, "all");
+        set("by", filters.author, "all");
+        set("locale", localeFilter, "all");
+        set("sort", sort.key, "updated");
+        set("dir", sort.dir, "desc");
+        set("page", String(page), "1");
+        const qs = params.toString();
+        const url = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+        if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(window.history.state, "", url);
+        try {
+            sessionStorage.setItem(CONTENT_LIST_URL_KEY, url);
+        } catch {
+            /* storage blocked: back falls through to plain /content */
+        }
+    }, [syncUrl, filters, localeFilter, sort, page]);
 
     const mineOnly = searchParams.get("author") === "me";
     const multiLocale = (ws?.locales.length ?? 1) > 1;
@@ -280,11 +316,21 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     // excluded from the All Content view, since they live under the Reference tab).
     const filterableTypes = useMemo(() => types.filter((t) => !referenceTypeIds.has(t.id)), [types, referenceTypeIds]);
 
+    // Author filter options: everyone who has content in this view, "Unassigned" last.
+    const authorOptions = useMemo(() => {
+        const byId = new Map<string, string>();
+        for (const r of all) byId.set(r.author.id ?? "none", r.author.id ? r.author.name : "Unassigned");
+        return [...byId]
+            .map(([id, name]) => ({ id, name }))
+            .sort((a, b) => (a.id === "none" ? 1 : b.id === "none" ? -1 : a.name.localeCompare(b.name)));
+    }, [all]);
+
     const rows = useMemo(() => {
         const q = filters.query.trim().toLowerCase();
         const filtered = all.filter((c) => {
             if (filters.type !== "all" && c.typeId !== filters.type) return false;
             if (filters.status !== "all" && c.status !== filters.status) return false;
+            if (filters.author !== "all" && (c.author.id ?? "none") !== filters.author) return false;
             if (localeFilter !== "all" && c.locale !== localeFilter) return false;
             if (q && !c.title.toLowerCase().includes(q) && !c.slug.toLowerCase().includes(q)) return false;
             return true;
@@ -372,6 +418,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
                 onChange={(next) => { setFilters(next); setPage(1); }}
                 total={rows.length}
                 types={filterableTypes}
+                authors={authorOptions}
                 localeOptions={multiLocale ? localeOptions : []}
                 localeFilter={localeFilter}
                 onLocaleChange={(l) => { setLocaleFilter(l); setPage(1); }}

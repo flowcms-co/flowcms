@@ -10,8 +10,35 @@ import { useEffect, useState } from "react";
 import Icon from "@/components/ui/Icon";
 import { api, mediaUrl } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { pairedAltField } from "@flowcms/shared/strings";
 
-type Asset = { id: string; name: string; type: string; url: string; thumbUrl: string };
+type Asset = { id: string; name: string; type: string; url: string; thumbUrl: string; alt?: string };
+
+type FieldLike = { name: string; type: string };
+
+/**
+ * Field values to write when an image is picked into `media`: the URL, plus the
+ * asset library's alt text in the paired alt field. The alt is only filled when
+ * that field is empty or still holds an alt this helper filled earlier (tracked in
+ * `autoFilled`), so swapping images updates it but an author's own text is kept.
+ */
+export const pickImagePatch = (
+    fields: FieldLike[],
+    media: FieldLike,
+    data: Record<string, unknown>,
+    url: string,
+    alt: string | undefined,
+    autoFilled: Record<string, string>,
+): Record<string, unknown> => {
+    const patch: Record<string, unknown> = { [media.name]: url };
+    const altName = pairedAltField(fields, media);
+    const current = altName ? data[altName] : undefined;
+    if (altName && alt && (!current || current === autoFilled[altName])) {
+        patch[altName] = alt;
+        autoFilled[altName] = alt;
+    }
+    return patch;
+};
 
 const isImg = (s: string) => /^(https?:\/\/|\/)/.test(s);
 
@@ -54,7 +81,7 @@ export const MediaPreview = ({ url, alt, onReplace, onRemove }: { url: string; a
  * builder and the schema-driven (nested component) field editor so every Media field
  * gets the asset library picker, not a bare URL text box.
  */
-export const MediaField = ({ value, alt, onChange }: { value: unknown; alt: string; onChange: (url: string) => void }) => {
+export const MediaField = ({ value, alt, onChange }: { value: unknown; alt: string; onChange: (url: string, assetAlt?: string) => void }) => {
     const [picker, setPicker] = useState(false);
     const url = typeof value === "string" ? value : "";
     return (
@@ -71,12 +98,13 @@ export const MediaField = ({ value, alt, onChange }: { value: unknown; alt: stri
                     Choose image
                 </button>
             )}
-            {picker && <MediaPicker value={url} onSelect={(v) => onChange(v)} onClose={() => setPicker(false)} />}
+            {picker && <MediaPicker value={url} onSelect={onChange} onClose={() => setPicker(false)} />}
         </>
     );
 };
 
-const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (url: string) => void; onClose: () => void }) => {
+/** `onSelect` gets the asset's alt text too when picked from the library (not for a pasted URL). */
+const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (url: string, alt?: string) => void; onClose: () => void }) => {
     const [tab, setTab] = useState<"library" | "url">("library");
     const [assets, setAssets] = useState<Asset[]>([]);
     const [loading, setLoading] = useState(true);
@@ -161,7 +189,7 @@ const MediaPicker = ({ value, onSelect, onClose }: { value?: string; onSelect: (
                                     <button
                                         key={a.id}
                                         type="button"
-                                        onClick={() => { onSelect(a.url); onClose(); }}
+                                        onClick={() => { onSelect(a.url, a.alt || undefined); onClose(); }}
                                         title={a.name}
                                         className={cn("group flex flex-col overflow-hidden rounded-xl border text-left transition-all", value === a.url ? "border-primary ring-2 ring-primary/30" : "border-grey-light hover:border-primary dark:border-grey-light/10")}
                                     >

@@ -174,7 +174,7 @@ const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value
             </div>
             {imgPicker && (
                 <MediaPicker
-                    onSelect={(url) => editor.chain().focus().setImage({ src: mediaUrl(url) }).run()}
+                    onSelect={(url, alt) => editor.chain().focus().setImage({ src: mediaUrl(url), alt }).run()}
                     onClose={() => setImgPicker(false)}
                 />
             )}

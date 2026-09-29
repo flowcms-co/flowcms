@@ -16,6 +16,8 @@ export type Filters = {
     /** Content type id, or "all". */
     type: string;
     status: ContentItemStatus | "all";
+    /** Author user id, "none" for unassigned, or "all". */
+    author: string;
 };
 
 const STATUS_META: Record<ContentItemStatus, { label: string; color: string }> = {
@@ -37,6 +39,7 @@ const FilterBar = ({
     onChange,
     total,
     types,
+    authors,
     localeOptions,
     localeFilter,
     onLocaleChange,
@@ -48,6 +51,7 @@ const FilterBar = ({
     onChange: (next: Filters) => void;
     total: number;
     types: { id: string; name: string }[];
+    authors: { id: string; name: string }[];
     localeOptions: SelectOption[];
     localeFilter: string;
     onLocaleChange: (l: string) => void;
@@ -87,6 +91,17 @@ const FilterBar = ({
                         options={typeOptions}
                         ariaLabel="Filter by type"
                         active={filters.type !== "all"}
+                        className="!h-10"
+                    />
+                )}
+
+                {authors.length > 1 && (
+                    <Select
+                        value={filters.author}
+                        onChange={(v) => onChange({ ...filters, author: v })}
+                        options={[{ value: "all", label: "All authors" }, ...authors.map((a) => ({ value: a.id, label: a.name }))]}
+                        ariaLabel="Filter by author"
+                        active={filters.author !== "all"}
                         className="!h-10"
                     />
                 )}

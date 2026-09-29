@@ -21,6 +21,7 @@ import type { SchemaField } from "@/mocks/schema";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
 import { slugify } from "@flowcms/shared/strings";
+import { CONTENT_LIST_URL_KEY } from "@/lib/contentListUrl";
 
 /** Approval summary for an entry (GET /entries/:id/reviews). `enforced` is true only
  *  when the workspace is licensed for approval workflows. */
@@ -119,6 +120,17 @@ const EditorPage = () => {
     const [editor, setEditor] = useState<Editor | null>(null);
     const [entryId, setEntryId] = useState<string | null>(idParam);
     const [title, setTitle] = useState("Untitled");
+    // Back returns to the content list as it was left (filters, sort, page).
+    const [backHref, setBackHref] = useState("/content");
+    useEffect(() => {
+        try {
+            const saved = sessionStorage.getItem(CONTENT_LIST_URL_KEY);
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            if (saved?.startsWith("/content")) setBackHref(saved);
+        } catch {
+            /* storage blocked: keep /content */
+        }
+    }, []);
     const [slug, setSlug] = useState("");
     const [locale, setLocale] = useState("en");
     // Slug auto-tracks the title (like the meta title) until the user edits it; once
@@ -700,7 +712,7 @@ const EditorPage = () => {
             {/* Editor top bar */}
             <div className="flex items-center gap-3 h-16 shrink-0 px-4 border-b border-grey-light bg-surface dark:bg-dark-1 dark:border-grey-light/10">
                 <Link
-                    href="/content"
+                    href={backHref}
                     aria-label="Back to content"
                     className="p-2 rounded-lg text-grey transition-colors hover:bg-lavender-mist hover:text-primary dark:hover:bg-dark-3"
                 >
