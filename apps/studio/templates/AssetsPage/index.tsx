@@ -9,6 +9,7 @@ import Icon from "@/components/ui/Icon";
 import { useRevealBatch } from "@/lib/useReveal";
 import { api, uploadFile, mediaUrl, ApiError } from "@/lib/api";
 import { useJobs } from "@/components/providers/JobsProvider";
+import { confirm } from "@/components/providers/ConfirmProvider";
 import { typeIcon, type AltSource } from "@/mocks/assets";
 import { cn } from "@/lib/cn";
 
@@ -32,6 +33,8 @@ type LiveAsset = {
     thumbUrl: string;
     alt: string;
     altSource: AltSource;
+    /** Same bytes as another asset in the workspace. */
+    duplicate: boolean;
     createdAt: string;
 };
 
@@ -61,6 +64,9 @@ const AssetsPage = () => {
     const [items, setItems] = useState<LiveAsset[]>([]);
     const [loading, setLoading] = useState(true);
     const [folder, setFolder] = useState("all");
+    const [view, setView] = useState<"all" | "duplicates" | "missingAlt">("all"); // server-side filters
+    const [checked, setChecked] = useState<Set<string>>(new Set());
+    const [notice, setNotice] = useState<string | null>(null);
     const [query, setQuery] = useState("");
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [pending, setPending] = useState(0); // files queued + in flight (drives the button + unload guard)
@@ -70,6 +76,7 @@ const AssetsPage = () => {
     const queueRef = useRef<{ file: File; folder: string }[]>([]);
     const inFlightRef = useRef(0);
     const imageIdsRef = useRef<string[]>([]);
+    const dupeCountRef = useRef(0);
     const { enqueue } = useJobs();
 
     // Search runs server-side: the list endpoint returns one capped page, so
@@ -77,8 +84,11 @@ const AssetsPage = () => {
     const loadSeq = useRef(0);
     const load = () => {
         const seq = ++loadSeq.current;
-        const search = query.trim();
-        return api<LiveAsset[]>(`/assets${search ? `?q=${encodeURIComponent(search)}` : ""}`)
+        const params = new URLSearchParams();
+        if (query.trim()) params.set("q", query.trim());
+        if (view !== "all") params.set(view, "1");
+        const qs = params.toString();
+        return api<LiveAsset[]>(`/assets${qs ? `?${qs}` : ""}`)
             .then((d) => seq === loadSeq.current && setItems(d))
             .catch(() => seq === loadSeq.current && setItems([]))
             .finally(() => setLoading(false));
@@ -95,7 +105,11 @@ const AssetsPage = () => {
         const t = setTimeout(() => void load(), query ? 250 : 0);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [query]);
+    }, [query, view]);
+
+    // A selection only makes sense within the current view.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    useEffect(() => setChecked(new Set()), [query, folder, view]);
 
     // Warn before leaving while uploads are still in flight: the file bytes live in
     // this tab and can't resume after a refresh. (Queued AI alt-text jobs DO continue
@@ -155,6 +169,7 @@ const AssetsPage = () => {
         try {
             const created = await uploadFile<LiveAsset>("/assets", fd);
             setItems((prev) => [created, ...prev]);
+            if (created.duplicate) dupeCountRef.current += 1;
             if (created.type === "image") imageIdsRef.current.push(created.id);
         } catch (e) {
             setError(e instanceof ApiError ? e.message : `Couldn’t upload ${file.name}.`);
@@ -176,6 +191,12 @@ const AssetsPage = () => {
                 } else {
                     const ids = imageIdsRef.current;
                     imageIdsRef.current = [];
+                    const dupes = dupeCountRef.current;
+                    dupeCountRef.current = 0;
+                    if (dupes) {
+                        setNotice(`${dupes} uploaded file${dupes === 1 ? " is a duplicate" : "s are duplicates"} of existing assets.`);
+                        void load(); // refresh flags on the originals too
+                    }
                     if (ids.length === 1) void autoAlt(ids[0]);
                     else if (ids.length > 1) void enqueue("/assets/bulk-process", { ids });
                 }
@@ -228,14 +249,41 @@ const AssetsPage = () => {
         }
     };
 
+    // Reload after deleting either way: removing one copy can clear the other's duplicate flag.
     const remove = async (id: string) => {
         setItems((prev) => prev.filter((x) => x.id !== id));
         setSelectedId(null);
+        await api(`/assets/${id}`, { method: "DELETE" }).catch(() => undefined);
+        void load();
+    };
+
+    // Filter views span the whole library, so they reset the folder chip.
+    const showView = (v: "duplicates" | "missingAlt") => {
+        setView(v);
+        setFolder("all");
+    };
+
+    const toggleChecked = (id: string) =>
+        setChecked((prev) => {
+            const next = new Set(prev);
+            if (!next.delete(id)) next.add(id);
+            return next;
+        });
+
+    const removeChecked = async () => {
+        const ids = [...checked];
+        if (!ids.length) return;
+        const label = `${ids.length} asset${ids.length === 1 ? "" : "s"}`;
+        if (!(await confirm({ title: `Delete ${label}?`, message: "This can’t be undone.", confirmLabel: "Delete", tone: "danger" }))) return;
+        setItems((prev) => prev.filter((x) => !checked.has(x.id)));
+        setChecked(new Set());
+        setError(null);
         try {
-            await api(`/assets/${id}`, { method: "DELETE" });
-        } catch {
-            void load();
+            await api(`/assets/bulk-delete`, { method: "POST", body: JSON.stringify({ ids }) });
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : "Couldn’t delete the selected assets.");
         }
+        void load();
     };
 
     return (
@@ -254,11 +302,15 @@ const AssetsPage = () => {
                         className="w-full h-11 pl-10 pr-3 rounded-lg bg-white border border-grey-light text-body-sm text-black outline-none transition-colors focus:border-primary placeholder:text-grey dark:bg-dark-1 dark:border-grey-light/10 dark:text-white"
                     />
                 </label>
-                {missingAlt > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-warning/10 text-warning text-caption-1 font-semibold">
+                {missingAlt > 0 && view !== "missingAlt" && (
+                    <button
+                        type="button"
+                        onClick={() => showView("missingAlt")}
+                        className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-warning/10 text-warning text-caption-1 font-semibold transition-colors hover:bg-warning/20"
+                    >
                         <Icon className="w-4 h-4 fill-warning" name="clock" />
                         {missingAlt} missing alt
-                    </span>
+                    </button>
                 )}
                 <button type="button" onClick={() => fileRef.current?.click()} aria-busy={pending > 0} data-tour="assets-upload" className="btn-primary ml-auto">
                     <Icon className="w-5 h-5 fill-white" name="plus" />
@@ -267,6 +319,45 @@ const AssetsPage = () => {
             </div>
 
             {error && <div className="rounded-lg bg-error/10 px-4 py-3 text-body-sm text-error">{error}</div>}
+            {notice && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg bg-warning/10 px-4 py-3 text-body-sm text-warning">
+                    <Icon className="w-4 h-4 fill-warning" name="copy" />
+                    {notice}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            showView("duplicates");
+                            setNotice(null);
+                        }}
+                        className="font-semibold underline"
+                    >
+                        Review duplicates
+                    </button>
+                    <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="ml-auto">
+                        <Icon className="w-4 h-4 fill-warning" name="close" />
+                    </button>
+                </div>
+            )}
+
+            {checked.size > 0 && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg bg-lavender-mist px-4 py-2.5 dark:bg-dark-3">
+                    <span className="text-body-sm font-semibold text-black dark:text-white">{checked.size} selected</span>
+                    <button type="button" onClick={() => setChecked(new Set(visible.map((a) => a.id)))} className="text-caption-1 font-semibold text-primary">
+                        Select all ({visible.length})
+                    </button>
+                    <button type="button" onClick={() => setChecked(new Set())} className="text-caption-1 font-semibold text-grey">
+                        Clear
+                    </button>
+                    <button
+                        type="button"
+                        onClick={removeChecked}
+                        className="ml-auto inline-flex items-center gap-1.5 h-9 px-3.5 rounded-md bg-error/10 text-caption-1 font-semibold text-error transition-colors hover:bg-error/20"
+                    >
+                        <Icon className="w-4 h-4 fill-error" name="trash" />
+                        Delete {checked.size}
+                    </button>
+                </div>
+            )}
 
             {/* Folder chips */}
             <div className="flex flex-wrap gap-2">
@@ -274,13 +365,35 @@ const AssetsPage = () => {
                     <button
                         key={f.id}
                         type="button"
-                        onClick={() => setFolder(f.id)}
+                        onClick={() => {
+                            setFolder(f.id);
+                            setView("all");
+                        }}
                         className={cn(
                             "h-9 px-3.5 rounded-md text-caption-1 font-semibold transition-colors",
-                            folder === f.id ? "bg-primary text-white" : "bg-lavender-mist text-grey hover:text-primary dark:bg-dark-3",
+                            view === "all" && folder === f.id ? "bg-primary text-white" : "bg-lavender-mist text-grey hover:text-primary dark:bg-dark-3",
                         )}
                     >
                         {f.name}
+                    </button>
+                ))}
+                {(
+                    [
+                        { id: "missingAlt", label: "Missing alt", icon: "clock" },
+                        { id: "duplicates", label: "Duplicates", icon: "copy" },
+                    ] as const
+                ).map((v) => (
+                    <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => showView(v.id)}
+                        className={cn(
+                            "inline-flex items-center gap-1.5 h-9 px-3.5 rounded-md text-caption-1 font-semibold transition-colors",
+                            view === v.id ? "bg-warning text-white" : "bg-lavender-mist text-grey hover:text-warning dark:bg-dark-3",
+                        )}
+                    >
+                        <Icon className={cn("w-4 h-4", view === v.id ? "fill-white" : "fill-warning")} name={v.icon} />
+                        {v.label}
                     </button>
                 ))}
             </div>
@@ -293,13 +406,14 @@ const AssetsPage = () => {
             ) : (
                 <div ref={gridRef} className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
                     {visible.map((a) => (
+                        <div key={a.id} className="reveal-up group relative">
                         <button
-                            key={a.id}
                             type="button"
-                            onClick={() => setSelectedId(a.id)}
+                            // While a selection is active, clicking a card adds/removes it instead of opening details.
+                            onClick={() => (checked.size ? toggleChecked(a.id) : setSelectedId(a.id))}
                             className={cn(
-                                "reveal-up group flex flex-col overflow-hidden rounded-2xl bg-white text-left shadow-[0_0.5rem_2rem_rgba(227,230,236,0.55)] transition-shadow hover:shadow-[0_0.75rem_2rem_rgba(26,26,46,0.12)] dark:bg-dark-1 dark:shadow-[0_0.5rem_2rem_rgba(0,0,0,0.3)]",
-                                selectedId === a.id && "ring-2 ring-primary",
+                                "flex w-full flex-col overflow-hidden rounded-2xl bg-white text-left shadow-[0_0.5rem_2rem_rgba(227,230,236,0.55)] transition-shadow hover:shadow-[0_0.75rem_2rem_rgba(26,26,46,0.12)] dark:bg-dark-1 dark:shadow-[0_0.5rem_2rem_rgba(0,0,0,0.3)]",
+                                (selectedId === a.id || checked.has(a.id)) && "ring-2 ring-primary",
                             )}
                         >
                             <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden bg-lavender-mist dark:bg-dark-3">
@@ -309,7 +423,7 @@ const AssetsPage = () => {
                                 ) : (
                                     <Icon className="w-9 h-9 fill-primary/70" name={typeIcon[a.type]} />
                                 )}
-                                <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/35 text-[0.625rem] font-bold text-white backdrop-blur-sm">
+                                <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/35 text-[0.625rem] font-bold text-white backdrop-blur-sm">
                                     {a.ext}
                                 </span>
                                 {a.type === "image" && (
@@ -326,6 +440,12 @@ const AssetsPage = () => {
                                         {a.altSource === "none" ? "No alt" : "Alt"}
                                     </span>
                                 )}
+                                {a.duplicate && (
+                                    <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-warning text-[0.625rem] font-bold text-white">
+                                        <Icon className="w-3 h-3 fill-white" name="copy" />
+                                        Duplicate
+                                    </span>
+                                )}
                             </div>
                             <div className="p-3.5">
                                 <div className="truncate text-body-sm font-semibold text-black dark:text-white">{a.name}</div>
@@ -335,6 +455,17 @@ const AssetsPage = () => {
                                 </div>
                             </div>
                         </button>
+                        <input
+                            type="checkbox"
+                            checked={checked.has(a.id)}
+                            onChange={() => toggleChecked(a.id)}
+                            aria-label={`Select ${a.name}`}
+                            className={cn(
+                                "absolute top-2.5 left-2.5 h-5 w-5 cursor-pointer accent-primary transition-opacity",
+                                checked.size || checked.has(a.id) ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                            )}
+                        />
+                        </div>
                     ))}
                 </div>
             )}
@@ -344,7 +475,7 @@ const AssetsPage = () => {
                     <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-lavender-mist dark:bg-dark-3">
                         <Icon className="h-6 w-6 fill-primary" name="image" />
                     </span>
-                    <p className="text-body text-grey">{query.trim() ? "No assets match your search." : items.length === 0 ? "No assets yet: upload your first file." : "No assets in this folder."}</p>
+                    <p className="text-body text-grey">{view === "duplicates" ? "No duplicate files. Nice and tidy." : view === "missingAlt" ? "Every image has alt text." : query.trim() ? "No assets match your search." : items.length === 0 ? "No assets yet: upload your first file." : "No assets in this folder."}</p>
                     <button type="button" onClick={() => fileRef.current?.click()} className="btn-primary">
                         <Icon className="w-5 h-5 fill-white" name="plus" />
                         Upload

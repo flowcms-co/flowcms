@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { extname, basename } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import sharp from "sharp";
 import type { Media } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
@@ -113,7 +113,17 @@ export class AssetsService {
         return this.storage.publicUrl(key) ?? `${URL_PREFIX}/${key}`;
     }
 
-    private shape(m: Media) {
+    /** Hashes shared by 2+ assets in the workspace, i.e. files uploaded more than once. */
+    private async duplicateHashes(workspaceId: string): Promise<Set<string>> {
+        const groups = await this.prisma.media.groupBy({
+            by: ["hash"],
+            where: { workspaceId, hash: { not: null } },
+            having: { hash: { _count: { gt: 1 } } },
+        });
+        return new Set(groups.map((g) => g.hash!));
+    }
+
+    private shape(m: Media, duplicate = false) {
         const key = this.keyOf(m);
         const ext = extname(key).replace(".", "").toUpperCase();
         const type = this.kind(m.mimeType);
@@ -133,28 +143,34 @@ export class AssetsService {
             thumbUrl: hasThumb ? this.urlOf(this.thumbKey(key)) : url,
             alt: m.alt ?? "",
             altSource: (m.altSource as "ai" | "manual" | "none") ?? "none",
+            duplicate,
             createdById: m.createdById,
             createdAt: m.createdAt,
         };
     }
 
-    async list(workspaceId: string, folder?: string, limit?: number, offset?: number, q?: string) {
+    async list(workspaceId: string, folder?: string, limit?: number, offset?: number, q?: string, duplicates?: boolean, missingAlt?: boolean) {
         // Bounded by default so the media library never loads an unbounded set into
         // memory; callers may page with limit/offset (clamped to [1, 500]).
         const take = limit != null ? Math.min(Math.max(1, Math.floor(limit)), 500) : 500;
         const skip = offset != null ? Math.max(0, Math.floor(offset)) : 0;
         const search = q?.trim();
+        const dupes = await this.duplicateHashes(workspaceId);
         const rows = await this.prisma.media.findMany({
             where: {
                 workspaceId,
                 ...(folder && folder !== "all" ? { folder } : {}),
                 ...(search ? { OR: [{ filename: { contains: search, mode: "insensitive" } }, { alt: { contains: search, mode: "insensitive" } }] } : {}),
+                // Duplicates view: only files whose bytes match another asset, grouped together.
+                ...(duplicates ? { hash: { in: [...dupes] } } : {}),
+                // Missing-alt view: raster images with no alt text yet (AND keeps it clear of the search OR).
+                ...(missingAlt ? { mimeType: { startsWith: "image/" }, AND: [{ OR: [{ altSource: "none" }, { altSource: null }] }] } : {}),
             },
-            orderBy: { createdAt: "desc" },
+            orderBy: duplicates ? [{ hash: "asc" }, { createdAt: "asc" }] : { createdAt: "desc" },
             take,
             skip,
         });
-        return rows.map((m) => this.shape(m));
+        return rows.map((m) => this.shape(m, !!m.hash && dupes.has(m.hash)));
     }
 
     /**
@@ -225,6 +241,11 @@ export class AssetsService {
         if (!contentMatchesDeclared(file.mimetype, file.buffer))
             throw new BadRequestException("File content does not match its declared type.");
 
+        // Hash the original bytes (before WebP re-encoding) so re-uploading the same
+        // file is flagged as a duplicate. It is still stored; the user decides what to delete.
+        const hash = createHash("sha256").update(file.buffer).digest("hex");
+        const duplicate = !!(await this.prisma.media.findFirst({ where: { workspaceId, hash }, select: { id: true } }));
+
         // Gate the CPU/RAM-heavy decode so concurrent uploads can't OOM the API.
         const opt = await imageGate.run(() => this.optimizeImage(file));
         const ext = (extname(opt.filename) || `.${opt.mimetype.split("/")[1] ?? "bin"}`).toLowerCase();
@@ -258,10 +279,11 @@ export class AssetsService {
                 alt: null,
                 altSource: "none",
                 folder: folder && folder !== "all" ? folder : null,
+                hash,
                 createdById: userId,
             },
         });
-        return this.shape(media);
+        return this.shape(media, duplicate);
     }
 
     async update(workspaceId: string, id: string, dto: { alt?: string; folder?: string; filename?: string }) {
@@ -275,7 +297,7 @@ export class AssetsService {
         if (dto.folder !== undefined) data.folder = dto.folder && dto.folder !== "all" ? dto.folder : null;
         if (dto.filename !== undefined) data.filename = dto.filename;
         const m = await this.prisma.media.update({ where: { id }, data });
-        return this.shape(m);
+        return this.shape(m, !!m.hash && (await this.duplicateHashes(workspaceId)).has(m.hash));
     }
 
     async remove(workspaceId: string, id: string) {
@@ -285,6 +307,15 @@ export class AssetsService {
         await this.storage.delete(key, this.thumbKey(key));
         await this.prisma.media.delete({ where: { id } });
         return { ok: true };
+    }
+
+    /** Delete many assets at once (multi-select). Ids outside the workspace are ignored. */
+    async removeMany(workspaceId: string, ids: string[]) {
+        const rows = await this.prisma.media.findMany({ where: { workspaceId, id: { in: ids.slice(0, 500) } } });
+        if (!rows.length) return { ok: true, deleted: 0 };
+        await this.storage.delete(...rows.flatMap((m) => [this.keyOf(m), this.thumbKey(this.keyOf(m))]));
+        const { count } = await this.prisma.media.deleteMany({ where: { workspaceId, id: { in: rows.map((m) => m.id) } } });
+        return { ok: true, deleted: count };
     }
 
     /** Generate accessible alt text for an image via a vision-capable AI provider. */
@@ -337,6 +368,6 @@ export class AssetsService {
         const alt = (res.text || "").trim().replace(/^["']|["']$/g, "").slice(0, 300);
         if (!alt) throw new BadRequestException("The model returned no alt text. Try a different (vision-capable) provider.");
         const updated = await this.prisma.media.update({ where: { id }, data: { alt, altSource: "ai" } });
-        return { ...this.shape(updated), provider: res.provider, model: res.model };
+        return { ...this.shape(updated, !!updated.hash && (await this.duplicateHashes(workspaceId)).has(updated.hash)), provider: res.provider, model: res.model };
     }
 }

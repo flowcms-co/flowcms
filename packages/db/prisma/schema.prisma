@@ -470,11 +470,13 @@ model Media {
   alt         String?
   altSource   String? // ai | manual | none
   folder      String?
+  hash        String? // sha256 of the original upload bytes; equal hashes = duplicate files
   createdById String?
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, hash])
 }
 
 // ──────────────────────── Automation & connectivity ─────────────────────────

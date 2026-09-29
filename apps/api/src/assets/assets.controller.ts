@@ -11,7 +11,7 @@ import {
     UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { IsOptional, IsString } from "class-validator";
+import { ArrayMaxSize, IsArray, IsOptional, IsString } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
@@ -22,6 +22,10 @@ class UpdateAssetDto {
     @IsOptional() @IsString() alt?: string;
     @IsOptional() @IsString() folder?: string;
     @IsOptional() @IsString() filename?: string;
+}
+
+class BulkDeleteDto {
+    @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) ids!: string[];
 }
 
 class BulkProcessDto {
@@ -45,10 +49,12 @@ export class AssetsController {
         @Query("limit") limit?: string,
         @Query("offset") offset?: string,
         @Query("q") q?: string,
+        @Query("duplicates") duplicates?: string,
+        @Query("missingAlt") missingAlt?: string,
     ) {
         const lim = limit != null && limit !== "" && Number.isFinite(Number(limit)) ? Number(limit) : undefined;
         const off = offset != null && offset !== "" && Number.isFinite(Number(offset)) ? Number(offset) : undefined;
-        return this.assets.list(user.workspaceId, folder, lim, off, q);
+        return this.assets.list(user.workspaceId, folder, lim, off, q, duplicates === "1" || duplicates === "true", missingAlt === "1" || missingAlt === "true");
     }
 
     @Post()
@@ -66,6 +72,13 @@ export class AssetsController {
     @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
     update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateAssetDto) {
         return this.assets.update(user.workspaceId, id, dto);
+    }
+
+    /** Delete several assets in one request (multi-select in the library). */
+    @Post("bulk-delete")
+    @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
+    bulkDelete(@CurrentUser() user: AuthUser, @Body() dto: BulkDeleteDto) {
+        return this.assets.removeMany(user.workspaceId, dto.ids);
     }
 
     @Delete(":id")
