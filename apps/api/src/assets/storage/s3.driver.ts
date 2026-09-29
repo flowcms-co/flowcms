@@ -2,7 +2,7 @@ import {
     S3Client,
     PutObjectCommand,
     GetObjectCommand,
-    DeleteObjectsCommand,
+    DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import type { StorageDriver } from "./storage.driver";
 
@@ -50,14 +50,23 @@ export class S3StorageDriver implements StorageDriver {
         return Buffer.from(bytes);
     }
 
+    /**
+     * One DeleteObject per key, not a batch DeleteObjects: current AWS SDKs sign the
+     * batch call with a CRC32 checksum instead of Content-MD5, which some
+     * S3-compatible stores (Cloudflare R2 among them) reject, so deletes failed and
+     * the asset stayed in the library. DeleteObject carries no checksum and succeeds
+     * for a key that is already gone (e.g. a missing thumbnail).
+     * ponytail: 8 requests in flight; a 500-asset bulk delete is 1000 small calls.
+     */
     async delete(...keys: string[]): Promise<void> {
-        if (keys.length === 0) return;
-        await this.client.send(
-            new DeleteObjectsCommand({
-                Bucket: this.bucket,
-                Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true },
-            }),
-        );
+        let next = 0;
+        const worker = async () => {
+            while (next < keys.length) {
+                const Key = keys[next++];
+                await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key }));
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(8, keys.length) }, worker));
     }
 
     publicUrl(key: string): string | null {

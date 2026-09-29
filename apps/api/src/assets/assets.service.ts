@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadGatewayException, BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { extname, basename } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import sharp from "sharp";
@@ -313,16 +313,42 @@ export class AssetsService {
             data.altSource = dto.alt.trim() ? "manual" : "none";
         }
         if (dto.folder !== undefined) data.folder = dto.folder && dto.folder !== "all" ? dto.folder : null;
-        if (dto.filename !== undefined) data.filename = dto.filename;
+        if (dto.filename !== undefined) data.filename = this.cleanFilename(dto.filename, existing.filename);
         const m = await this.prisma.media.update({ where: { id }, data });
         return this.shape(m, (await this.duplicateIds(workspaceId)).has(m.id));
+    }
+
+    /** Validate a rename. Only the display name changes (the stored object key and URL
+     *  stay put, so pages using the image keep working), and the file's real
+     *  extension is always kept: "Team photo" or "Team photo.webp" → "Team photo.webp". */
+    private cleanFilename(input: string, current: string): string {
+        const ext = extname(current);
+        let base = input.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+        if (ext && base.toLowerCase().endsWith(ext.toLowerCase())) base = base.slice(0, -ext.length).trim();
+        if (!base) throw new BadRequestException("Name can’t be empty.");
+        if (/[\\/]/.test(base)) throw new BadRequestException("Name can’t contain / or \\.");
+        if (base.length + ext.length > 200) throw new BadRequestException("Name is too long (200 characters max).");
+        return `${base}${ext}`;
+    }
+
+    /** Delete stored files. Runs before the DB rows go, so a storage failure keeps the
+     *  asset listed (and retryable) rather than leaving a public file nobody can see
+     *  in the library; the reason is passed back so the studio can show it. */
+    private async deleteFiles(keys: string[]) {
+        try {
+            await this.storage.delete(...keys);
+        } catch (e) {
+            const reason = e instanceof Error ? e.message : String(e);
+            this.logger.error(`storage delete failed for ${keys.join(", ")}: ${reason}`);
+            throw new BadGatewayException(`Couldn’t delete the file from storage (${reason}). It was kept in the library; try again.`);
+        }
     }
 
     async remove(workspaceId: string, id: string) {
         const m = await this.prisma.media.findFirst({ where: { id, workspaceId } });
         if (!m) throw new NotFoundException("Asset not found.");
         const key = this.keyOf(m);
-        await this.storage.delete(key, this.thumbKey(key));
+        await this.deleteFiles([key, this.thumbKey(key)]);
         await this.prisma.media.delete({ where: { id } });
         return { ok: true };
     }
@@ -356,7 +382,7 @@ export class AssetsService {
     async removeMany(workspaceId: string, ids: string[]) {
         const rows = await this.prisma.media.findMany({ where: { workspaceId, id: { in: ids.slice(0, 500) } } });
         if (!rows.length) return { ok: true, deleted: 0 };
-        await this.storage.delete(...rows.flatMap((m) => [this.keyOf(m), this.thumbKey(this.keyOf(m))]));
+        await this.deleteFiles(rows.flatMap((m) => [this.keyOf(m), this.thumbKey(this.keyOf(m))]));
         const { count } = await this.prisma.media.deleteMany({ where: { workspaceId, id: { in: rows.map((m) => m.id) } } });
         return { ok: true, deleted: count };
     }

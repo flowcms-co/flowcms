@@ -265,6 +265,20 @@ const AssetsPage = () => {
         }
     };
 
+    // Rename only changes the display name; the file's URL stays the same, so pages
+    // using it are unaffected. Reload after, since a new name can create or clear a
+    // duplicate match with another file. Returns an error message, or null on success.
+    const rename = async (id: string, name: string): Promise<string | null> => {
+        try {
+            const updated = await api<LiveAsset>(`/assets/${id}`, { method: "PATCH", body: JSON.stringify({ filename: name }) });
+            patchLocal(id, { name: updated.name, duplicate: updated.duplicate });
+            void load();
+            return null;
+        } catch (e) {
+            return e instanceof ApiError ? e.message : "Couldn’t rename this file.";
+        }
+    };
+
     // Pages (content entries) that use any of these assets, deduped. null if the check
     // itself failed, so callers can still ask before deleting.
     const pagesUsing = async (ids: string[]) => {
@@ -290,7 +304,13 @@ const AssetsPage = () => {
         if (pages?.length && !(await confirm({ title: `${name} is in use`, message: usageMessage(pages), confirmLabel: "Delete anyway", tone: "danger" }))) return;
         setItems((prev) => prev.filter((x) => x.id !== id));
         setSelectedId(null);
-        await api(`/assets/${id}`, { method: "DELETE" }).catch(() => undefined);
+        setError(null);
+        try {
+            await api(`/assets/${id}`, { method: "DELETE" });
+        } catch (e) {
+            // Say why instead of letting the asset silently reappear on the reload below.
+            setError(e instanceof ApiError ? e.message : `Couldn’t delete ${name}.`);
+        }
         void load();
     };
 
@@ -559,7 +579,7 @@ const AssetsPage = () => {
                             )}
                         </div>
 
-                        <div className="mt-4 truncate text-title text-black dark:text-white">{selected.name}</div>
+                        <RenameField key={selected.id} name={selected.name} onRename={(n) => rename(selected.id, n)} />
                         <div className="mt-1 text-caption-2 text-grey">
                             {selected.ext} · {selected.size}
                             {selected.dimensions ? ` · ${selected.dimensions}` : ""}
@@ -610,6 +630,57 @@ const AssetsPage = () => {
                     </aside>
                 </>
             )}
+        </div>
+    );
+};
+
+/** The asset name, editable in place. The extension is shown but not editable (the
+ *  server keeps it); Enter or leaving the field saves, Escape cancels. */
+const RenameField = ({ name, onRename }: { name: string; onRename: (name: string) => Promise<string | null> }) => {
+    const dot = name.lastIndexOf(".");
+    const ext = dot > 0 ? name.slice(dot) : "";
+    const base = ext ? name.slice(0, dot) : name;
+    const [draft, setDraft] = useState(base);
+    const [error, setError] = useState<string | null>(null);
+    const [saving, setSaving] = useState(false);
+
+    const save = async () => {
+        const next = draft.trim();
+        if (!next || next === base) {
+            setDraft(base);
+            setError(null);
+            return;
+        }
+        setSaving(true);
+        const err = await onRename(`${next}${ext}`);
+        setSaving(false);
+        setError(err);
+        if (err) setDraft(base);
+    };
+
+    return (
+        <div className="mt-4">
+            <label className="flex items-center gap-1 rounded-lg border border-transparent px-2 -mx-2 transition-colors focus-within:border-primary hover:border-grey-light dark:hover:border-grey-light/10">
+                <input
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={() => void save()}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        if (e.key === "Escape") {
+                            setDraft(base);
+                            setError(null);
+                        }
+                    }}
+                    disabled={saving}
+                    aria-label="File name"
+                    title="Rename file"
+                    className="min-w-0 grow bg-transparent py-1 text-title text-black outline-none dark:text-white"
+                />
+                {ext && <span className="shrink-0 text-title text-grey">{ext}</span>}
+                <Icon className="h-4 w-4 shrink-0 fill-grey" name="edit" />
+            </label>
+            {error && <p className="mt-1 text-caption-2 text-error">{error}</p>}
         </div>
     );
 };
