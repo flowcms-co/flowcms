@@ -44,3 +44,10 @@ export class UpdateEntryDto {
     @IsString()
     scheduledAt?: string;
 }
+
+export class SetAuthorDto {
+    /** A workspace member's user id; null/omitted returns to the automatic author. */
+    @IsOptional()
+    @IsString()
+    authorId?: string | null;
+}

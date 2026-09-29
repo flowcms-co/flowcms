@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
+import Select from "@/components/ui/Select";
 import WhiteLabelCard from "@/templates/settings/WhiteLabelCard";
 import ApprovalsCard from "@/templates/settings/ApprovalsCard";
 import { api, ApiError } from "@/lib/api";
@@ -18,6 +19,7 @@ import { helpUrl, GUIDES } from "@/lib/help";
 const System = () => {
     const [name, setName] = useState("");
     const [previewUrl, setPreviewUrl] = useState("");
+    const [authorMode, setAuthorMode] = useState<Workspace["authorMode"]>("creator");
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -28,6 +30,7 @@ const System = () => {
                 if (off) return;
                 setName(w.name);
                 setPreviewUrl(w.previewUrl ?? "");
+                setAuthorMode(w.authorMode ?? "creator");
             })
             .catch(() => {});
         return () => {
@@ -39,7 +42,7 @@ const System = () => {
         setSaving(true);
         setMsg(null);
         try {
-            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim() }) });
+            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), authorMode }) });
             clearWorkspaceCache();
             setMsg({ ok: true, text: "Saved" });
         } catch (e) {
@@ -85,6 +88,25 @@ const System = () => {
                 >
                     Use the bundled example frontend →
                 </button>
+                <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field label="Content author">
+                        <Select
+                            variant="field"
+                            ariaLabel="Content author"
+                            value={authorMode}
+                            onChange={(v) => setAuthorMode(v as Workspace["authorMode"])}
+                            options={[
+                                { value: "creator", label: "Original creator" },
+                                { value: "lastEditor", label: "Latest editor" },
+                            ]}
+                        />
+                    </Field>
+                </div>
+                <p className="mt-2.5 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
+                    Who is shown as the author of each entry. Latest editor follows the last person who changed the content;
+                    approving or publishing alone does not count. You can still pick an author by hand on any entry, in the
+                    editor&apos;s Review tab.
+                </p>
                 <div className="mt-5 flex items-center justify-end gap-3">
                     {msg && <span className={`text-body-sm ${msg.ok ? "text-success" : "text-error"}`}>{msg.text}</span>}
                     <button type="button" onClick={save} disabled={saving} className="btn-primary disabled:opacity-60">

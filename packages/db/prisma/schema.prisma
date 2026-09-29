@@ -42,6 +42,7 @@ model Workspace {
   lastFullScanAt        DateTime? // last scheduled full re-audit + AI pass
   jsonLdOrg     Json? // site-wide Organization structured data (JSON-LD) defaults
   ignoredFindings String[] @default([]) // SEO findings the user permanently dismissed: "CODE" (whole issue) or "CODE:entryId" (one page)
+  authorMode    String   @default("creator") // who an entry's author is: "creator" | "lastEditor"
   previewUrl    String? // frontend live-preview URL template, e.g. https://site.com/preview?slug={slug} ({slug}/{id}/{type}/{locale})
   // White-label (Enterprise `white_label`): a workspace's own studio branding.
   // Stored on the core model (nullable) but only APPLIED when licensed; writes are
@@ -363,7 +364,9 @@ model ContentEntry {
   slug          String?
   publishedAt   DateTime?
   scheduledAt   DateTime?
-  authorId      String?
+  authorId      String? // who created the entry; never changes
+  lastEditorId  String? // who last changed the content (not approvals / publishes)
+  authorOverrideId String? // hand-picked author; wins over Workspace.authorMode
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
   versions      ContentVersion[]

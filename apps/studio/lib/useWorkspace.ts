@@ -12,6 +12,8 @@ export type Workspace = {
     defaultLocale: string;
     onboardedAt: string | null;
     previewUrl: string | null;
+    /** Who an entry's author is: its creator, or whoever last edited the content. */
+    authorMode: "creator" | "lastEditor";
     /** White-label (applied only when licensed for `white_label`). */
     brandName: string | null;
     brandLogoUrl: string | null;

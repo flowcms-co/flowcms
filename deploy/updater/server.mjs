@@ -459,8 +459,10 @@ async function selfUpdateUpdater(ctx) {
     await run("docker", args).catch(() => undefined);
 }
 
-/** Restore DB + media (and optionally .env) from a packed backup tarball. */
-async function restoreFromBackup(id, { restoreEnv = false } = {}) {
+/** Restore DB + media (and optionally .env) from a packed backup tarball.
+ *  `restoreMedia: false` leaves the media volume alone (used by the upgrade rollback:
+ *  an upgrade never changes media, so there is nothing to put back). */
+async function restoreFromBackup(id, { restoreEnv = false, restoreMedia = true } = {}) {
     if (!safeId(id)) throw new Error("bad backup id");
     const tarball = path.join(BACKUP_DIR, id + ".tar.gz");
     if (!fs.existsSync(tarball)) throw new Error("backup not found");
@@ -484,7 +486,10 @@ async function restoreFromBackup(id, { restoreEnv = false } = {}) {
         });
         // Media: replace the media directory contents.
         const mediaTar = path.join(inner, "media.tar.gz");
-        if (fs.existsSync(mediaTar) && (await fsp.stat(mediaTar)).size > 0) {
+        if (restoreMedia && fs.existsSync(mediaTar) && (await fsp.stat(mediaTar)).size > 0) {
+            // Prove the archive is readable BEFORE wiping, so a corrupt backup can't
+            // leave the media volume empty.
+            await run("tar", ["-tzf", mediaTar]);
             await run("sh", ["-c", `rm -rf "${MEDIA_DIR}"/* "${MEDIA_DIR}"/.[!.]* 2>/dev/null; true`]);
             await run("tar", ["-xzf", mediaTar, "-C", MEDIA_DIR]);
         }
@@ -589,7 +594,7 @@ async function rollback(ctx, reason) {
         // the pre-upgrade database so the rolled-back version is consistent.
         if (!ok && ctx.backupId) {
             await setStatus({ step: "restore_db" });
-            await restoreFromBackup(ctx.backupId, { restoreEnv: false }).catch(() => undefined);
+            await restoreFromBackup(ctx.backupId, { restoreEnv: false, restoreMedia: false }).catch((e) => log("rollback: database restore failed:", e?.message || e));
             await compose("up", "-d", "api", "studio");
             ok = await waitHealthy(HEALTH_TIMEOUT);
         }

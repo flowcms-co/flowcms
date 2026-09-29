@@ -1,11 +1,12 @@
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
-import { ArrayUnique, IsArray, IsInt, IsObject, IsOptional, IsString, Matches, Max, Min } from "class-validator";
+import { ArrayUnique, IsArray, IsIn, IsInt, IsObject, IsOptional, IsString, Matches, Max, Min } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { PrismaService } from "../prisma/prisma.service";
 import { toLowerId, normalizeFieldNames } from "../content/naming";
 import { pluralize } from "../content/pluralize";
+import { AUTHOR_MODES } from "../content/author";
 
 class UpdateWorkspaceDto {
     @IsOptional() @IsString() name?: string;
@@ -21,6 +22,8 @@ class UpdateWorkspaceDto {
     @IsOptional() @IsString() previewUrl?: string;
     /** Fallback weekly content goal per writer (when no personal goal is set). */
     @IsOptional() @IsInt() @Min(0) @Max(100) defaultWeeklyGoal?: number;
+    /** Who an entry's author is: its creator, or whoever last edited the content. */
+    @IsOptional() @IsIn(AUTHOR_MODES) authorMode?: (typeof AUTHOR_MODES)[number];
 }
 
 /** Starter content models seeded by the guided setup's "start fresh" path. */
@@ -42,7 +45,7 @@ const STARTERS: Record<string, StarterType[]> = {
     blank: [],
 };
 
-const shape = (w: { id: string; name: string; slug: string; locales: unknown; defaultLocale: string; onboardedAt: Date | null; jsonLdOrg?: unknown; previewUrl?: string | null; defaultWeeklyGoal?: number; brandName?: string | null; brandLogoUrl?: string | null; brandAccent?: string | null }) => ({
+const shape = (w: { id: string; name: string; slug: string; locales: unknown; defaultLocale: string; onboardedAt: Date | null; jsonLdOrg?: unknown; previewUrl?: string | null; authorMode?: string; defaultWeeklyGoal?: number; brandName?: string | null; brandLogoUrl?: string | null; brandAccent?: string | null }) => ({
     id: w.id,
     name: w.name,
     slug: w.slug,
@@ -51,6 +54,7 @@ const shape = (w: { id: string; name: string; slug: string; locales: unknown; de
     onboardedAt: w.onboardedAt,
     jsonLdOrg: (w.jsonLdOrg as Record<string, unknown> | null) ?? null,
     previewUrl: w.previewUrl ?? null,
+    authorMode: w.authorMode ?? "creator",
     defaultWeeklyGoal: w.defaultWeeklyGoal ?? 3,
     // White-label branding (applied client-side only when licensed for white_label).
     brandName: w.brandName ?? null,
@@ -83,6 +87,7 @@ export class WorkspaceController {
         if (dto.jsonLdOrg !== undefined) data.jsonLdOrg = dto.jsonLdOrg;
         if (dto.previewUrl !== undefined) data.previewUrl = dto.previewUrl.trim() || null;
         if (dto.defaultWeeklyGoal !== undefined) data.defaultWeeklyGoal = dto.defaultWeeklyGoal;
+        if (dto.authorMode !== undefined) data.authorMode = dto.authorMode;
         const w = await this.prisma.workspace.update({ where: { id: user.workspaceId }, data });
         return shape(w);
     }

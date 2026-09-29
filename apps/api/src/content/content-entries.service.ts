@@ -13,6 +13,7 @@ import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
 import { fieldsOf, validateEntryData, type ComponentMap, type SchemaField } from "./entry-validation";
 import { RelationSyncService, refIds, reverseDelta, applyForwardValue } from "./relation-sync.service";
 import { entryPath } from "./route-path";
+import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
  *  which carries the page type that `entryPath` uses to build the public path
@@ -207,7 +208,7 @@ export class ContentEntriesService {
         }
         const e = await this.prisma.contentEntry.update({
             where: { id: entryId },
-            data: { data: version.data as Prisma.InputJsonValue },
+            data: { data: version.data as Prisma.InputJsonValue, ...(actorId ? { lastEditorId: actorId } : {}) },
             include: { contentType: { select: CT_SELECT } },
         });
         await this.snapshot(entryId, version.data, e.status, actorId);
@@ -392,12 +393,46 @@ export class ContentEntriesService {
         };
     }
 
+    private async authorMode(workspaceId: string): Promise<string> {
+        const w = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { authorMode: true } });
+        return w?.authorMode ?? "creator";
+    }
+
+    /** Did a save actually change the content? Autosave and re-saves of identical
+     *  data must not make the saver the entry's last editor. */
+    private changed(before: unknown, after: unknown): boolean {
+        return JSON.stringify(before ?? {}) !== JSON.stringify(after ?? {});
+    }
+
+    /** The entry's author for the editor's picker: the current choice, what the
+     *  workspace setting would pick on its own, and the members to choose from. */
+    async author(workspaceId: string, id: string) {
+        const e = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, select: { authorId: true, lastEditorId: true, authorOverrideId: true } });
+        if (!e) throw new NotFoundException("Entry not found.");
+        const members = await this.prisma.membership.findMany({ where: { workspaceId }, select: { user: { select: { id: true, name: true, email: true } } } });
+        const list = members.map((m) => ({ id: m.user.id, name: m.user.name ?? m.user.email })).sort((a, b) => a.name.localeCompare(b.name));
+        const autoId = autoAuthorId(e, await this.authorMode(workspaceId));
+        return { overrideId: e.authorOverrideId, autoName: list.find((m) => m.id === autoId)?.name ?? null, members: list };
+    }
+
+    /** Hand-pick an entry's author (any workspace member); null hands it back to the workspace setting. */
+    async setAuthor(workspaceId: string, id: string, authorId: string | null) {
+        const e = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, select: { id: true } });
+        if (!e) throw new NotFoundException("Entry not found.");
+        if (authorId && !(await this.prisma.membership.findFirst({ where: { workspaceId, userId: authorId }, select: { userId: true } }))) {
+            throw new BadRequestException("The author must be a member of this workspace.");
+        }
+        await this.prisma.contentEntry.update({ where: { id }, data: { authorOverrideId: authorId } });
+        return this.author(workspaceId, id);
+    }
+
     async list(workspaceId: string, opts: { typeId?: string; status?: string; q?: string; locale?: string; authorId?: string; limit?: number; offset?: number }, role?: RoleRules) {
         const where: Prisma.ContentEntryWhereInput = { workspaceId };
         if (opts.typeId) where.contentTypeId = opts.typeId;
         if (opts.status) where.status = opts.status as ContentStatus;
         if (opts.locale) where.locale = opts.locale;
-        if (opts.authorId) where.authorId = opts.authorId;
+        const mode = await this.authorMode(workspaceId);
+        if (opts.authorId) where.AND = [authorWhere(opts.authorId, mode)];
         // advanced_rbac (Pro): scope a role to its allowed content types.
         const allowed = this.rbac && role ? await this.rbac.allowedTypeIds(role) : null;
         if (allowed) {
@@ -420,7 +455,7 @@ export class ContentEntriesService {
         });
         // Resolve author display details (name + title + avatar for richer lists
         // like the Publish Queue, which shows the author's role and picture).
-        const authorIds = [...new Set(rows.map((r) => r.authorId).filter(Boolean) as string[])];
+        const authorIds = [...new Set(rows.map((r) => effectiveAuthorId(r, mode)).filter(Boolean) as string[])];
         const users = authorIds.length
             ? await this.prisma.user.findMany({
                   where: { id: { in: authorIds } },
@@ -436,12 +471,13 @@ export class ContentEntriesService {
         const q = opts.q?.toLowerCase().trim();
         return rows
             .map((r) => {
-                const s = this.shape(r, nameOf(r.authorId));
-                const u = r.authorId ? userById.get(r.authorId) : null;
+                const authorId = effectiveAuthorId(r, mode);
+                const s = this.shape(r, nameOf(authorId));
+                const u = authorId ? userById.get(authorId) : null;
                 return {
                     ...s,
                     author: s.author
-                        ? { id: r.authorId, name: s.author.name, title: u?.title ?? null, avatarUrl: u?.avatarUrl ?? null, avatarStyle: u?.avatarStyle ?? null }
+                        ? { id: authorId, name: s.author.name, title: u?.title ?? null, avatarUrl: u?.avatarUrl ?? null, avatarStyle: u?.avatarStyle ?? null }
                         : null,
                 };
             })
@@ -632,6 +668,7 @@ export class ContentEntriesService {
             draft = await this.plugins.runBeforeSave(workspaceId, { data: draft, title: String(draft.title ?? ""), status: existing.status });
             this.syncMetaTitle(draft, (existing.draftData ?? existing.data ?? {}) as Record<string, unknown>);
             const patch: Prisma.ContentEntryUpdateInput = { draftData: draft as Prisma.InputJsonValue, draftApproved: false };
+            if (actorId && this.changed(base, draft)) patch.lastEditorId = actorId;
             // Slug is a structural column (the live URL); apply it directly.
             if (dto.slug !== undefined) patch.slug = dto.slug;
             const updated = await this.prisma.contentEntry.update({
@@ -680,6 +717,7 @@ export class ContentEntriesService {
             merged = await this.plugins.runBeforeSave(workspaceId, { data: merged, title: String(merged.title ?? ""), status: targetStatus });
             this.syncMetaTitle(merged, (existing.data ?? {}) as Record<string, unknown>);
             data.data = merged as Prisma.InputJsonValue;
+            if (actorId && this.changed(existing.data, merged)) data.lastEditorId = actorId;
         }
 
         const e = await this.prisma.contentEntry.update({

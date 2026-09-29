@@ -465,6 +465,8 @@ const EditorPage = () => {
         }
     };
 
+    const mergeEntryData = useCallback((partial: Record<string, unknown>) => setEntryData((d) => ({ ...d, ...partial })), []);
+
     /** Re-pull the entry (after a version restore) and reset the canvas to it. */
     const reload = useCallback(async () => {
         if (!entryId) return;
@@ -1002,7 +1004,10 @@ const EditorPage = () => {
                             </button>
                         </div>
                         <div className="min-h-0 grow">
+                            {/* Keyed on load: the panel's tabs read their fields once on mount, so
+                                they must mount after the entry has arrived, not before. */}
                             <RightPanel
+                                key={`${entryId}:${ready}`}
                                 entryId={entryId}
                                 editor={editor}
                                 title={title}
@@ -1010,6 +1015,7 @@ const EditorPage = () => {
                                 status={status}
                                 onReload={reload}
                                 onStatus={setStatus}
+                                onData={mergeEntryData}
                             />
                         </div>
                     </div>

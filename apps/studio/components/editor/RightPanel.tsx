@@ -39,18 +39,29 @@ type Props = {
     status: string;
     onReload: () => void;
     onStatus: (status: string) => void;
+    /** Fields this panel saved, so the editor's copy of the entry stays current. */
+    onData: (partial: EntryData) => void;
 };
 
-const RightPanel = ({ entryId, editor, title, data, status, onReload, onStatus }: Props) => {
+const RightPanel = ({ entryId, editor, title, data, status, onReload, onStatus, onData }: Props) => {
     const [tab, setTab] = useState<PanelTab>("seo");
 
-    /** Merge a partial into the entry's data (backend merges server-side too). */
+    /** Merge a partial into the entry's data (backend merges server-side too).
+     *  Resolves false when the save failed. On success the editor's copy is updated
+     *  too: otherwise its next save would send the old values back over these, and
+     *  a tab reopened later would show them as blank. */
     const patchData = useCallback(
-        async (partial: EntryData) => {
-            if (!entryId) return;
-            await api(`/entries/${entryId}`, { method: "PATCH", body: JSON.stringify({ data: partial }) }).catch(() => {});
+        async (partial: EntryData): Promise<boolean> => {
+            if (!entryId) return false;
+            try {
+                await api(`/entries/${entryId}`, { method: "PATCH", body: JSON.stringify({ data: partial }) });
+                onData(partial);
+                return true;
+            } catch {
+                return false;
+            }
         },
-        [entryId],
+        [entryId, onData],
     );
 
     return (
@@ -96,7 +107,7 @@ const RightPanel = ({ entryId, editor, title, data, status, onReload, onStatus }
 };
 
 /* ---------------- SEO ---------------- */
-const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; title: string; data: EntryData; patchData: (p: EntryData) => Promise<void> }) => {
+const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; title: string; data: EntryData; patchData: (p: EntryData) => Promise<boolean> }) => {
     const { user } = useAuth();
     const { has } = usePlan();
     // advanced_rbac (Pro): this role can't edit SEO / metadata.
@@ -114,7 +125,7 @@ const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; tit
     const [metaDescription, setMetaDescription] = useState(str(data.metaDescription));
     const [focusKeyword, setFocusKeyword] = useState(str(data.focusKeyword));
     const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState(false);
+    const [saved, setSaved] = useState<"ok" | "failed" | null>(null);
 
     const bodyText = editor?.getText() ?? "";
     const checks = useMemo(() => {
@@ -133,10 +144,10 @@ const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; tit
 
     const save = async () => {
         setSaving(true);
-        await patchData({ metaTitle, metaDescription, focusKeyword });
+        const ok = await patchData({ metaTitle, metaDescription, focusKeyword });
         setSaving(false);
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        setSaved(ok ? "ok" : "failed");
+        setTimeout(() => setSaved(null), 2000);
     };
 
     return (
@@ -190,7 +201,7 @@ const SeoTab = ({ editor, title, data, patchData }: { editor: Editor | null; tit
             {!locked && (
                 <div className="flex items-center gap-3">
                     <button type="button" onClick={save} disabled={saving} className="btn-primary h-9 px-4 text-caption-1 disabled:opacity-60">{saving ? "Saving…" : "Save SEO"}</button>
-                    {saved && <span className="text-caption-2 text-grey">Saved</span>}
+                    {saved && <span className={cn("text-caption-2", saved === "ok" ? "text-grey" : "text-error")}>{saved === "ok" ? "Saved" : "Could not save"}</span>}
                 </div>
             )}
 
@@ -294,21 +305,21 @@ const AiTab = ({ editor, title }: { editor: Editor | null; title: string }) => {
 
 /* ---------------- Schema ---------------- */
 const SCHEMA_TYPES = ["BlogPosting", "Article", "NewsArticle", "WebPage", "Product", "FAQPage", "HowTo", "Recipe", "Event", "Organization"];
-const SchemaTab = ({ title, data, patchData }: { title: string; data: EntryData; patchData: (p: EntryData) => Promise<void> }) => {
+const SchemaTab = ({ title, data, patchData }: { title: string; data: EntryData; patchData: (p: EntryData) => Promise<boolean> }) => {
     const [schemaType, setSchemaType] = useState(str(data.jsonLdType) || "BlogPosting");
     const [canonical, setCanonical] = useState(str(data.canonical));
     const [robots, setRobots] = useState(str(data.robots) || "index, follow");
     const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState(false);
+    const [saved, setSaved] = useState<"ok" | "failed" | null>(null);
 
     const jsonLd = JSON.stringify({ "@context": "https://schema.org", "@type": schemaType, headline: title || "Untitled", ...(canonical ? { url: canonical } : {}) }, null, 2);
 
     const save = async () => {
         setSaving(true);
-        await patchData({ jsonLdType: schemaType, canonical, robots });
+        const ok = await patchData({ jsonLdType: schemaType, canonical, robots });
         setSaving(false);
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        setSaved(ok ? "ok" : "failed");
+        setTimeout(() => setSaved(null), 2000);
     };
 
     return (
@@ -322,7 +333,7 @@ const SchemaTab = ({ title, data, patchData }: { title: string; data: EntryData;
             </div>
             <div className="flex items-center gap-3">
                 <button type="button" onClick={save} disabled={saving} className="btn-primary h-9 px-4 text-caption-1 disabled:opacity-60">{saving ? "Saving…" : "Save schema"}</button>
-                {saved && <span className="text-caption-2 text-grey">Saved</span>}
+                {saved && <span className={cn("text-caption-2", saved === "ok" ? "text-grey" : "text-error")}>{saved === "ok" ? "Saved" : "Could not save"}</span>}
             </div>
         </div>
     );
@@ -389,6 +400,46 @@ type ReviewsResp = { status: string; approvalsRequired: number; approvals: numbe
 
 // Read-only sign-off log. Submitting for approval, approving, and publishing all
 // happen from the editor's top action button now; this tab records who did what.
+type AuthorInfo = { overrideId: string | null; autoName: string | null; members: { id: string; name: string }[] };
+
+/** Pick the entry's author by hand, or leave it to the workspace setting ("Automatic"). */
+const AuthorField = ({ entryId }: { entryId: string }) => {
+    const [info, setInfo] = useState<AuthorInfo | null>(null);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        let off = false;
+        api<AuthorInfo>(`/entries/${entryId}/author`)
+            .then((a) => !off && setInfo(a))
+            .catch(() => {});
+        return () => {
+            off = true;
+        };
+    }, [entryId]);
+
+    if (!info) return null;
+    const pick = async (v: string) => {
+        setError(false);
+        try {
+            setInfo(await api<AuthorInfo>(`/entries/${entryId}/author`, { method: "PATCH", body: JSON.stringify({ authorId: v === "auto" ? null : v }) }));
+        } catch {
+            setError(true);
+        }
+    };
+    return (
+        <Field label="Author">
+            <Select
+                variant="field"
+                ariaLabel="Author"
+                value={info.overrideId ?? "auto"}
+                onChange={(v) => void pick(v)}
+                options={[{ value: "auto", label: `Automatic (${info.autoName ?? "Unassigned"})` }, ...info.members.map((m) => ({ value: m.id, label: m.name }))]}
+            />
+            {error && <span className="text-caption-2 text-error">Could not change the author.</span>}
+        </Field>
+    );
+};
+
 const ReviewTab = ({ entryId, status }: { entryId: string; status: string; onStatus?: (s: string) => void }) => {
     const [info, setInfo] = useState<ReviewsResp | null>(null);
 
@@ -418,6 +469,8 @@ const ReviewTab = ({ entryId, status }: { entryId: string; status: string; onSta
                 <span className="text-caption-1 text-grey">Status</span>
                 <span className="text-title text-black dark:text-white">{STATUS_LABEL[status] ?? status}</span>
             </div>
+
+            <AuthorField entryId={entryId} />
 
             {/* Sign-off progress + decisions */}
             {showApprovals && (

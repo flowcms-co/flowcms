@@ -3,7 +3,7 @@ import { ArrayNotEmpty, IsArray, IsIn, IsOptional, IsString, MaxLength } from "c
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
-import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
+import { CreateEntryDto, SetAuthorDto, UpdateEntryDto } from "./entries.dto";
 import { ContentEntriesService } from "./content-entries.service";
 import { JobsService } from "../jobs/jobs.service";
 
@@ -139,6 +139,18 @@ export class ContentEntriesController {
     }
 
     /** Sign-off decisions for an entry + the approval policy (any member can read). */
+    @Get(":id/author")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    author(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+        return this.entries.author(user.workspaceId, id);
+    }
+
+    @Patch(":id/author")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    setAuthor(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: SetAuthorDto) {
+        return this.entries.setAuthor(user.workspaceId, id, dto.authorId ?? null);
+    }
+
     @Get(":id/reviews")
     @RequirePermissions(PERMISSIONS.CONTENT_READ)
     reviews(@CurrentUser() user: AuthUser, @Param("id") id: string) {
