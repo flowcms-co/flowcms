@@ -318,6 +318,9 @@ export type ContentTypeSchema = {
      *  entries, e.g. "/blogs/tags/{slug}" or "/appliance-repair/{slug}". Supports
      *  {slug} and {locale}; a template with no placeholder appends the slug. */
     routePattern?: string;
+    /** How entry slugs are built, e.g. "{service.slug}-{city.slug}" or "{title}". When
+     *  set, the slug is derived on every save instead of typed. */
+    slugPattern?: string;
     fields: SchemaField[];
 };
 

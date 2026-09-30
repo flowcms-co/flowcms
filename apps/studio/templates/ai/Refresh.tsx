@@ -6,9 +6,10 @@ import Icon from "@/components/ui/Icon";
 import ConnectLock from "@/components/ui/ConnectLock";
 import { useConnections } from "@/lib/useConnections";
 import { api } from "@/lib/api";
+import { fetchAllEntries } from "@/lib/entries";
 import { aiErrorMessage, runAi, useAiProviders } from "@/lib/useAi";
 
-type Entry = { id: string; title: string; slug: string; updatedAt: string; publishedAt: string | null; data: Record<string, unknown>; contentType: { name: string } };
+type Entry = { id: string; title: string; slug: string; updatedAt: string; publishedAt: string | null; contentType: { name: string } };
 type Page = Entry & { ageDays: number; stale: boolean };
 
 const STALE_DAYS = 90;
@@ -36,7 +37,8 @@ const Refresh = () => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        api<Entry[]>("/entries?status=PUBLISHED")
+        // The list needs dates only; a page's body is fetched when it is refreshed.
+        fetchAllEntries<Entry>({ status: "PUBLISHED" })
             .then((rows) => {
                 const now = Date.now();
                 const mapped: Page[] = rows
@@ -58,7 +60,8 @@ const Refresh = () => {
         setBusyId(p.id);
         setError(null);
         try {
-            const body = String((p.data as { body?: string })?.body ?? "").replace(/<[^>]+>/g, " ").trim() || p.title;
+            const full = await api<{ data?: { body?: unknown } }>(`/entries/${p.id}`);
+            const body = String(full.data?.body ?? "").replace(/<[^>]+>/g, " ").trim() || p.title;
             const res = await runAi({
                 feature: "ai.refresh",
                 system: "You are a senior content editor. Refresh the given page so it reads as current, accurate and engaging while preserving its intent and key points. Return the refreshed content as clean markdown: no preamble.",

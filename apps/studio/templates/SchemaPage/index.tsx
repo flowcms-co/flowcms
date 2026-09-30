@@ -218,7 +218,9 @@ const SchemaPage = () => {
                                   // Omit when blank so the stored schema stays clean.
                                   previewUrl: active.previewUrl?.trim() || undefined,
                                   // Reference types carry a custom URL template; cleared for others.
-                                  routePattern: active.pageType === "reference" ? active.routePattern?.trim() || undefined : undefined,
+                                  // A URL pattern is required for reference types and optional for the rest.
+                                  routePattern: active.pageType !== "home" ? active.routePattern?.trim() || undefined : undefined,
+                                  slugPattern: active.pageType !== "home" ? active.slugPattern?.trim() || undefined : undefined,
                               }
                             : { jsonLd: active.jsonLd }),
                         fields,
@@ -384,18 +386,39 @@ const SchemaPage = () => {
                                 </div>
                             </div>
 
-                            {tab === "types" && active.pageType === "reference" && (
+                            {tab === "types" && active.pageType !== "home" && (
                                 <label className="mb-5 flex flex-col gap-1.5">
-                                    <span className="text-caption-1 text-grey">URL pattern <span className="text-error">*</span></span>
+                                    <span className="text-caption-1 text-grey">Slug pattern <span className="text-grey/70">(optional)</span></span>
                                     <input
-                                        value={active.routePattern ?? ""}
-                                        onChange={(e) => patchActive({ routePattern: e.target.value })}
-                                        placeholder="/blogs/tags/{slug}  ·  or  /appliance-repair/{slug}"
+                                        value={active.slugPattern ?? ""}
+                                        onChange={(e) => patchActive({ slugPattern: e.target.value })}
+                                        placeholder="{service.slug}-{city.slug}  ·  or  {title}"
                                         spellCheck={false}
                                         className="flow-input font-mono text-caption-1"
                                     />
                                     <span className="text-caption-2 leading-relaxed text-grey">
-                                        The public URL for this reference type&rsquo;s entries. Put{" "}
+                                        Builds each entry&rsquo;s slug from its content on every save, so editors never type it. Use a field name such as{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{title}"}</code>, or a
+                                        Reference field&rsquo;s{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{city.slug}"}</code> /{" "}
+                                        <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{city.title}"}</code>. The same
+                                        placeholders work in the URL pattern and the preview URL below. Existing slugs change on the entry&rsquo;s next save.
+                                    </span>
+                                </label>
+                            )}
+
+                            {tab === "types" && active.pageType !== "home" && (
+                                <label className="mb-5 flex flex-col gap-1.5">
+                                    <span className="text-caption-1 text-grey">URL pattern {active.pageType === "reference" ? <span className="text-error">*</span> : <span className="text-grey/70">(optional)</span>}</span>
+                                    <input
+                                        value={active.routePattern ?? ""}
+                                        onChange={(e) => patchActive({ routePattern: e.target.value })}
+                                        placeholder="/blogs/tags/{slug}  ·  or  /{service.slug}/{city.slug}"
+                                        spellCheck={false}
+                                        className="flow-input font-mono text-caption-1"
+                                    />
+                                    <span className="text-caption-2 leading-relaxed text-grey">
+                                        The public URL for this type&rsquo;s entries, when it isn&rsquo;t /{active.apiId}/{"{slug}"}. Put{" "}
                                         <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{slug}"}</code>{" "}
                                         where the entry slug goes (e.g.{" "}
                                         <span className="font-medium text-black dark:text-white">/blogs/tags/{"{slug}"}</span> &rarr; /blogs/tags/common-problems). Also supports{" "}

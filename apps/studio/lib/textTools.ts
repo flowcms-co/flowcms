@@ -203,6 +203,56 @@ export function checkOriginality(text: string, corpus: CorpusPage[]): Originalit
     return { score, notes: notes.slice(0, 12) };
 }
 
+/**
+ * Duplicate passages across a whole set of pages in one pass: every page's phrases
+ * are indexed once, so the cost grows with the amount of text, not with the square
+ * of the page count. Returns the same notes as checkOriginality gives for one page
+ * against the rest, per page, without the boilerplate checks.
+ */
+const BOILERPLATE_PAGES = 50;
+
+export function findDuplicatePassages(pages: CorpusPage[]): OriginalityNote[][] {
+    const sets = pages.map((p) => shingles(normalizeWords(p.body)));
+    const index = new Map<string, number[]>();
+    sets.forEach((set, i) => {
+        for (const sh of set) {
+            const hit = index.get(sh);
+            if (hit) hit.push(i);
+            else index.set(sh, [i]);
+        }
+    });
+    return sets.map((set, i) => {
+        if (set.size === 0) return [];
+        const overlap = new Map<number, string[]>(); // other page -> shared phrases
+        for (const sh of set) {
+            const sharers = index.get(sh) ?? [];
+            // A phrase on more than BOILERPLATE_PAGES pages is the site's template
+            // text (a footer line, a standard CTA), not a copied passage; it would
+            // also pair every page with every other and make the scan quadratic.
+            if (sharers.length > BOILERPLATE_PAGES) continue;
+            for (const j of sharers) {
+                if (j === i) continue;
+                const list = overlap.get(j);
+                if (list) list.push(sh);
+                else overlap.set(j, [sh]);
+            }
+        }
+        return [...overlap]
+            .map(([j, shared]) => {
+                const ratio = shared.length / set.size;
+                return {
+                    severity: ratio > 0.3 ? "high" : ratio > 0.1 ? "medium" : "low",
+                    snippet: shared[0],
+                    why: `Overlaps with your existing page “${pages[j].title}” (${Math.round(ratio * 100)}% of phrases match).`,
+                    ratio,
+                };
+            })
+            .sort((a, b) => b.ratio - a.ratio)
+            .slice(0, 50)
+            .map(({ severity, snippet, why }) => ({ severity, snippet, why }) as OriginalityNote);
+    });
+}
+
 /* ── Internal link suggestions (phrase matching) ── */
 export type LinkPage = { title: string; slug: string };
 export type LinkSuggestion = { anchor: string; target: string; relevance: number };

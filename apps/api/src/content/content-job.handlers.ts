@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { HttpException, Injectable, OnModuleInit } from "@nestjs/common";
 import { PERMISSIONS } from "@flowcms/shared";
 import { JobsService, type JobRow, type JobHelpers } from "../jobs/jobs.service";
 import { ContentEntriesService } from "./content-entries.service";
@@ -24,7 +24,10 @@ export class ContentJobHandlers implements OnModuleInit {
     ) {}
 
     onModuleInit() {
-        this.jobs.register("content.bulkPublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.publish(ws, id, uid), "Published"));
+        // Queued only by someone with publish rights (see the controller), so each entry
+        // is published with that right: pending drafts are approved and go live, the
+        // same as Approve then Publish one at a time.
+        this.jobs.register("content.bulkPublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.publish(ws, id, uid, [PERMISSIONS.CONTENT_PUBLISH]), "Published"));
         this.jobs.register("content.bulkUnpublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.unpublish(ws, id, uid), "Unpublished"));
         this.jobs.register("content.bulkDraft", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.unpublish(ws, id, uid), "Moved to draft"));
         this.jobs.register("content.bulkDuplicate", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.duplicate(ws, uid, id), "Duplicated"));
@@ -97,13 +100,26 @@ export class ContentJobHandlers implements OnModuleInit {
                 await op(job.workspaceId, id, job.userId);
                 done++;
             } catch (e) {
-                failures.push({ id, label: await this.entryLabel(job.workspaceId, id), reason: e instanceof Error ? e.message : "Failed" });
+                failures.push({ id, label: await this.entryLabel(job.workspaceId, id), reason: this.reasonOf(e) });
             }
             await helpers.progress(done, failures.length, failures.at(-1)?.reason);
         }
         const failed = failures.length;
         const summary = `${verb} ${done} item${done === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}`;
         return { summary, result: { done, failed, failures } };
+    }
+
+    /** Why an entry failed, naming the field when validation stopped it
+     *  ("contentSections: This field is required.") rather than just "Validation failed.". */
+    private reasonOf(e: unknown): string {
+        if (e instanceof HttpException) {
+            const r = e.getResponse() as { message?: string; errors?: Record<string, string> } | string;
+            if (typeof r === "object" && r.errors) {
+                const [field, msg] = Object.entries(r.errors)[0] ?? [];
+                if (field) return `${field}: ${msg}`;
+            }
+        }
+        return e instanceof Error ? e.message : "Failed";
     }
 
     /** A human label for a failed entry (its title, else slug, else id) for the report. */

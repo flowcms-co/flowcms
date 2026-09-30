@@ -44,6 +44,10 @@ type Entry = {
     contentType: { id?: string; name: string; apiId?: string } | null;
     // True when the preview is showing a published entry's not-yet-published draft.
     hasDraft?: boolean;
+    // From the API: the entry's site path with the type's URL pattern filled in, and
+    // the {field} / {ref.slug} values its patterns use.
+    path?: string;
+    placeholders?: Record<string, string>;
 };
 
 type ApiType = {
@@ -169,6 +173,8 @@ const rebuildArray = (original: unknown, items: ArrayItemMsg[]): unknown[] => {
  *  (e.g. ["services", "water-damage"]); empty for a homepage type. */
 const pathSegments = (e: Entry, type?: ApiType | null): string[] => {
     if (type?.isHome) return [];
+    // The API already applied the type's URL pattern (e.g. /{service.slug}/{city.slug}).
+    if (e.path) return e.path.split("/").filter(Boolean);
     const prefix = (type?.urlPrefix ?? "").trim();
     return [prefix, e.slug ?? ""].filter(Boolean) as string[];
 };
@@ -179,6 +185,7 @@ const pathSegments = (e: Entry, type?: ApiType | null): string[] => {
 const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
     const segs = pathSegments(e, type);
     const map: Record<string, string> = {
+        ...(e.placeholders ?? {}),
         slug: e.slug ?? "",
         id: e.id,
         type: e.contentType?.apiId ?? (e.contentType?.name ?? "").toLowerCase().replace(/\s+/g, "-"),
@@ -186,8 +193,8 @@ const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
         status: (e.status ?? "").toLowerCase(),
         path: segs.join("/"),
     };
-    if (/\{(slug|id|type|locale|status|path)\}/.test(tpl)) {
-        return tpl.replace(/\{(\w+)\}/g, (_, k: string) => encodeURIComponent(map[k] ?? ""));
+    if (/\{[\w.]+\}/.test(tpl)) {
+        return tpl.replace(/\{([\w.]+)\}/g, (_, k: string) => (k === "path" ? map.path : encodeURIComponent(map[k] ?? "")));
     }
     const root = tpl.replace(/\/+$/, "");
     const path = segs.map(encodeURIComponent).join("/");
@@ -201,7 +208,7 @@ const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
 const resolveTypePreviewUrl = (raw: string | null | undefined, e: Entry, type?: ApiType | null): string => {
     const tpl = (raw ?? "").trim();
     if (!tpl) return "";
-    if (/\{(slug|id|type|locale|status|path)\}/.test(tpl)) return buildTarget(tpl, e, type);
+    if (/\{[\w.]+\}/.test(tpl)) return buildTarget(tpl, e, type);
     return tpl;
 };
 
@@ -324,7 +331,9 @@ const PreviewClient = () => {
     }, []);
 
     const shownError = error ?? (!id ? "No entry to preview." : null);
-    const previewUrl = ws?.previewUrl ?? "";
+    // The type's own preview URL comes first when set (a template keeps its query
+    // string, e.g. ?cms=edit); the workspace URL is the fallback.
+    const previewUrl = (type?.previewUrl ?? "").trim() || (ws?.previewUrl ?? "");
     const hasSite = !!previewUrl.trim();
     const mode: "site" | "content" = userMode ?? (hasSite ? "site" : "content");
     const dev = DEVICES.find((d) => d.id === device)!;
@@ -337,7 +346,10 @@ const PreviewClient = () => {
     const metaFields = fields.filter((f) => f.type !== "Rich text" && f.type !== "Slug" && f.name.toLowerCase() !== "title" && f.type !== "DynamicZone");
     // Section-based page: render the dynamic-zone sections as the page content.
     const sections = findSections(entry?.data);
-    const target = entry && hasSite ? buildTarget(previewUrl, entry, type) : "";
+    // Wait for the type before choosing a URL, so the frame never loads the
+    // workspace fallback first and then jumps to the type's own URL.
+    const typeReady = !entry?.contentType || !!type;
+    const target = entry && hasSite && typeReady ? buildTarget(previewUrl, entry, type) : "";
     // The URL the preview iframe actually loads: the entry's own page, or a borrowed
     // published-sibling template when that page can't render this (unpublished) entry.
     const frameSrc = templateTarget ?? target;

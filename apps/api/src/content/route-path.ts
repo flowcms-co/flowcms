@@ -72,13 +72,14 @@ function routePatternOf(t: TypeIds): string {
  *  template with {slug}/{locale} placeholders is filled; one without is treated as a
  *  prefix and the slug is appended. Double slashes collapse and trailing ones trim,
  *  so an empty slug yields the collection root ("/blogs/tags"). */
-function buildReferencePath(pattern: string, slug?: string | null, locale?: string | null): string {
+function buildReferencePath(pattern: string, slug?: string | null, locale?: string | null, values?: Record<string, string>): string {
     const s = (slug ?? "").replace(/^\/+/, "");
     let p = pattern.trim();
     if (!p.startsWith("/")) p = `/${p}`;
-    const map: Record<string, string> = { slug: s, locale: locale ?? "" };
-    if (/\{(slug|locale)\}/.test(p)) {
-        p = p.replace(/\{(\w+)\}/g, (_, k: string) => map[k] ?? "");
+    // {slug}/{locale}, plus {field} and {ref.slug} values resolved by the caller.
+    const map: Record<string, string> = { ...(values ?? {}), slug: s, locale: locale ?? "" };
+    if (/\{[\w.]+\}/.test(p)) {
+        p = p.replace(/\{([\w.]+)\}/g, (_, k: string) => map[k] ?? "");
     } else {
         p = s ? `${p.replace(/\/+$/, "")}/${s}` : p;
     }
@@ -109,11 +110,9 @@ export function isRootSlugType(t: TypeIds): boolean {
  *  apiId / name. */
 export function routePrefixForType(t: TypeIds): string {
     if (isHomeType(t) || isRootSlugType(t)) return "";
-    // A reference type's prefix is the static part of its template (before {slug}).
-    if (isReferenceType(t)) {
-        const pattern = routePatternOf(t);
-        if (pattern) return pattern.split("{")[0].replace(/^\/+|\/+$/g, "");
-    }
+    // With a URL pattern, the prefix is its static start (before the first placeholder).
+    const pattern = routePatternOf(t);
+    if (pattern) return pattern.split("{")[0].replace(/^\/+|\/+$/g, "");
     return slugify(String(t.apiId || t.name || t.pluralApiId || ""));
 }
 
@@ -121,12 +120,12 @@ export function routePrefixForType(t: TypeIds): string {
  *  "/<slug>" (static), or a reference type's custom template path
  *  ("/blogs/tags/common-problems"). A reference type with no template falls back to
  *  the prefixed-collection shape so it's never broken. */
-export function entryPath(t: TypeIds, slug?: string | null, opts?: { locale?: string | null }): string {
+export function entryPath(t: TypeIds, slug?: string | null, opts?: { locale?: string | null; values?: Record<string, string> }): string {
     if (isHomeType(t)) return "/";
-    if (isReferenceType(t)) {
-        const pattern = routePatternOf(t);
-        if (pattern) return buildReferencePath(pattern, slug, opts?.locale);
-    }
+    // A URL pattern on the type wins for any page type (a service type can live at
+    // "/{service.slug}/{city.slug}"); reference types have always used one.
+    const pattern = routePatternOf(t);
+    if (pattern) return buildReferencePath(pattern, slug, opts?.locale, opts?.values);
     const prefix = routePrefixForType(t);
     const s = (slug ?? "").replace(/^\/+/, "");
     if (!prefix) return s ? `/${s}` : "/";

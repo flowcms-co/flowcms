@@ -577,21 +577,35 @@ const ComponentControl = ({
     depth?: number;
 }) => {
     const sub = useComponentSubFields(field);
+    const isList = Array.isArray(value);
+    const isBlock = !!value && typeof value === "object" && !isList;
 
-    if (field.repeatable) {
+    // Show what is stored, even when it is the other shape than the schema says
+    // (content written through the API): a list under a single field is a list,
+    // never one empty block that would replace it on save.
+    if (field.repeatable || isList) {
+        const mismatch = isList && !field.repeatable;
         return (
-            <RepeatableComponent
-                field={field}
-                value={value}
-                onChange={onChange}
-                errors={errors}
-                errorPath={errorPath}
-                depth={depth}
-            />
+            <div className="flex flex-col gap-2">
+                {mismatch && (
+                    <p className="rounded-xl bg-warning/10 px-3 py-2 text-caption-2 text-warning">
+                        This field is set up as a single block, but {(value as unknown[]).length} blocks are stored. They are kept as a list; make the
+                        field repeatable in the Schema Builder to match.
+                    </p>
+                )}
+                <RepeatableComponent
+                    field={field}
+                    value={field.repeatable && isBlock ? [value] : value}
+                    onChange={onChange}
+                    errors={errors}
+                    errorPath={errorPath}
+                    depth={depth}
+                />
+            </div>
         );
     }
 
-    const obj: Json = value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
+    const obj: Json = isBlock ? (value as Json) : {};
     return (
         <SingleComponent field={field} obj={obj} sub={sub} onChange={onChange} errors={errors} errorPath={errorPath} depth={depth} />
     );

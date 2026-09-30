@@ -87,12 +87,11 @@ const QuickSuggestionsCard = () => {
         let off = false;
         (async () => {
             const [entries, links] = await Promise.all([
-                api<Entry[]>("/entries?status=PUBLISHED").catch(() => [] as Entry[]),
+                api<Entry[]>(`/entries?status=PUBLISHED&limit=${SCAN_LIMIT}`).catch(() => [] as Entry[]),
                 api<LinkScan>("/seo/internal-links").catch(() => ({}) as LinkScan),
             ]);
             if (off) return;
             const scanned = entries
-                .slice(0, SCAN_LIMIT)
                 .map((e) => ({ id: e.id, title: e.title || "Untitled", text: plainBody(e) }))
                 .filter((e) => e.text.length >= 60);
             const corpus: CorpusPage[] = scanned.map((e) => ({ title: e.title, body: e.text }));

@@ -7,8 +7,8 @@ import { Menu, Transition } from "@headlessui/react";
 import Card from "@/components/ui/Card";
 import Select from "@/components/ui/Select";
 import Pagination from "@/components/ui/Pagination";
-import { api } from "@/lib/api";
-import { checkGrammar, readabilityScore, checkOriginality, type CorpusPage, type TextIssue, type OriginalityNote } from "@/lib/textTools";
+import { checkGrammar, readabilityScore, findDuplicatePassages, type CorpusPage, type TextIssue, type OriginalityNote } from "@/lib/textTools";
+import { fetchEntryBodies } from "@/lib/entries";
 import { cn } from "@/lib/cn";
 
 type Entry = { id: string; title: string; slug?: string | null; status: string; updatedAt?: string; data: Record<string, unknown> | null; contentType?: { name: string } };
@@ -40,7 +40,10 @@ type Item = {
 };
 
 /** Scan the most recent published pages so the audit stays responsive. */
-const SCAN_LIMIT = 100;
+// ponytail: bodies are scanned in the browser, so the scan covers the newest
+// SCAN_LIMIT published pages and says so when there are more. A server-side scan
+// job is the upgrade for workspaces beyond this.
+const SCAN_LIMIT = 5000;
 const READABILITY_FLOOR = 60;
 const PAGE_SIZE = 10;
 
@@ -162,27 +165,29 @@ const ContentQuality = () => {
     const [page, setPage] = useState(1);
     const [scanning, setScanning] = useState(true);
     const [results, setResults] = useState<PageResult[]>([]);
+    const [progress, setProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+    const [covered, setCovered] = useState<{ scanned: number; total: number }>({ scanned: 0, total: 0 });
 
     useEffect(() => {
         const q = params.get("issue");
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- sync the filter with the URL
         if (q && FILTERS.some((f) => f.id === q)) setFilter(q as IssueKind);
     }, [params]);
 
     useEffect(() => {
         let off = false;
         (async () => {
-            const entries = await api<Entry[]>("/entries?status=PUBLISHED").catch(() => [] as Entry[]);
+            const { items: entries, total } = await fetchEntryBodies<Entry>({ status: "PUBLISHED" }, SCAN_LIMIT, (loaded, t) => !off && setProgress({ loaded, total: t })).catch(() => ({ items: [] as Entry[], total: 0 }));
             if (off) return;
             const docs = entries
-                .slice(0, SCAN_LIMIT)
                 .map((e) => ({ id: e.id, title: e.title || "Untitled", slug: e.slug ?? "", type: e.contentType?.name ?? "Page", updatedAt: e.updatedAt ? +new Date(e.updatedAt) : 0, text: plainBody(e) }))
                 .filter((d) => d.text.length >= 60);
             const corpus: CorpusPage[] = docs.map((d) => ({ title: d.title, body: d.text }));
+            const dupes = findDuplicatePassages(corpus);
             const out: PageResult[] = docs
                 .map((d, i) => {
                     const grammar = checkGrammar(d.text).issues;
-                    const duplicates = checkOriginality(d.text, corpus.filter((_, j) => j !== i)).notes
+                    const duplicates = dupes[i]
                         .filter((n) => n.severity !== "low")
                         .map((n) => ({ ...n, snippet: originalPhrase(d.text, n.snippet) }));
                     const r = readabilityScore(d.text);
@@ -191,6 +196,7 @@ const ContentQuality = () => {
                 })
                 .filter((p) => p.grammar.length || p.duplicates.length || p.readability !== null);
             setResults(out);
+            setCovered({ scanned: entries.length, total });
             setScanning(false);
         })();
         return () => {
@@ -239,13 +245,20 @@ const ContentQuality = () => {
         return (
             <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
                 <span className="h-8 w-8 animate-spin rounded-full border-[3px] border-lavender-mist border-t-primary" />
-                <p className="text-body-sm text-grey">Scanning your published pages&hellip;</p>
+                <p className="text-body-sm text-grey">
+                    {progress.total ? `Loading ${progress.loaded.toLocaleString()} of ${Math.min(progress.total, SCAN_LIMIT).toLocaleString()} published pages…` : "Scanning your published pages…"}
+                </p>
             </div>
         );
     }
 
     return (
         <div className="flex flex-col gap-5">
+            {covered.total > covered.scanned && (
+                <p className="rounded-xl bg-warning/10 px-3 py-2 text-caption-2 text-warning">
+                    Scanned the {covered.scanned.toLocaleString()} most recently updated of your {covered.total.toLocaleString()} published pages.
+                </p>
+            )}
             {/* Filter pills (kept from before) */}
             <div className="flex flex-wrap gap-2">
                 {FILTERS.map((f) => {

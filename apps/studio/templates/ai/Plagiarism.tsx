@@ -7,7 +7,7 @@ import ScoreRing from "@/components/ui/ScoreRing";
 import CountUp from "@/components/motion/CountUp";
 import ConnectNotice from "@/components/ai/ConnectNotice";
 import { EngineBadge } from "@/templates/ai/Grammar";
-import { api } from "@/lib/api";
+import { fetchEntryBodies } from "@/lib/entries";
 import { checkOriginality, type CorpusPage, type OriginalityNote } from "@/lib/textTools";
 import { aiErrorMessage, extractJson, runAi, useAiProviders } from "@/lib/useAi";
 
@@ -17,7 +17,8 @@ const SYSTEM =
     "Respond with ONLY valid JSON (no prose, no code fences): " +
     `{"originality": number (0-100, higher = more original), "notes": [{"severity": "high"|"medium"|"low", "snippet": string (the flagged excerpt), "why": string (why it reads as unoriginal)}]}.`;
 
-type Entry = { title: string; data: Record<string, unknown> };
+type Entry = { id: string; title: string; data: Record<string, unknown> };
+const CORPUS_LIMIT = 5000;
 type AiReview = { originality: number; notes: OriginalityNote[] };
 const sevColor: Record<string, string> = { high: "#E24B4A", medium: "#F5A623", low: "#6A6A85" };
 
@@ -37,9 +38,15 @@ const Plagiarism = () => {
     const [busy, setBusy] = useState<null | "ai">(null);
     const [error, setError] = useState<string | null>(null);
 
+    // ponytail: the corpus lives in the browser, so it holds the newest CORPUS_LIMIT
+    // pages and the count says what it covers. A server-side index is the upgrade.
+    const [corpusTotal, setCorpusTotal] = useState(0);
     useEffect(() => {
-        api<Entry[]>("/entries")
-            .then((rows) => setCorpus(rows.map((e) => ({ title: e.title, body: String((e.data as { body?: string })?.body ?? "") }))))
+        fetchEntryBodies<Entry>({}, CORPUS_LIMIT)
+            .then(({ items, total }) => {
+                setCorpus(items.map((e) => ({ title: e.title, body: String((e.data as { body?: string })?.body ?? "") })));
+                setCorpusTotal(total);
+            })
             .catch(() => {});
     }, []);
 
@@ -75,7 +82,7 @@ const Plagiarism = () => {
             <Card className="flex flex-col">
                 <div className="flex items-center justify-between mb-1.5">
                     <label className="text-caption-1 text-grey">Paste the content to review</label>
-                    <span className="text-caption-2 text-grey"><CountUp value={corpus.length} />&nbsp;of your pages indexed</span>
+                    <span className="text-caption-2 text-grey"><CountUp value={corpus.length} />{corpusTotal > corpus.length ? ` of ${corpusTotal.toLocaleString()}` : ""}&nbsp;of your pages indexed</span>
                 </div>
                 <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Paste a paragraph or article here…" className="flow-input resize-none mb-4" />
                 <div className="flex flex-wrap items-center gap-3">

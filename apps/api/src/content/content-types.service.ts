@@ -1,14 +1,18 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
 import { isHomeType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
 import { normalizeSchemaFields, toCamelCase, toLowerId, buildEntryKeyRemap } from "./naming";
+import { migrateRepeatable, repeatableFlipped } from "./component-shape";
+import type { SchemaField } from "./entry-validation";
 
 @Injectable()
 export class ContentTypesService {
     constructor(private readonly prisma: PrismaService) {}
+
+    private readonly logger = new Logger(ContentTypesService.name);
 
     /** Machine API IDs, bounded to 40 chars. Components and field keys are camelCase
      *  (e.g. "heroSection"); content types stay lowercase because they double as
@@ -40,6 +44,7 @@ export class ContentTypesService {
             pageType?: string;
             previewUrl?: string;
             routePattern?: string;
+            slugPattern?: string;
             fields?: unknown[];
         };
         // Page type drives routing/kind/JSON-LD. Legacy types (no stored pageType)
@@ -61,6 +66,9 @@ export class ContentTypesService {
             previewUrl: s.previewUrl ?? null,
             // Custom URL template for a "reference" page type (e.g. "/blogs/tags/{slug}").
             routePattern: s.routePattern ?? null,
+            // How entry slugs are built, e.g. "{service.slug}-{city.slug}". When set, the
+            // slug is derived on every save instead of typed.
+            slugPattern: s.slugPattern ?? null,
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at
@@ -229,27 +237,38 @@ export class ContentTypesService {
             }
         }
 
-        // Field keys changed: migrate this type's entries (data + draftData) to the new
-        // keys in the same transaction as the schema save, so neither can land without
-        // the other. Reusable components have no entries of their own, so they skip this.
-        if (keyRemap.changed && existing.kind !== "COMPONENT") {
+        // Field keys changed, or a component field switched between single and
+        // repeatable: migrate this type's entries (data + draftData) in the same
+        // transaction as the schema save, so neither can land without the other.
+        // Reusable components have no entries of their own, so they skip this.
+        const oldF = ((existing.schema as { fields?: SchemaField[] }) ?? {}).fields;
+        const newF = dto.schema !== undefined ? (data.schema as { fields?: SchemaField[] }).fields : undefined;
+        const shapeChanged = !!newF && repeatableFlipped(oldF, newF);
+        if ((keyRemap.changed || shapeChanged) && existing.kind !== "COMPONENT") {
             const entries = await this.prisma.contentEntry.findMany({
                 where: { workspaceId, contentTypeId: id },
                 select: { id: true, data: true, draftData: true },
             });
+            const warnings: string[] = [];
+            const migrate = (d: unknown) => {
+                const r = migrateRepeatable(oldF, newF, keyRemap.remap(d));
+                warnings.push(...r.warnings);
+                return r.data as object;
+            };
             await this.prisma.$transaction([
                 this.prisma.contentType.update({ where: { id }, data }),
                 ...entries.map((e) =>
                     this.prisma.contentEntry.update({
                         where: { id: e.id },
                         data: {
-                            data: keyRemap.remap(e.data) as object,
-                            ...(e.draftData != null ? { draftData: keyRemap.remap(e.draftData) as object } : {}),
+                            data: migrate(e.data),
+                            ...(e.draftData != null ? { draftData: migrate(e.draftData) } : {}),
                         },
                     }),
                 ),
             ]);
-            return this.shape(await this.prisma.contentType.findUniqueOrThrow({ where: { id } }));
+            if (warnings.length) this.logger.warn(`Schema change on ${existing.apiId} trimmed repeatable blocks: ${warnings.slice(0, 5).join(" | ")}${warnings.length > 5 ? ` (+${warnings.length - 5} more)` : ""}`);
+            return { ...this.shape(await this.prisma.contentType.findUniqueOrThrow({ where: { id } })), ...(warnings.length ? { warnings } : {}) };
         }
 
         const t = await this.prisma.contentType.update({ where: { id }, data });

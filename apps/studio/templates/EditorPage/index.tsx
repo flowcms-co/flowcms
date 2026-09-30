@@ -41,7 +41,7 @@ type ApiEntry = {
 };
 
 /** Content type as returned by /content-types (includes the field schema). */
-type ApiType = { id: string; name: string; fields: SchemaField[] };
+type ApiType = { id: string; name: string; fields: SchemaField[]; slugPattern?: string | null };
 /** Reusable component as returned by /content-types/components. */
 type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
 
@@ -272,6 +272,9 @@ const EditorPage = () => {
     // Fields of the active type, and whether it has a rich-text body (so we know
     // to mount the TipTap canvas vs. a fields-only form).
     const fields: SchemaField[] = types.find((t) => t.id === typeId)?.fields ?? [];
+    // A type with a slug pattern builds the slug from the content on every save
+    // ("{service.slug}-{city.slug}"), so the slug is shown, not typed.
+    const slugPattern = (types.find((t) => t.id === typeId)?.slugPattern ?? "").trim();
     // Dynamic-zone (section builder) field, if the type has one. Its sections are an
     // ordered array of { __component, __uid, ...fields } stored in the entry data.
     const zoneField = fields.find((f) => f.type === "DynamicZone");
@@ -319,6 +322,8 @@ const EditorPage = () => {
             const saved = await api<ApiEntry>(`/entries/${entryId}`, { method: "PATCH", body: JSON.stringify(payload) });
             setHasDraft(!!saved.hasDraft);
             setDraftApproved(!!saved.draftApproved);
+            // A patterned type may have rebuilt the slug from the saved content.
+            if (slugPattern && (saved.slug ?? "") !== slug) setSlug(saved.slug ?? "");
             return entryId;
         }
         if (!typeId) {
@@ -333,7 +338,7 @@ const EditorPage = () => {
         loadedIdRef.current = created.id; // we hold this entry; skip the reload on the ?id= navigation
         router.replace(`/content/editor?id=${created.id}`);
         return created.id;
-    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router, slugCheck]);
+    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router, slugCheck, slugPattern]);
 
     /** Pull the approval summary so the primary button can show the right step. */
     const loadReview = useCallback(async () => {
@@ -358,7 +363,7 @@ const EditorPage = () => {
     // conflict + a free suggestion before they try to save.
     useEffect(() => {
         const s = slug.trim();
-        if (!s || !typeId) {
+        if (!s || !typeId || slugPattern) {
             // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when the slug is cleared
             setSlugCheck({ status: "idle" });
             return;
@@ -389,7 +394,7 @@ const EditorPage = () => {
             cancelled = true;
             clearTimeout(t);
         };
-    }, [slug, typeId, locale, entryId, slugEdited, bump]);
+    }, [slug, typeId, locale, entryId, slugEdited, bump, slugPattern]);
 
     /** Step 1 of a fresh page: save it and send it to a reviewer. */
     const submitForApproval = async () => {
@@ -904,11 +909,17 @@ const EditorPage = () => {
                                         setSlugEdited(v.trim() !== "");
                                         bump();
                                     }}
-                                    placeholder="page-url-slug"
+                                    placeholder={slugPattern ? "built when you save" : "page-url-slug"}
                                     aria-label="Slug"
                                     aria-invalid={slugCheck.status === "taken"}
-                                    className={cn("flow-input font-mono", slugCheck.status === "taken" && "!border-error focus:!border-error")}
+                                    readOnly={!!slugPattern}
+                                    className={cn("flow-input font-mono", slugCheck.status === "taken" && "!border-error focus:!border-error", slugPattern && "opacity-70")}
                                 />
+                                {slugPattern && (
+                                    <span className="text-caption-2 text-grey">
+                                        Built from <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{slugPattern}</code> on every save.
+                                    </span>
+                                )}
                                 {slugCheck.status === "checking" && <span className="text-caption-2 text-grey">Checking availability…</span>}
                                 {slugCheck.status === "ok" && <span className="text-caption-2 text-success">This slug is available.</span>}
                                 {slugCheck.status === "taken" && (

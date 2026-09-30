@@ -14,6 +14,8 @@ import { fieldsOf, validateEntryData, type ComponentMap, type SchemaField } from
 import { RelationSyncService, refIds, reverseDelta, applyForwardValue } from "./relation-sync.service";
 import { entryPath } from "./route-path";
 import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
+import { keepStoredShape } from "./component-shape";
+import { placeholdersIn, resolvePlaceholders, slugFromPattern } from "./slug-pattern";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
  *  which carries the page type that `entryPath` uses to build the public path
@@ -396,6 +398,33 @@ export class ContentEntriesService {
         };
     }
 
+    /** The type's slug pattern ("{service.slug}-{city.slug}"), or "" when slugs are typed. */
+    private slugPatternOf(schema: unknown): string {
+        const p = (schema as { slugPattern?: unknown } | null)?.slugPattern;
+        return typeof p === "string" ? p.trim() : "";
+    }
+
+    /** Values for every placeholder the type's slug, URL and preview patterns use,
+     *  from this entry's data (own fields, and the slug/title of referenced entries). */
+    private async patternValues(workspaceId: string, schema: unknown, data: Record<string, unknown>): Promise<Record<string, string>> {
+        const s = (schema ?? {}) as { slugPattern?: string; routePattern?: string; previewUrl?: string };
+        const keys = placeholdersIn([s.slugPattern, s.routePattern, s.previewUrl].filter((x): x is string => typeof x === "string").join(" "));
+        if (!keys.length) return {};
+        return resolvePlaceholders(fieldsOf(schema), data, keys, async (id) => {
+            const r = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, select: { slug: true, title: true } });
+            return r ? { slug: r.slug, title: r.title ?? "Untitled" } : null;
+        });
+    }
+
+    /** The slug a patterned type gives this entry, made unique within the type and
+     *  locale; null when the type has no pattern or a placeholder is still empty. */
+    private async derivedSlug(workspaceId: string, contentTypeId: string, schema: unknown, data: Record<string, unknown>, locale: string, excludeId?: string): Promise<string | null> {
+        const pattern = this.slugPatternOf(schema);
+        if (!pattern) return null;
+        const wanted = slugFromPattern(pattern, await this.patternValues(workspaceId, schema, data));
+        return wanted ? this.uniqueSlug(workspaceId, contentTypeId, wanted, locale, excludeId) : null;
+    }
+
     private async authorMode(workspaceId: string): Promise<string> {
         const w = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { authorMode: true } });
         return w?.authorMode ?? "creator";
@@ -504,13 +533,14 @@ export class ContentEntriesService {
         // delivery API still reads `data`, so the last-published copy stays live. Either
         // way, fill reverse-relation fields with their current linked ids so the editor
         // can show + round-trip them (they're not stored in the data blob).
-        if (e.draftData != null) {
-            const draft = (e.draftData ?? {}) as { title?: string };
-            const data = await this.withReverseIds(workspaceId, e.id, e.contentType.schema, (e.draftData ?? {}) as Record<string, unknown>);
-            return { ...this.shape(e), data, title: draft.title ?? "Untitled" };
-        }
-        const data = await this.withReverseIds(workspaceId, e.id, e.contentType.schema, (e.data ?? {}) as Record<string, unknown>);
-        return { ...this.shape(e), data };
+        const raw = ((e.draftData ?? e.data) ?? {}) as Record<string, unknown>;
+        const data = await this.withReverseIds(workspaceId, e.id, e.contentType.schema, raw);
+        // {field} / {ref.slug} values for the type's URL and preview patterns, and the
+        // entry's path with them filled in, so the preview can open the right page.
+        const placeholders = await this.patternValues(workspaceId, e.contentType.schema, raw);
+        const path = entryPath(e.contentType, e.slug, { locale: e.locale, values: placeholders });
+        const draft = e.draftData != null ? ((e.draftData ?? {}) as { title?: string }) : null;
+        return { ...this.shape(e), path, placeholders, slugPattern: this.slugPatternOf(e.contentType.schema) || null, data, ...(draft ? { title: draft.title ?? "Untitled" } : {}) };
     }
 
     /** Is `slug` already taken by another entry of the same type + locale? A page's
@@ -586,7 +616,9 @@ export class ContentEntriesService {
         if (!type) throw new BadRequestException("Unknown content type.");
         const locale = dto.locale || "en";
         // One slug per page: reject a slug already taken within this type + locale.
-        await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
+        // A patterned type ignores a typed slug: its slug is derived below.
+        const patterned = !!this.slugPatternOf(type.schema);
+        if (!patterned) await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
         // Reverse-relation fields are derived, not stored: keep the submitted values
         // to propagate onto the owning entries after save, but strip them from the blob.
         const submittedReverse = { ...(dto.data ?? {}) };
@@ -603,12 +635,13 @@ export class ContentEntriesService {
         // Plugin hooks may augment the data (reading time, word count, excerpt…).
         data = await this.plugins.runBeforeSave(workspaceId, { data, title: String(data.title ?? ""), status: "DRAFT" });
         this.syncMetaTitle(data);
+        const slug = patterned ? await this.derivedSlug(workspaceId, type.id, type.schema, data, locale) : (dto.slug ?? null);
         const e = await this.prisma.contentEntry.create({
             data: {
                 workspaceId,
                 contentTypeId: type.id,
                 data: data as Prisma.InputJsonValue,
-                slug: dto.slug ?? null,
+                slug,
                 locale,
                 status: "DRAFT",
                 authorId: userId ?? null,
@@ -631,6 +664,9 @@ export class ContentEntriesService {
         if (!existing) throw new NotFoundException("Entry not found.");
 
         // One slug per page: a changed slug must be free within this type + locale.
+        // A patterned type ignores a typed slug: its slug is derived from the content.
+        const patterned = !!this.slugPatternOf(existing.contentType.schema);
+        if (patterned) delete dto.slug;
         if (dto.slug !== undefined) {
             await this.assertSlugFree(workspaceId, existing.contentTypeId, dto.slug, existing.locale, id);
         }
@@ -651,6 +687,10 @@ export class ContentEntriesService {
         // propagate onto the owning entries after save, but strip them from the blob.
         const submittedReverse = { ...(dto.data ?? {}) };
         incoming = this.stripReverse(existing.contentType.schema, incoming);
+        // A component field stored in the other shape than its schema (a list under a
+        // single field) shows as one empty block in the editor; saving that must not
+        // wipe the stored blocks. Only an empty, wrong-shaped value is put back.
+        incoming = keepStoredShape(fieldsOf(existing.contentType.schema), existing.status === "PUBLISHED" ? (existing.draftData ?? existing.data) : existing.data, incoming);
         if (this.rbac && role) {
             const allowed = await this.rbac.allowedTypeIds(role);
             if (allowed && !allowed.includes(existing.contentTypeId)) throw new ForbiddenException("Your role can't edit content of this type.");
@@ -680,6 +720,10 @@ export class ContentEntriesService {
             if (actorId && this.changed(base, draft)) patch.lastEditorId = actorId;
             // Slug is a structural column (the live URL); apply it directly.
             if (dto.slug !== undefined) patch.slug = dto.slug;
+            if (patterned) {
+                const derived = await this.derivedSlug(workspaceId, existing.contentTypeId, existing.contentType.schema, draft, existing.locale, id);
+                if (derived && derived !== existing.slug) patch.slug = derived;
+            }
             const updated = await this.prisma.contentEntry.update({
                 where: { id },
                 data: patch,
@@ -726,6 +770,10 @@ export class ContentEntriesService {
             merged = await this.plugins.runBeforeSave(workspaceId, { data: merged, title: String(merged.title ?? ""), status: targetStatus });
             this.syncMetaTitle(merged, (existing.data ?? {}) as Record<string, unknown>);
             data.data = merged as Prisma.InputJsonValue;
+            if (patterned) {
+                const derived = await this.derivedSlug(workspaceId, existing.contentTypeId, existing.contentType.schema, merged, existing.locale, id);
+                if (derived && derived !== existing.slug) data.slug = derived;
+            }
             if (actorId && this.changed(existing.data, merged)) data.lastEditorId = actorId;
         }
 
@@ -809,7 +857,9 @@ export class ContentEntriesService {
         // Approve → Publish gate on the SERVER (not just the studio UI) so the direct
         // API, the agent API and bulk publish can't push unapproved changes live.
         if (existing.draftData != null) {
-            if (!existing.draftApproved) throw new BadRequestException("Approve the draft changes before publishing them.");
+            // Someone allowed to publish approves by publishing, the same as pressing
+            // Approve then Publish. Anyone else was already stopped above.
+            if (!existing.draftApproved && !grantsPublish(actorPermissions)) throw new BadRequestException("Approve the draft changes before publishing them.");
             const promoted = (existing.draftData ?? {}) as Record<string, unknown>;
             validateEntryData(fieldsOf(existing.contentType.schema), promoted, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId) });
             const e = await this.prisma.contentEntry.update({

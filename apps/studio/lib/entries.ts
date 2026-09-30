@@ -55,6 +55,31 @@ export function fetchEntryIds(query: EntryPageQuery = {}): Promise<string[]> {
     return api<{ ids: string[] }>(`/entries/page/ids?${qs.toString()}`).then((r) => r.ids);
 }
 
+/**
+ * Entries WITH their bodies, newest first, for screens that read page text
+ * (quality scans, the originality corpus). Bodies are heavy, so the set is capped
+ * at `max`; `total` says how many matched so the screen can say what it covered.
+ * `onProgress` fires after each batch of up to 500.
+ */
+export async function fetchEntryBodies<T extends { id: string }>(
+    query: { status?: string; typeId?: string },
+    max: number,
+    onProgress?: (loaded: number, total: number) => void,
+): Promise<{ items: T[]; total: number }> {
+    const { total } = await fetchEntryPage<T>({ ...query, pageSize: 1 });
+    const items: T[] = [];
+    const want = Math.min(max, total);
+    while (items.length < want) {
+        const qs = new URLSearchParams({ limit: String(Math.min(PAGE, want - items.length)), offset: String(items.length) });
+        for (const [k, v] of Object.entries(query)) if (v) qs.set(k, v);
+        const rows = await api<T[]>(`/entries?${qs.toString()}`);
+        if (!rows.length) break;
+        items.push(...rows);
+        onProgress?.(items.length, total);
+    }
+    return { items, total };
+}
+
 const PAGE = 500; // the API's largest page
 const MAX_PAGES = 40; // 20,000 rows: a runaway guard for screens that want a whole set
 

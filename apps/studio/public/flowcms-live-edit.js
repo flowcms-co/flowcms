@@ -29,13 +29,10 @@
     if (window.__flowcmsLiveEdit) return;
     window.__flowcmsLiveEdit = true;
 
-    // Only talk to the embedding parent (the studio). "*" until we learn the origin.
+    // Only talk to the embedding parent (the studio). "*" until the studio's first
+    // message tells us its origin. (The referrer is no good for this: after the
+    // site reloads itself inside the frame, the referrer is the site.)
     var parentOrigin = "*";
-    try {
-        if (document.referrer) parentOrigin = new URL(document.referrer).origin;
-    } catch (e) {
-        /* keep * */
-    }
 
     // ── Target model ──────────────────────────────────────────────────────────
     // A target is one editable binding: { key, el, mode }.
@@ -796,6 +793,9 @@
         if (parentOrigin !== "*" && e.origin !== parentOrigin) return;
         var d = e.data;
         if (!d || d.source !== "flowcms-studio") return;
+        // Learn the studio's origin from its first message (it must come from our
+        // parent frame) and answer only that origin from here on.
+        if (parentOrigin === "*" && e.source === window.parent && e.origin && e.origin !== "null") parentOrigin = e.origin;
         if (d.type === "hello") {
             post({ type: "ready", editable: true });
             return;
