@@ -36,4 +36,10 @@ export class UpdateContentTypeDto {
     @IsOptional()
     @IsBoolean()
     draftAndPublish?: boolean;
+
+    /** A schema change that trims blocks from entries (a repeatable component field
+     *  made single) is refused with 409 until the caller sends this as true. */
+    @IsOptional()
+    @IsBoolean()
+    acknowledgeDataLoss?: boolean;
 }

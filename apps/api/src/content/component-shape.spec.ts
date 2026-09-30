@@ -34,13 +34,14 @@ describe("migrateRepeatable", () => {
     const repeat: SchemaField = { ...single, repeatable: true };
     it("wraps a block into a list when the field becomes repeatable", () => {
         const r = migrateRepeatable([single], [repeat], { contentSections: { heading: "One" } });
-        expect(r).toEqual({ data: { contentSections: [{ heading: "One" }] }, changed: true, warnings: [] });
+        expect(r).toEqual({ data: { contentSections: [{ heading: "One" }] }, changed: true, warnings: [], losses: [] });
         expect(migrateRepeatable([single], [repeat], { contentSections: {} }).data).toEqual({ contentSections: [] });
     });
     it("takes the first block, with a warning, when the field becomes single", () => {
         const r = migrateRepeatable([repeat], [single], { contentSections: [{ heading: "One" }, { heading: "Two" }] });
         expect(r.data).toEqual({ contentSections: { heading: "One" } });
         expect(r.warnings[0]).toMatch(/first of 2/);
+        expect(r.losses).toEqual([{ field: "contentSections", blocks: 2 }]);
     });
     it("leaves data alone when the flag did not change or the shape already fits", () => {
         const d = { contentSections: [{ heading: "One" }] };

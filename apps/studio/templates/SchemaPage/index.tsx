@@ -25,7 +25,7 @@ import {
     type PageType,
     type SchemaField,
 } from "@/mocks/schema";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
 // A content type's icon color. The default purple follows the workspace brand
@@ -189,7 +189,7 @@ const SchemaPage = () => {
         setDirty(false);
     };
 
-    const saveActive = async () => {
+    const saveActive = async (acknowledgeDataLoss = false) => {
         if (!active) return;
         setSaving(true);
         try {
@@ -206,6 +206,7 @@ const SchemaPage = () => {
                     // Only send apiId while the type is empty; the backend rejects a
                     // change once entries exist (or a component is referenced).
                     ...((active.entryCount ?? 0) === 0 && apiId ? { apiId } : {}),
+                    ...(acknowledgeDataLoss ? { acknowledgeDataLoss } : {}),
                     schema: {
                         icon: active.icon,
                         color: active.color,
@@ -232,6 +233,22 @@ const SchemaPage = () => {
             );
             setDirty(false);
         } catch (e) {
+            // A component field going from repeatable to single would drop blocks on
+            // some entries: the API refuses until the user has seen which and agreed.
+            const loss = e instanceof ApiError && e.status === 409 ? (e.data as { code?: string; affected?: { title: string; field: string; blocks: number }[] }) : null;
+            if (loss?.code === "DATA_LOSS" && loss.affected?.length) {
+                const rows = loss.affected.slice(0, 8).map((a) => `${a.title}: ${a.blocks} blocks in ${a.field}, ${a.blocks - 1} would be dropped`);
+                const more = loss.affected.length > 8 ? `…and ${loss.affected.length - 8} more.` : "";
+                setSaving(false);
+                const ok = await confirm({
+                    title: `Keep only the first block on ${loss.affected.length} entr${loss.affected.length === 1 ? "y" : "ies"}?`,
+                    message: `${rows.join("\n")}${more ? `\n${more}` : ""}\n\nThe dropped blocks stay in each entry's version history.`,
+                    confirmLabel: "Keep only the first block",
+                    tone: "danger",
+                });
+                if (ok) await saveActive(true);
+                return;
+            }
             void notice({ title: "Could not save", message: e instanceof Error ? e.message : "Please try again.", tone: "danger" });
         } finally {
             setSaving(false);
@@ -380,7 +397,7 @@ const SchemaPage = () => {
                                         <Icon className="w-5 h-5 fill-current" name="trash" />
                                     </button>
                                     <SaveStatus state={saving ? "saving" : dirty ? "dirty" : "saved"} className="mr-1 hidden sm:inline-flex" />
-                                    <button type="button" onClick={saveActive} disabled={saving || !dirty} className="btn-primary min-w-[8.5rem] disabled:opacity-50">
+                                    <button type="button" onClick={() => void saveActive()} disabled={saving || !dirty} className="btn-primary min-w-[8.5rem] disabled:opacity-50">
                                         Save changes
                                     </button>
                                 </div>

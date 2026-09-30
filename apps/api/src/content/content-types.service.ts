@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
@@ -247,8 +247,27 @@ export class ContentTypesService {
         if ((keyRemap.changed || shapeChanged) && existing.kind !== "COMPONENT") {
             const entries = await this.prisma.contentEntry.findMany({
                 where: { workspaceId, contentTypeId: id },
-                select: { id: true, data: true, draftData: true },
+                select: { id: true, title: true, data: true, draftData: true },
             });
+            // Blocks would be dropped: refuse until the caller has seen which entries
+            // lose what and said so (the studio asks; the dropped blocks stay in each
+            // entry's version history).
+            if (shapeChanged && !dto.acknowledgeDataLoss) {
+                const affected = entries.flatMap((e) =>
+                    [e.data, e.draftData]
+                        .filter((d) => d != null)
+                        .flatMap((d) => migrateRepeatable(oldF, newF, d).losses)
+                        .filter((l, i, all) => all.findIndex((x) => x.field === l.field) === i)
+                        .map((l) => ({ id: e.id, title: e.title || "Untitled", field: l.field, blocks: l.blocks })),
+                );
+                if (affected.length) {
+                    throw new ConflictException({
+                        code: "DATA_LOSS",
+                        message: `${affected.length} entr${affected.length === 1 ? "y has" : "ies have"} more than one block in a field that is becoming single. Only the first block would be kept.`,
+                        affected,
+                    });
+                }
+            }
             const warnings: string[] = [];
             const migrate = (d: unknown) => {
                 const r = migrateRepeatable(oldF, newF, keyRemap.remap(d));

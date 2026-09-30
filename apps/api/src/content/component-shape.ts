@@ -57,9 +57,10 @@ export function migrateRepeatable(
     oldFields: SchemaField[] | undefined,
     newFields: SchemaField[] | undefined,
     data: unknown,
-): { data: unknown; changed: boolean; warnings: string[] } {
+): { data: unknown; changed: boolean; warnings: string[]; losses: { field: string; blocks: number }[] } {
     const warnings: string[] = [];
-    if (!isObject(data) || !oldFields?.length || !newFields?.length) return { data, changed: false, warnings };
+    const losses: { field: string; blocks: number }[] = [];
+    if (!isObject(data) || !oldFields?.length || !newFields?.length) return { data, changed: false, warnings, losses };
     const byId = new Map(oldFields.filter((f) => f.id).map((f) => [f.id, f]));
     const byName = new Map(oldFields.map((f) => [f.name, f]));
     let changed = false;
@@ -74,9 +75,12 @@ export function migrateRepeatable(
             changed = true;
         } else if (!f.repeatable && Array.isArray(v)) {
             out[f.name] = v[0] ?? {};
-            if (v.length > 1) warnings.push(`${f.name}: kept the first of ${v.length} blocks; the rest are gone from the entry (still in its version history).`);
+            if (v.length > 1) {
+                warnings.push(`${f.name}: kept the first of ${v.length} blocks; the rest are gone from the entry (still in its version history).`);
+                losses.push({ field: f.name, blocks: v.length });
+            }
             changed = true;
         }
     }
-    return { data: changed ? out : data, changed, warnings };
+    return { data: changed ? out : data, changed, warnings, losses };
 }
