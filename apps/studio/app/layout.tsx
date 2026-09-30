@@ -1,20 +1,26 @@
 import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
-import { Inter, Poppins } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "./providers";
 import { LICENSE_COOKIE, parseLicenseCookie } from "@/lib/brand";
 
-const inter = Inter({
-    weight: ["400", "500", "600", "700"],
-    subsets: ["latin"],
+// Both fonts ship with the repo (app/fonts, latin subsets) so a build never has to
+// reach Google Fonts: an unreachable fonts.googleapis.com used to fail the image build.
+const inter = localFont({
+    src: [{ path: "./fonts/inter-latin-400-700.woff2", weight: "400 700", style: "normal" }],
     display: "swap",
     variable: "--ff-inter",
 });
 
-const poppins = Poppins({
-    weight: ["400", "500", "600", "700", "800"],
-    subsets: ["latin"],
+const poppins = localFont({
+    src: [
+        { path: "./fonts/poppins-latin-400.woff2", weight: "400", style: "normal" },
+        { path: "./fonts/poppins-latin-500.woff2", weight: "500", style: "normal" },
+        { path: "./fonts/poppins-latin-600.woff2", weight: "600", style: "normal" },
+        { path: "./fonts/poppins-latin-700.woff2", weight: "700", style: "normal" },
+        { path: "./fonts/poppins-latin-800.woff2", weight: "800", style: "normal" },
+    ],
     display: "swap",
     variable: "--ff-poppins",
 });
