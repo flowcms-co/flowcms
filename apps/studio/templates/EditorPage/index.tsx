@@ -280,7 +280,15 @@ const EditorPage = () => {
     const zoneField = fields.find((f) => f.type === "DynamicZone");
     const formFields = zoneField ? fields.filter((f) => f.id !== zoneField.id) : fields;
     const sections: Section[] = zoneField && Array.isArray(entryData[zoneField.name]) ? (entryData[zoneField.name] as Section[]) : [];
-    const hasBody = !zoneField && (fields.length === 0 || fields.some((f) => f.type === "Rich text"));
+    // The Body editor edits the entry's `body` key, so it appears only when that key
+    // is part of the model: a type with no fields of its own (free-form page), a type
+    // with a top-level Rich text field named "body", or an entry that already holds
+    // body text from before this rule (so older content stays editable). A typed
+    // model with other rich text fields edits them inline in the form instead, and
+    // no stray `body` is written into its data on save.
+    const hasBodyField = fields.some((f) => f.type === "Rich text" && f.name.trim().toLowerCase() === "body");
+    const legacyBody = typeof entryData.body === "string" && entryData.body.trim() !== "" && entryData.body !== "<p></p>";
+    const hasBody = !zoneField && (fields.length === 0 || hasBodyField || legacyBody);
     // Resolved component defs (apiId → {name, icon, fields}) for the section builder.
     const componentDefs = useMemo(() => {
         const map: Record<string, ComponentDef> = {};

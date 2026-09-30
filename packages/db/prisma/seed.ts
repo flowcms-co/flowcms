@@ -55,7 +55,7 @@ const TYPES = [
             fields: [
                 { id: "f1", name: "Title", type: "Text", required: true },
                 { id: "f2", name: "Slug", type: "Slug", required: true },
-                { id: "f3", name: "Sections", type: "Rich text", required: true },
+                { id: "f3", name: "Body", type: "Rich text", required: true },
             ],
         },
     },

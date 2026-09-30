@@ -33,13 +33,13 @@ const TEXT = (id: string, name: string, required = false) => ({ id, name, type: 
 const STARTERS: Record<string, StarterType[]> = {
     blog: [
         { apiId: "article", name: "Blog Post", icon: "document", jsonLd: "BlogPosting", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, { id: "f3", name: "Body", type: "Rich text", required: true }, { id: "f4", name: "Cover image", type: "Media" }] },
-        { apiId: "page", name: "Page", icon: "overview", jsonLd: "WebPage", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, { id: "f3", name: "Sections", type: "Rich text" }] },
+        { apiId: "page", name: "Page", icon: "overview", jsonLd: "WebPage", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, { id: "f3", name: "Body", type: "Rich text" }] },
     ],
     docs: [
         { apiId: "doc", name: "Doc", icon: "document", jsonLd: "Article", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, TEXT("f3", "Category"), { id: "f4", name: "Body", type: "Rich text", required: true }] },
     ],
     marketing: [
-        { apiId: "landing", name: "Landing Page", icon: "overview", jsonLd: "WebPage", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, TEXT("f3", "Headline"), { id: "f4", name: "Sections", type: "Rich text" }] },
+        { apiId: "landing", name: "Landing Page", icon: "overview", jsonLd: "WebPage", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, TEXT("f3", "Headline"), { id: "f4", name: "Body", type: "Rich text" }] },
         { apiId: "page", name: "Page", icon: "overview", jsonLd: "WebPage", fields: [TEXT("f1", "Title", true), { id: "f2", name: "Slug", type: "Slug" }, { id: "f3", name: "Body", type: "Rich text" }] },
     ],
     blank: [],

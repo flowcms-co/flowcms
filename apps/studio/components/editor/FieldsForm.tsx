@@ -4,7 +4,7 @@
  * Schema-driven field editor for the content editor. Renders one input per field
  * of the entry's content type — including nested and repeatable **components** —
  * so structured content (a service page, a landing page) is editable instead of
- * hiding in an invisible data blob. The rich-text "body" field is handled by the
+ * hiding in an invisible data blob. The rich-text field named "body" is handled by the
  * TipTap canvas, the "Slug" field by the editor's dedicated slug input, and the
  * "title" field by the editor's title input; those three are skipped here.
  */
@@ -664,9 +664,10 @@ const FieldsForm = ({
      *  reference a library component render that component's fields. Defaults to none. */
     components?: Record<string, SchemaField[]>;
 }) => {
-    const shown = fields.filter(
-        (f) => f.type !== "Rich text" && f.type !== "Slug" && f.name.trim().toLowerCase() !== "title",
-    );
+    // Skipped: the Slug (its own input), the Title (the heading input) and a Rich text
+    // field named "body" (the Body editor). Other rich text fields are edited here.
+    const key = (f: SchemaField) => f.name.trim().toLowerCase();
+    const shown = fields.filter((f) => f.type !== "Slug" && key(f) !== "title" && !(f.type === "Rich text" && key(f) === "body"));
     if (!shown.length) return null;
     return (
         <ComponentDefsContext.Provider value={components}>
