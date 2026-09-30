@@ -16,7 +16,7 @@ import BulkActionBar, { type BulkAction } from "@/templates/ContentPage/BulkActi
 import VersionsModal from "@/templates/ContentPage/VersionsModal";
 import ScheduleModal from "@/components/editor/ScheduleModal";
 import { api, ApiError } from "@/lib/api";
-import { fetchEntryPage } from "@/lib/entries";
+import { fetchEntryIds, fetchEntryPage, type EntryPageQuery } from "@/lib/entries";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useJobs } from "@/components/providers/JobsProvider";
 import { formatDate } from "@/lib/format";
@@ -208,18 +208,27 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
         return () => clearTimeout(t);
     }, [filters.query]);
 
+    // What the list is showing, without paging or order: shared by the page request
+    // and by "select all", so both always mean the same set of entries.
+    const matching = useMemo<EntryPageQuery>(
+        () => ({
+            q: query.trim(),
+            // A type-locked list (a Reference sub-tab) shows that type only; the
+            // All Content view shows everything except reference types.
+            typeId: lockedTypeId ?? (filters.type !== "all" ? filters.type : undefined),
+            scope: lockedTypeId ? undefined : "content",
+            status: STATUS_QUERY[filters.status],
+            author: mineOnly ? "me" : filters.author !== "all" ? filters.author : undefined,
+            locale: localeFilter !== "all" ? localeFilter : undefined,
+        }),
+        [query, filters.type, filters.status, filters.author, localeFilter, mineOnly, lockedTypeId],
+    );
+
     const load = useCallback(async () => {
         const seq = ++loadSeq.current;
         try {
             const res = await fetchEntryPage<ApiEntry>({
-                q: query.trim(),
-                // A type-locked list (a Reference sub-tab) shows that type only; the
-                // All Content view shows everything except reference types.
-                typeId: lockedTypeId ?? (filters.type !== "all" ? filters.type : undefined),
-                scope: lockedTypeId ? undefined : "content",
-                status: STATUS_QUERY[filters.status],
-                author: mineOnly ? "me" : filters.author !== "all" ? filters.author : undefined,
-                locale: localeFilter !== "all" ? localeFilter : undefined,
+                ...matching,
                 sort: sort.key,
                 dir: sort.dir,
                 page,
@@ -239,7 +248,7 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
         } finally {
             if (seq === loadSeq.current) setLoading(false);
         }
-    }, [query, filters.type, filters.status, filters.author, localeFilter, sort, page, mineOnly, lockedTypeId]);
+    }, [matching, sort, page]);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on change; state is set after the request resolves
@@ -280,22 +289,10 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const bulkAction = async (action: BulkAction) => {
         const ids = [...selected];
         if (!ids.length) return;
-        // Scheduling needs a date/time, so it opens the calendar picker instead of
-        // running a background job. The rest are fire-and-forget bulk jobs.
+        // Every bulk action runs as a background job, so the app stays usable however
+        // many items are selected. Scheduling asks for a date/time first.
         if (action === "schedule") {
             setScheduleIds(ids);
-            return;
-        }
-        // Duplicate has no bulk job endpoint; fan out the per-item duplicate.
-        if (action === "duplicate") {
-            setBulkBusy(true);
-            try {
-                await Promise.allSettled(ids.map((id) => api(`/entries/${id}/duplicate`, { method: "POST" })));
-                setSelected(new Set());
-                await load();
-            } finally {
-                setBulkBusy(false);
-            }
             return;
         }
         if (action === "delete" && !(await confirm({ title: `Delete ${ids.length} item${ids.length === 1 ? "" : "s"}?`, message: "This can't be undone.", confirmLabel: "Delete", tone: "danger" }))) return;
@@ -315,6 +312,14 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
         if (!ids.length) return;
         setBulkBusy(true);
         try {
+            // More than one item: a background job, like every other bulk action. A
+            // single row is scheduled directly, so a problem shows up straight away.
+            if (ids.length > 1) {
+                await enqueue("/entries/bulk/schedule", { ids, scheduledAt: iso });
+                setSelected(new Set());
+                setTimeout(() => void load(), 1500);
+                return;
+            }
             const results = await Promise.allSettled(
                 ids.map((id) => api(`/entries/${id}`, { method: "PATCH", body: JSON.stringify({ status: "SCHEDULED", scheduledAt: iso }) })),
             );
@@ -350,9 +355,24 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const current = Math.min(page, totalPages);
     const pagedRows = rows;
 
-    const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
-    const someSelected = rows.some((r) => selected.has(r.id));
-    const toggleAll = (checked: boolean) => setSelected(checked ? new Set(rows.map((r) => r.id)) : new Set());
+    // "Select all" means every entry the list is showing, on every page. The page's
+    // own rows can be picked separately with "Select this page".
+    const pageSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+    const allSelected = pageSelected && selected.size >= total;
+    const someSelected = selected.size > 0;
+    const [selecting, setSelecting] = useState(false);
+    const selectAllMatching = async () => {
+        setSelecting(true);
+        try {
+            setSelected(new Set(await fetchEntryIds(matching)));
+        } catch {
+            void notice({ title: "Could not select everything", message: "Please try again.", tone: "danger" });
+        } finally {
+            setSelecting(false);
+        }
+    };
+    const selectPage = () => setSelected((prev) => new Set([...prev, ...rows.map((r) => r.id)]));
+    const toggleAll = (checked: boolean) => (checked ? void selectAllMatching() : setSelected(new Set()));
     const toggleOne = (id: string, checked: boolean) =>
         setSelected((prev) => {
             const next = new Set(prev);
@@ -424,11 +444,33 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
                 hideTypeFilter={!!lockedTypeId}
             />
 
+            {/* Selection: everything that matches, or just the rows on screen */}
+            {!loading && total > 0 && (
+                <div className="-mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-caption-1">
+                    <span className="text-grey">
+                        {selected.size > 0 ? `${selected.size.toLocaleString()} of ${total.toLocaleString()} selected` : "Select"}
+                    </span>
+                    <button type="button" onClick={() => void selectAllMatching()} disabled={selecting || allSelected} className="font-semibold text-primary transition-opacity hover:opacity-70 disabled:opacity-40 dark:text-lilac">
+                        {selecting ? "Selecting…" : `All ${total.toLocaleString()}`}
+                    </button>
+                    {total > rows.length && (
+                        <button type="button" onClick={selectPage} disabled={pageSelected} className="font-semibold text-primary transition-opacity hover:opacity-70 disabled:opacity-40 dark:text-lilac">
+                            This page ({rows.length})
+                        </button>
+                    )}
+                    {selected.size > 0 && (
+                        <button type="button" onClick={() => setSelected(new Set())} className="font-semibold text-grey transition-colors hover:text-black dark:hover:text-white">
+                            Clear
+                        </button>
+                    )}
+                </div>
+            )}
+
             {/* Table */}
             <Card className="!p-0 overflow-hidden">
                 {/* Header */}
                 <div className="hidden md:grid grid-cols-[auto_2.2fr_1fr_1.1fr_0.7fr_1fr_2rem] items-center gap-4 px-5 py-3 border-b border-grey-light text-caption-2 text-grey dark:border-grey-light/10">
-                    <Checkbox checked={allSelected} indeterminate={!allSelected && someSelected} onChange={toggleAll} aria-label="Select all" />
+                    <Checkbox checked={allSelected} indeterminate={!allSelected && someSelected} onChange={toggleAll} aria-label={`Select all ${total.toLocaleString()}`} />
                     <SortHeader label="Title" active={sort.key === "title"} dir={sort.dir} onClick={() => setSortKey("title")} />
                     <span>Status</span>
                     <span>Author</span>

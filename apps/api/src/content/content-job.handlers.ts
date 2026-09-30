@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit } from "@nestjs/common";
+import { PERMISSIONS } from "@flowcms/shared";
 import { JobsService, type JobRow, type JobHelpers } from "../jobs/jobs.service";
 import { ContentEntriesService } from "./content-entries.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -26,6 +27,14 @@ export class ContentJobHandlers implements OnModuleInit {
         this.jobs.register("content.bulkPublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.publish(ws, id, uid), "Published"));
         this.jobs.register("content.bulkUnpublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.unpublish(ws, id, uid), "Unpublished"));
         this.jobs.register("content.bulkDraft", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.unpublish(ws, id, uid), "Moved to draft"));
+        this.jobs.register("content.bulkDuplicate", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.duplicate(ws, uid, id), "Duplicated"));
+        // Only someone allowed to publish can queue this job (see the controller), so
+        // each entry is scheduled with that right; the usual rules still apply per
+        // entry (required fields, approvals), and failures are listed in the result.
+        this.jobs.register("content.bulkSchedule", (j, h) => {
+            const scheduledAt = (j.payload as { scheduledAt?: string })?.scheduledAt;
+            return this.run(j, h, (ws, id, uid) => this.entries.update(ws, id, { status: "SCHEDULED", scheduledAt }, uid, undefined, [PERMISSIONS.CONTENT_PUBLISH]), "Scheduled");
+        });
         this.jobs.register("content.bulkDelete", (j, h) => this.run(j, h, (ws, id) => this.entries.remove(ws, id), "Deleted"));
         this.jobs.register("content.fillAltFromAssets", (j, h) => this.fillAltFromAssets(j, h));
     }

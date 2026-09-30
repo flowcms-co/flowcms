@@ -27,6 +27,7 @@ export type EntryPageQuery = {
 };
 
 const MAX_PAGE_SIZE = 500;
+const MAX_IDS = 100_000; // the most entries one "select all" can return
 const clamp = (n: number | undefined, min: number, max: number, def: number) =>
     n == null || !Number.isFinite(n) ? def : Math.min(Math.max(min, Math.floor(n)), max);
 
@@ -60,7 +61,9 @@ export class ContentListService {
         @Optional() @Inject(RBAC_PORT) private readonly rbac?: RbacPort,
     ) {}
 
-    async page(workspaceId: string, query: EntryPageQuery, role?: RoleRules) {
+    /** The SQL conditions for a query: `view` is what the list shows before the user
+     *  narrows it down, `where` adds the user's filters on top. */
+    private async conditions(workspaceId: string, query: EntryPageQuery, role?: RoleRules) {
         const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { authorMode: true } });
         // Mirrors effectiveAuthorId (./author.ts): a hand-picked author wins, else the workspace setting decides.
         const author =
@@ -90,11 +93,24 @@ export class ContentListService {
             where.push(Prisma.sql`(e."title" ILIKE ${like} OR e."slug" ILIKE ${like})`);
         }
 
+        const FROM = Prisma.sql`FROM "ContentEntry" e JOIN "ContentType" ct ON ct."id" = e."contentTypeId"`;
+        return { view, where, author, FROM };
+    }
+
+    /** The id of every entry matching the query, for "select all" across pages. */
+    async ids(workspaceId: string, query: EntryPageQuery, role?: RoleRules) {
+        const { where, FROM } = await this.conditions(workspaceId, query, role);
+        const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+            SELECT e."id" ${FROM} WHERE ${Prisma.join(where, " AND ")} ORDER BY e."updatedAt" DESC, e."id" DESC LIMIT ${MAX_IDS}`;
+        return { ids: rows.map((r) => r.id) };
+    }
+
+    async page(workspaceId: string, query: EntryPageQuery, role?: RoleRules) {
+        const { view, where, author, FROM } = await this.conditions(workspaceId, query, role);
         const pageSize = clamp(query.pageSize, 1, MAX_PAGE_SIZE, 25);
         const page = clamp(query.page, 1, Number.MAX_SAFE_INTEGER, 1);
         const dir = query.dir === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
         const order = SORTS[query.sort ?? "updated"] ?? SORTS.updated;
-        const FROM = Prisma.sql`FROM "ContentEntry" e JOIN "ContentType" ct ON ct."id" = e."contentTypeId"`;
         const AND = (conds: Prisma.Sql[]) => Prisma.join(conds, " AND ");
 
         const [rows, [{ total }]] = await Promise.all([

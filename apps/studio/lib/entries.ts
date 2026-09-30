@@ -44,6 +44,17 @@ export function fetchEntryPage<T>(query: EntryPageQuery = {}): Promise<EntryPage
     return api<EntryPage<T>>(`/entries/page?${qs.toString()}`);
 }
 
+/** The id of every entry matching `query` (paging and sorting are ignored), for
+ *  "select all" across pages. */
+export function fetchEntryIds(query: EntryPageQuery = {}): Promise<string[]> {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+        if (v === undefined || v === "" || typeof v === "boolean" || k === "page" || k === "pageSize") continue;
+        qs.set(k, String(v));
+    }
+    return api<{ ids: string[] }>(`/entries/page/ids?${qs.toString()}`).then((r) => r.ids);
+}
+
 const PAGE = 500; // the API's largest page
 const MAX_PAGES = 40; // 20,000 rows: a runaway guard for screens that want a whole set
 

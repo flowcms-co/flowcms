@@ -39,7 +39,7 @@ const BulkActionBar = ({
             <div className="flex items-center gap-1.5 rounded-2xl bg-ink px-3 py-2.5 shadow-[0_1.5rem_3rem_rgba(26,26,46,0.45)] ring-1 ring-white/10 dark:bg-dark-3">
                 <span className="inline-flex items-center gap-2 pl-1 pr-1.5 text-caption-1 font-semibold text-white">
                     <span className="inline-flex items-center justify-center min-w-6 h-6 px-1.5 rounded-pill bg-primary text-[0.6875rem] font-bold text-white">
-                        {count}
+                        {count.toLocaleString()}
                     </span>
                     <span className="hidden sm:inline">selected</span>
                 </span>

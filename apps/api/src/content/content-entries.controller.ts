@@ -1,11 +1,11 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
-import { ArrayNotEmpty, IsArray, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
+import { ArrayNotEmpty, IsArray, IsDateString, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { CreateEntryDto, SetAuthorDto, UpdateEntryDto } from "./entries.dto";
 import { ContentEntriesService } from "./content-entries.service";
-import { ContentListService } from "./content-list.service";
+import { ContentListService, type EntryPageQuery } from "./content-list.service";
 import { JobsService } from "../jobs/jobs.service";
 
 class ReviewDto {
@@ -15,6 +15,11 @@ class ReviewDto {
 
 class BulkIdsDto {
     @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
+}
+
+class BulkScheduleDto extends BulkIdsDto {
+    /** When to publish, as an ISO date. */
+    @IsDateString() scheduledAt!: string;
 }
 
 @Controller("entries")
@@ -30,12 +35,21 @@ export class ContentEntriesController {
     @Get("page")
     @RequirePermissions(PERMISSIONS.CONTENT_READ)
     page(@CurrentUser() user: AuthUser, @Query() q: Record<string, string | undefined>) {
+        return this.lists.page(user.workspaceId, this.pageQuery(user, q), user.role);
+    }
+
+    /** The id of every entry matching the same filters, for "select all" across pages. */
+    @Get("page/ids")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    pageIds(@CurrentUser() user: AuthUser, @Query() q: Record<string, string | undefined>) {
+        return this.lists.ids(user.workspaceId, this.pageQuery(user, q), user.role);
+    }
+
+    private pageQuery(user: AuthUser, q: Record<string, string | undefined>): EntryPageQuery {
         const list = (v?: string) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined);
         const int = (v?: string) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
         const date = (v?: string) => (v && !Number.isNaN(new Date(v).getTime()) ? new Date(v) : undefined);
-        return this.lists.page(
-            user.workspaceId,
-            {
+        return {
                 q: q.q,
                 typeIds: list(q.typeId),
                 statuses: list(q.status),
@@ -50,9 +64,7 @@ export class ContentEntriesController {
                 page: int(q.page),
                 pageSize: int(q.pageSize),
                 facets: q.facets === "1",
-            },
-            user.role,
-        );
+        };
     }
 
     @Get()
@@ -92,6 +104,18 @@ export class ContentEntriesController {
     @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
     bulkDraft(@CurrentUser() user: AuthUser, @Body() dto: BulkIdsDto) {
         return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkDraft", `Move ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"} to draft`, { ids: dto.ids }, dto.ids.length);
+    }
+
+    @Post("bulk/schedule")
+    @RequirePermissions(PERMISSIONS.CONTENT_PUBLISH)
+    bulkSchedule(@CurrentUser() user: AuthUser, @Body() dto: BulkScheduleDto) {
+        return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkSchedule", `Schedule ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"}`, { ids: dto.ids, scheduledAt: dto.scheduledAt }, dto.ids.length);
+    }
+
+    @Post("bulk/duplicate")
+    @RequirePermissions(PERMISSIONS.CONTENT_CREATE)
+    bulkDuplicate(@CurrentUser() user: AuthUser, @Body() dto: BulkIdsDto) {
+        return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkDuplicate", `Duplicate ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"}`, { ids: dto.ids }, dto.ids.length);
     }
 
     @Post("bulk/delete")
