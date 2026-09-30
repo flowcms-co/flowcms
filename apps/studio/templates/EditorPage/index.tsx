@@ -10,7 +10,7 @@ import SaveStatus from "@/components/ui/SaveStatus";
 import Select from "@/components/ui/Select";
 import EditorCanvas from "@/components/editor/EditorCanvas";
 import RightPanel from "@/components/editor/RightPanel";
-import FieldsForm from "@/components/editor/FieldsForm";
+import FieldsForm, { RefTypesContext, type RefType } from "@/components/editor/FieldsForm";
 import ScheduleModal from "@/components/editor/ScheduleModal";
 import SectionEditor, { EditorStatsBar, type ComponentDef, type Section } from "@/components/editor/SectionEditor";
 import { api, ApiError } from "@/lib/api";
@@ -21,6 +21,7 @@ import type { SchemaField } from "@/mocks/schema";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
 import { slugify } from "@flowcms/shared/strings";
+import { isEmptyBody, showsBodyEditor } from "@flowcms/shared/editor";
 import { CONTENT_LIST_URL_KEY } from "@/lib/contentListUrl";
 
 /** Approval summary for an entry (GET /entries/:id/reviews). `enforced` is true only
@@ -41,7 +42,7 @@ type ApiEntry = {
 };
 
 /** Content type as returned by /content-types (includes the field schema). */
-type ApiType = { id: string; name: string; fields: SchemaField[]; slugPattern?: string | null };
+type ApiType = RefType & { slugPattern?: string | null; freeFormBody?: boolean };
 /** Reusable component as returned by /content-types/components. */
 type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
 
@@ -281,14 +282,11 @@ const EditorPage = () => {
     const formFields = zoneField ? fields.filter((f) => f.id !== zoneField.id) : fields;
     const sections: Section[] = zoneField && Array.isArray(entryData[zoneField.name]) ? (entryData[zoneField.name] as Section[]) : [];
     // The Body editor edits the entry's `body` key, so it appears only when that key
-    // is part of the model: a type with no fields of its own (free-form page), a type
-    // with a top-level Rich text field named "body", or an entry that already holds
-    // body text from before this rule (so older content stays editable). A typed
-    // model with other rich text fields edits them inline in the form instead, and
-    // no stray `body` is written into its data on save.
-    const hasBodyField = fields.some((f) => f.type === "Rich text" && f.name.trim().toLowerCase() === "body");
-    const legacyBody = typeof entryData.body === "string" && entryData.body.trim() !== "" && entryData.body !== "<p></p>";
-    const hasBody = !zoneField && (fields.length === 0 || hasBodyField || legacyBody);
+    // is part of the model: a type flagged as a free-form page, a type with a
+    // top-level Rich text field named "body", or an entry that already holds body
+    // text (so older content stays editable). Everything else, including a type with
+    // no fields (tags), edits only its fields and never gets a `body` written.
+    const hasBody = !zoneField && showsBodyEditor(types.find((t) => t.id === typeId), entryData);
     // Resolved component defs (apiId → {name, icon, fields}) for the section builder.
     const componentDefs = useMemo(() => {
         const map: Record<string, ComponentDef> = {};
@@ -323,6 +321,7 @@ const EditorPage = () => {
         // when the type has one, and the slug from its dedicated input.
         const data: Record<string, unknown> = { ...entryData };
         if (hasBody) data.body = editor?.getHTML() ?? "";
+        else if (isEmptyBody(data.body)) delete data.body;
         const payload = { title, slug: slug.trim() || null, data };
         if (entryId) {
             // The PATCH response tells us whether this edit was staged as a draft
@@ -724,6 +723,8 @@ const EditorPage = () => {
     useRevealBatch(bodyScope, ".reveal-up", [ready]);
 
     return (
+        // Content types for every Reference picker: the form's and the sections'.
+        <RefTypesContext.Provider value={types}>
         <div className="-mx-4 -my-8 md:-mx-6 xl:-mx-8 flex flex-col h-[calc(100vh-5rem)]">
             {/* Editor top bar */}
             <div className="flex items-center gap-3 h-16 shrink-0 px-4 border-b border-grey-light bg-surface dark:bg-dark-1 dark:border-grey-light/10">
@@ -1044,6 +1045,7 @@ const EditorPage = () => {
 
             <ScheduleModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} onSchedule={(_label, iso) => void doSchedule(iso)} />
         </div>
+        </RefTypesContext.Provider>
     );
 };
 

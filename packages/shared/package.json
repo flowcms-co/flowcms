@@ -13,6 +13,10 @@
       "types": "./dist/permissions.d.ts",
       "default": "./dist/permissions.js"
     },
+    "./editor": {
+      "types": "./dist/editor.d.ts",
+      "default": "./dist/editor.js"
+    },
     "./strings": {
       "types": "./dist/strings.d.ts",
       "default": "./dist/strings.js"

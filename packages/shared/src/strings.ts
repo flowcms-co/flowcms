@@ -15,6 +15,15 @@ export function slugify(s: string, opts?: { max?: number; fallback?: string }): 
     return slug || opts?.fallback || "";
 }
 
+/** Plural of a word or apiId: leaves an s-ending word alone and handles the
+ *  consonant+y case ("category" -> "categories", "services" stays). */
+export function pluralize(word: string): string {
+    if (!word) return word;
+    if (/s$/i.test(word)) return word;
+    if (/[^aeiou]y$/i.test(word)) return word.replace(/y$/i, "ies");
+    return `${word}s`;
+}
+
 /** Plain text from an HTML fragment: drops script/style blocks and tags,
  *  decodes common entities, collapses whitespace. */
 export function stripTags(html: string): string {

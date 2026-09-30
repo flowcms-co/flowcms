@@ -321,6 +321,9 @@ export type ContentTypeSchema = {
     /** How entry slugs are built, e.g. "{service.slug}-{city.slug}" or "{title}". When
      *  set, the slug is derived on every save instead of typed. */
     slugPattern?: string;
+    /** Free-form page: entries get the Body (rich text) editor even though the type
+     *  has no "body" field. Off = a type with no fields shows no Body editor. */
+    freeFormBody?: boolean;
     fields: SchemaField[];
 };
 

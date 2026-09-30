@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { ContentEntry, ContentStatus, Prisma, ReviewDecision } from "@flowcms/db";
-import { PERMISSIONS } from "@flowcms/shared";
+import { PERMISSIONS, slugify } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { CacheService } from "../cache/cache.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -609,16 +609,35 @@ export class ContentEntriesService {
         return { available: false as const, suggestion: await this.uniqueSlug(workspaceId, contentTypeId, s, locale, excludeId) };
     }
 
+    /** An entry of this type + locale whose title matches `text` (case-insensitive,
+     *  trimmed) or whose slug is the one `text` would produce. Searches the whole type,
+     *  so a match is found however many entries it holds. */
+    async exactMatch(workspaceId: string, contentTypeId: string, text: string, locale = "en", db: Prisma.TransactionClient = this.prisma) {
+        const t = (text ?? "").trim();
+        if (!contentTypeId || !t) return null;
+        const slug = slugify(t) || null;
+        const [hit] = await db.$queryRaw<{ id: string }[]>`
+            SELECT "id" FROM "ContentEntry"
+            WHERE "workspaceId" = ${workspaceId} AND "contentTypeId" = ${contentTypeId} AND "locale" = ${locale}
+              AND (lower(btrim("title")) = lower(${t}) OR "slug" = ${slug})
+            ORDER BY (lower(btrim("title")) = lower(${t})) DESC, "createdAt" ASC
+            LIMIT 1`;
+        if (!hit) return null;
+        return db.contentEntry.findUnique({ where: { id: hit.id }, include: { contentType: { select: CT_SELECT } } });
+    }
+
+    /** The picker's exact-match lookup: the matching entry, shaped, or null. */
+    async match(workspaceId: string, contentTypeId: string, text: string, locale = "en") {
+        const e = await this.exactMatch(workspaceId, contentTypeId, text, locale);
+        return { entry: e ? this.shape(e) : null };
+    }
+
     async create(workspaceId: string, userId: string | null, dto: CreateEntryDto, role?: RoleRules) {
         const type = await this.prisma.contentType.findFirst({
             where: { id: dto.contentTypeId, workspaceId },
         });
         if (!type) throw new BadRequestException("Unknown content type.");
         const locale = dto.locale || "en";
-        // One slug per page: reject a slug already taken within this type + locale.
-        // A patterned type ignores a typed slug: its slug is derived below.
-        const patterned = !!this.slugPatternOf(type.schema);
-        if (!patterned) await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
         // Reverse-relation fields are derived, not stored: keep the submitted values
         // to propagate onto the owning entries after save, but strip them from the blob.
         const submittedReverse = { ...(dto.data ?? {}) };
@@ -630,24 +649,53 @@ export class ContentEntriesService {
             data = (await this.rbac.stripLockedFields(role, data)) as Record<string, unknown>;
             if (data.title === undefined) data.title = dto.title ?? "Untitled";
         }
+        // Quick-create: an entry that already has this name wins over a new one.
+        const reuse = !!dto.reuseExisting && !!dto.title?.trim();
+        if (reuse) {
+            const hit = await this.exactMatch(workspaceId, type.id, dto.title!, locale);
+            if (hit) return { ...this.shape(hit), existing: true };
+        }
+        // One slug per page: reject a slug already taken within this type + locale.
+        // A patterned type ignores a typed slug: its slug is derived below.
+        // A reuse create checks under its lock below, after the last match check.
+        const patterned = !!this.slugPatternOf(type.schema);
+        if (!patterned && !reuse) await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
         // New entries are drafts — type-check values but don't require completeness yet.
         validateEntryData(fieldsOf(type.schema), data, { enforceRequired: false, slug: dto.slug ?? null, components: await this.componentMap(workspaceId) });
         // Plugin hooks may augment the data (reading time, word count, excerpt…).
         data = await this.plugins.runBeforeSave(workspaceId, { data, title: String(data.title ?? ""), status: "DRAFT" });
         this.syncMetaTitle(data);
         const slug = patterned ? await this.derivedSlug(workspaceId, type.id, type.schema, data, locale) : (dto.slug ?? null);
-        const e = await this.prisma.contentEntry.create({
-            data: {
-                workspaceId,
-                contentTypeId: type.id,
-                data: data as Prisma.InputJsonValue,
-                slug,
-                locale,
-                status: "DRAFT",
-                authorId: userId ?? null,
-            },
-            include: { contentType: { select: CT_SELECT } },
-        });
+        const insert = (db: Prisma.TransactionClient) =>
+            db.contentEntry.create({
+                data: {
+                    workspaceId,
+                    contentTypeId: type.id,
+                    data: data as Prisma.InputJsonValue,
+                    slug,
+                    locale,
+                    status: "DRAFT",
+                    authorId: userId ?? null,
+                },
+                include: { contentType: { select: CT_SELECT } },
+            });
+        let e: Awaited<ReturnType<typeof insert>>;
+        if (reuse) {
+            // Two editors creating the same name at once: serialize on type + name and
+            // re-check under the lock, so the second one gets the first one's entry.
+            const key = `${type.id}:${locale}:${slugify(dto.title!) || dto.title!.trim().toLowerCase()}`;
+            const r = await this.prisma.$transaction(async (tx) => {
+                await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+                const hit = await this.exactMatch(workspaceId, type.id, dto.title!, locale, tx);
+                if (hit) return { hit };
+                if (!patterned) await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
+                return { created: await insert(tx) };
+            });
+            if (r.hit) return { ...this.shape(r.hit), existing: true };
+            e = r.created!;
+        } else {
+            e = await insert(this.prisma);
+        }
         await this.snapshot(e.id, data, "DRAFT", userId);
         await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, data);
         await this.propagateReverse(workspaceId, e.id, e.contentType.schema, submittedReverse, { actorId: userId ?? undefined, role });

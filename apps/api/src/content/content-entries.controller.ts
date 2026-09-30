@@ -145,6 +145,14 @@ export class ContentEntriesController {
         return this.entries.slugAvailability(user.workspaceId, typeId ?? "", slug ?? "", locale || "en", excludeId);
     }
 
+    // Exact match (title, case-insensitive, or the slug the text would produce) within
+    // one type, for the reference picker's create option. Declared before `:id`.
+    @Get("match")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    match(@CurrentUser() user: AuthUser, @Query("typeId") typeId?: string, @Query("text") text?: string, @Query("locale") locale?: string) {
+        return this.entries.match(user.workspaceId, typeId ?? "", text ?? "", locale || "en");
+    }
+
     @Get(":id")
     @RequirePermissions(PERMISSIONS.CONTENT_READ)
     get(@CurrentUser() user: AuthUser, @Param("id") id: string) {

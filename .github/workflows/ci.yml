@@ -50,6 +50,9 @@ jobs:
       - name: Unit tests (API)
         run: npm run test -w @flowcms/api
 
+      - name: Unit tests (Studio)
+        run: npm run test -w @flowcms/studio
+
   # DB-backed integration tests: boots Postgres, applies migrations (a de-facto
   # migration smoke test), and runs the gated *.int.spec.ts suite (bootstrap
   # idempotency / non-destructiveness, workspace isolation, token soft-delete).
@@ -86,10 +89,12 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate
 
-      # The db integration specs import @flowcms/shared, which resolves from its
-      # compiled dist/ — build it before the suite runs.
-      - name: Build workspace packages (shared)
-        run: npm run build -w @flowcms/shared
+      # The integration specs import @flowcms/shared (and the API ones @flowcms/db),
+      # which resolve from their compiled dist/: build them before the suites run.
+      - name: Build workspace packages (shared, db)
+        run: |
+          npm run build -w @flowcms/shared
+          npm run build -w @flowcms/db
 
       - name: Apply migrations (smoke test)
         run: npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
@@ -98,3 +103,8 @@ jobs:
         env:
           RUN_DB_TESTS: "1"
         run: npm run test -w @flowcms/db
+
+      - name: Integration specs (API, entry exact match + reuse on create)
+        env:
+          RUN_DB_TESTS: "1"
+        run: npm run test -w @flowcms/api

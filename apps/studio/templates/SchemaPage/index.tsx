@@ -222,6 +222,7 @@ const SchemaPage = () => {
                                   // A URL pattern is required for reference types and optional for the rest.
                                   routePattern: active.pageType !== "home" ? active.routePattern?.trim() || undefined : undefined,
                                   slugPattern: active.pageType !== "home" ? active.slugPattern?.trim() || undefined : undefined,
+                                  freeFormBody: active.freeFormBody || undefined,
                               }
                             : { jsonLd: active.jsonLd }),
                         fields,
@@ -443,6 +444,18 @@ const SchemaPage = () => {
                                         <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">{"{slug}"}</code>, it&rsquo;s appended to the end.
                                     </span>
                                 </label>
+                            )}
+
+                            {tab === "types" && (
+                                <div className="mb-5 flex items-start justify-between gap-4">
+                                    <span className="flex flex-col gap-0.5">
+                                        <span className="text-caption-1 text-grey">Free-form page</span>
+                                        <span className="text-caption-2 leading-relaxed text-grey">
+                                            Gives entries a Body editor for free-form content. Leave off for types like tags that only need their fields.
+                                        </span>
+                                    </span>
+                                    <Switch checked={!!active.freeFormBody} onChange={(v) => patchActive({ freeFormBody: v })} aria-label="Free-form page" />
+                                </div>
                             )}
 
                             {tab === "types" && (

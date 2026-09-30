@@ -9,16 +9,19 @@
  * "title" field by the editor's title input; those three are skipped here.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { MediaField, pickImagePatch } from "@/components/ui/MediaPicker";
 import { fetchEntryPage } from "@/lib/entries";
+import { api, ApiError } from "@/lib/api";
+import { useAuth } from "@/components/providers/AuthProvider";
 import RichTextField from "./RichTextField";
 import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
-import { stripTags as stripHtml } from "@flowcms/shared/strings";
+import { slugify, stripTags as stripHtml } from "@flowcms/shared/strings";
+import { enterChoice, offerCreate, quickCreateData, refPlaceholder, showSlugLine } from "@flowcms/shared/editor";
 
 type Json = Record<string, unknown>;
 
@@ -29,6 +32,14 @@ const INPUT = "flow-input";
  *  in the latter case the fields live on the component definition, so we resolve them
  *  here. Provided by FieldsForm; empty for inline-only forms. */
 export const ComponentDefsContext = createContext<Record<string, SchemaField[]>>({});
+
+/** A content type as the Reference picker needs it: its name (for the placeholder and
+ *  create option) and fields (to fill a new entry). */
+export type RefType = { id: string; name: string; fields: SchemaField[]; slugPattern?: string | null };
+
+/** The workspace's content types, so every Reference field (in the form and in
+ *  Dynamic Zone sections) can name and create its targets. Empty = generic picker. */
+export const RefTypesContext = createContext<RefType[]>([]);
 
 /** Resolve a Component field's sub-fields: a library reference (componentApiId) reads
  *  the referenced component's fields; an inline component carries its own. Mirrors the
@@ -138,10 +149,10 @@ const CollapsibleCard = ({
 
 /** A selectable entry of a referenced content type. `typeName` labels which type it
  *  belongs to, shown as a badge for polymorphic (multi-type) relations. */
-type RefEntry = { id: string; title: string; slug: string | null; typeName: string };
+type RefEntry = { id: string; title: string; slug: string | null; typeName: string; status?: string };
 
 /** Shape of an entry row from GET /entries (only the bits the picker needs). */
-type ApiListEntry = { id: string; title: string; slug: string | null; contentType?: { name?: string } };
+type ApiListEntry = { id: string; title: string; slug: string | null; status?: string; contentType?: { name?: string } };
 
 /** Coerce a stored reference value into an id list (single refs store a string,
  *  multiple store an array). Drops anything that isn't a non-empty string. */
@@ -176,6 +187,21 @@ const ReferenceField = ({
     const [query, setQuery] = useState("");
     const [open, setOpen] = useState(false);
     const selected = asIdArray(value);
+    // Keyboard highlight: -1 = nothing highlighted (Enter then picks an exact match or
+    // creates); 0..n-1 = an option; n = the create row.
+    const [active, setActive] = useState(-1);
+    const [creating, setCreating] = useState(false);
+    const [createError, setCreateError] = useState<string | null>(null);
+    const [refresh, setRefresh] = useState(0);
+    const [needsApproval, setNeedsApproval] = useState(false);
+    const types = useContext(RefTypesContext);
+    const target = typeIds.length === 1 ? types.find((t) => t.id === typeIds[0]) : undefined;
+    // The server's exact match for the typed text (title or slug, whole type): shown as
+    // the top option, and while it exists nothing is created. Keyed by the text it answers.
+    const [match, setMatch] = useState<{ q: string; entry: RefEntry | null } | null>(null);
+    const { can, user } = useAuth();
+    const allowedTypes = user?.role.allowedTypeIds;
+    const canCreate = !!target && can("content.create") && (!allowedTypes?.length || allowedTypes.includes(target.id));
 
     // The results list is rendered in a portal pinned under the input, so it can't be
     // clipped by the editor's scrolling/overflow containers or hidden behind other UI.
@@ -211,7 +237,7 @@ const ReferenceField = ({
     // The target type can hold thousands of entries (every city, every tag), so the
     // picker never loads them all: it asks the server for matches as you type, and
     // separately for the entries already picked so their names can be shown.
-    const toRef = (r: ApiListEntry): RefEntry => ({ id: r.id, title: r.title, slug: r.slug, typeName: r.contentType?.name ?? "" });
+    const toRef = (r: ApiListEntry): RefEntry => ({ id: r.id, title: r.title, slug: r.slug, typeName: r.contentType?.name ?? "", status: r.status });
     const [picked, setPicked] = useState<RefEntry[]>([]);
     const selectedKey = selected.join(",");
     useEffect(() => {
@@ -227,16 +253,33 @@ const ReferenceField = ({
     useEffect(() => {
         if (!typeIdsKey) return;
         let cancelled = false;
+        const q = query.trim();
         const t = setTimeout(() => {
-            fetchEntryPage<ApiListEntry>({ typeId: typeIdsKey, q: query.trim(), sort: "title", dir: "asc", pageSize: 50 })
+            fetchEntryPage<ApiListEntry>({ typeId: typeIdsKey, q, sort: "title", dir: "asc", pageSize: 50 })
                 .then((r) => !cancelled && setEntries(r.items.map(toRef)))
                 .catch(() => {});
+            if (q && !typeIdsKey.includes(",")) {
+                const qs = new URLSearchParams({ typeId: typeIdsKey, text: q, locale: "en" });
+                api<{ entry: ApiListEntry | null }>(`/entries/match?${qs.toString()}`)
+                    .then((r) => !cancelled && setMatch({ q, entry: r.entry ? toRef(r.entry) : null }))
+                    .catch(() => {});
+            }
         }, 200);
         return () => {
             cancelled = true;
             clearTimeout(t);
         };
-    }, [typeIdsKey, query]);
+    }, [typeIdsKey, query, refresh]);
+
+    // Linked entries that aren't published are left out of the delivery API, so they
+    // carry a Draft badge; when publishing needs approval first, the hint says so.
+    const draftId = picked.find((e) => selected.includes(e.id) && e.status && e.status !== "PUBLISHED")?.id;
+    useEffect(() => {
+        if (!draftId) return;
+        api<{ enforced?: boolean }>(`/entries/${draftId}/review`)
+            .then((r) => setNeedsApproval(!!r.enforced))
+            .catch(() => {});
+    }, [draftId]);
 
     if (!typeIds.length) {
         return <p className="text-caption-2 text-grey">Pick the referenced content type for this field in the Schema Builder.</p>;
@@ -250,14 +293,84 @@ const ReferenceField = ({
         return t && t.toLowerCase() !== "untitled" ? t : (e?.slug ?? "");
     };
     const titleFor = (id: string) => labelOf(entryFor(id)) || id;
-    // `entries` is already the server's matches for the current search.
-    const available = entries.filter((e) => !selected.includes(e.id));
+    // `entries` is already the server's matches for the current search; the exact
+    // match (undefined until the server has answered for this text) goes on top.
+    const exact = match?.q === query.trim() ? match.entry : undefined;
+    const exactLinked = !!exact && selected.includes(exact.id);
+    const rest = entries.filter((e) => !selected.includes(e.id) && e.id !== exact?.id);
+    const available = exact && !exactLinked ? [exact, ...rest] : rest;
+    const labels = available.map((e) => labelOf(e) || e.id);
+    // Create only once the server confirmed there is no exact match anywhere in the type.
+    const createOffered = !creating && exact === null && offerCreate(query, entries.map(labelOf), typeIds.length, canCreate);
+    const rowCount = labels.length + (createOffered ? 1 : 0);
 
     const add = (id: string) => {
         onChange(multiple ? [...selected, id] : id);
         setQuery("");
+        setActive(-1);
         setOpen(false);
     };
+
+    // Create an entry of the target type from the typed text and link it. Nothing is
+    // linked unless the create succeeds; on failure the text stays for another try.
+    const create = async () => {
+        if (!target) return;
+        const text = query.trim();
+        const data = quickCreateData(target.fields, text);
+        if (!data) {
+            // A required field needs more than a name: finish it in the full editor.
+            window.open(`/content/editor?type=${encodeURIComponent(target.id)}`, "_blank", "noopener");
+            return;
+        }
+        setCreating(true);
+        setCreateError(null);
+        try {
+            // Same slug the editor would give the title, made unique the same way.
+            let slug: string | null = null;
+            if (!target.slugPattern?.trim()) {
+                slug = slugify(text) || null;
+                if (slug) {
+                    const qs = new URLSearchParams({ typeId: target.id, slug, locale: "en" });
+                    const r = await api<{ available: boolean; suggestion?: string }>(`/entries/slug-available?${qs.toString()}`);
+                    if (!r.available && r.suggestion) slug = r.suggestion;
+                }
+            }
+            // New entries are always drafts; publishing follows the workspace's workflow.
+            // reuseExisting: if someone created this name meanwhile, the server returns
+            // that entry instead, and it's linked just the same.
+            const e = await api<ApiListEntry>("/entries", {
+                method: "POST",
+                body: JSON.stringify({ contentTypeId: target.id, title: text, slug, data, reuseExisting: true }),
+            });
+            setPicked((p) => [...p, toRef(e)]);
+            add(e.id);
+            setRefresh((n) => n + 1);
+        } catch (err) {
+            setCreateError(err instanceof ApiError ? err.message : `Could not create this ${target.name.toLowerCase()}.`);
+        } finally {
+            setCreating(false);
+        }
+    };
+
+    const onKeyDown = (ev: KeyboardEvent<HTMLInputElement>) => {
+        if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+            ev.preventDefault();
+            setOpen(true);
+            setActive((a) => (ev.key === "ArrowDown" ? Math.min(a + 1, rowCount - 1) : Math.max(a - 1, -1)));
+        } else if (ev.key === "Enter") {
+            ev.preventDefault();
+            // Nothing highlighted and the server found an exact match: Enter picks it.
+            const choice = enterChoice(labels, active < 0 && exact && !exactLinked ? 0 : active, query, createOffered);
+            if (choice?.kind === "pick") add(available[choice.index].id);
+            else if (choice?.kind === "create") void create();
+        } else if (ev.key === "Escape") {
+            setOpen(false);
+            setActive(-1);
+        }
+    };
+    const rowClass = (i: number) =>
+        `flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-lavender-mist/60 dark:hover:bg-dark-3/60 ${active === i ? "bg-lavender-mist/60 dark:bg-dark-3/60" : ""}`;
+    const menuId = `ref-menu-${field.id}`;
     const remove = (id: string) => onChange(multiple ? selected.filter((x) => x !== id) : null);
 
     // Single ref already chosen: show the chip; clearing it reopens the picker.
@@ -276,6 +389,9 @@ const ReferenceField = ({
                                 <span className="rounded bg-primary/15 px-1 text-[0.625rem] font-medium uppercase tracking-wide">{entryFor(id)!.typeName}</span>
                             )}
                             {titleFor(id)}
+                            {entryFor(id)?.status && entryFor(id)!.status !== "PUBLISHED" && (
+                                <span className="rounded bg-warning/15 px-1 text-[0.625rem] font-medium uppercase tracking-wide text-warning">Draft</span>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => remove(id)}
@@ -288,6 +404,11 @@ const ReferenceField = ({
                     ))}
                 </div>
             )}
+            {draftId && (
+                <p className="text-caption-2 text-grey">
+                    Draft entries are left out of the delivery API until they&rsquo;re {needsApproval ? "approved and published" : "published"}.
+                </p>
+            )}
 
             {showPicker && (
                 <div>
@@ -297,25 +418,38 @@ const ReferenceField = ({
                         value={query}
                         onChange={(e) => {
                             setQuery(e.target.value);
+                            setActive(-1);
+                            setCreateError(null);
                             setOpen(true);
                         }}
+                        onKeyDown={onKeyDown}
                         onFocus={() => setOpen(true)}
                         onBlur={() => setTimeout(() => setOpen(false), 150)}
-                        placeholder={entries.length || query ? "Search entries to link…" : "No entries to link yet"}
+                        placeholder={refPlaceholder(target ? [target.name] : [], !entries.length && !query)}
+                        readOnly={creating}
+                        aria-busy={creating}
+                        role="combobox"
+                        aria-expanded={open && rowCount > 0}
+                        aria-controls={menuId}
+                        aria-activedescendant={open && active >= 0 ? `${menuId}-${active}` : undefined}
                     />
-                    {open && available.length > 0 && menuRect && typeof document !== "undefined" &&
+                    {createError && <p className="mt-1.5 text-caption-2 text-error">{createError}</p>}
+                    {open && rowCount > 0 && menuRect && typeof document !== "undefined" &&
                         createPortal(
                             <ul
+                                id={menuId}
+                                role="listbox"
                                 style={{ position: "fixed", top: menuRect.top, bottom: menuRect.bottom, left: menuRect.left, width: menuRect.width, zIndex: 1000 }}
                                 className="max-h-56 overflow-auto rounded-xl border border-grey-light bg-white py-1 shadow-[0_1.25rem_2.5rem_rgba(26,26,46,0.18)] dark:border-grey-light/10 dark:bg-dark-1"
                             >
-                                {available.slice(0, 50).map((e) => (
-                                    <li key={e.id}>
+                                {available.map((e, i) => (
+                                    <li key={e.id} id={`${menuId}-${i}`} role="option" aria-selected={active === i}>
                                         <button
                                             type="button"
+                                            tabIndex={-1}
                                             onMouseDown={(ev) => ev.preventDefault()}
                                             onClick={() => add(e.id)}
-                                            className="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-lavender-mist/60 dark:hover:bg-dark-3/60"
+                                            className={rowClass(i)}
                                         >
                                             <span className="flex items-center gap-1.5 text-caption-1 text-dark-1 dark:text-white">
                                                 {poly && e.typeName && (
@@ -323,10 +457,26 @@ const ReferenceField = ({
                                                 )}
                                                 {labelOf(e) || e.id}
                                             </span>
-                                            {e.slug && labelOf(e) !== e.slug && <span className="text-caption-2 text-grey/70">/{e.slug}</span>}
+                                            {showSlugLine(labelOf(e), e.slug, labels) && <span className="text-caption-2 text-grey/70">/{e.slug}</span>}
                                         </button>
                                     </li>
                                 ))}
+                                {createOffered && target && (
+                                    <li id={`${menuId}-${labels.length}`} role="option" aria-selected={active === labels.length}>
+                                        <button
+                                            type="button"
+                                            tabIndex={-1}
+                                            onMouseDown={(ev) => ev.preventDefault()}
+                                            onClick={() => void create()}
+                                            className={rowClass(labels.length)}
+                                        >
+                                            <span className="flex items-center gap-1.5 text-caption-1 text-primary dark:text-lilac">
+                                                <Icon className="h-3.5 w-3.5 fill-current" name="plus" />
+                                                Create {target.name.toLowerCase()} &ldquo;{query.trim()}&rdquo;
+                                            </span>
+                                        </button>
+                                    </li>
+                                )}
                             </ul>,
                             document.body,
                         )}

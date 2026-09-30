@@ -45,6 +45,7 @@ export class ContentTypesService {
             previewUrl?: string;
             routePattern?: string;
             slugPattern?: string;
+            freeFormBody?: boolean;
             fields?: unknown[];
         };
         // Page type drives routing/kind/JSON-LD. Legacy types (no stored pageType)
@@ -69,6 +70,8 @@ export class ContentTypesService {
             // How entry slugs are built, e.g. "{service.slug}-{city.slug}". When set, the
             // slug is derived on every save instead of typed.
             slugPattern: s.slugPattern ?? null,
+            // Free-form page: the editor shows the Body editor even with no body field.
+            freeFormBody: s.freeFormBody === true,
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at

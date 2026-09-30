@@ -1,4 +1,4 @@
-import { IsIn, IsObject, IsOptional, IsString } from "class-validator";
+import { IsBoolean, IsIn, IsObject, IsOptional, IsString } from "class-validator";
 
 export class CreateEntryDto {
     @IsString()
@@ -19,6 +19,13 @@ export class CreateEntryDto {
     @IsOptional()
     @IsObject()
     data?: Record<string, unknown>;
+
+    /** Quick-create from a picker: when an entry of this type already has the same
+     *  title (case-insensitive, trimmed) or the slug the title would produce, return
+     *  it (with `existing: true`) instead of creating a duplicate. */
+    @IsOptional()
+    @IsBoolean()
+    reuseExisting?: boolean;
 }
 
 const EDITABLE_STATUSES = ["DRAFT", "IN_REVIEW", "APPROVED", "SCHEDULED", "ARCHIVED"] as const;
