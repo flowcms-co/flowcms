@@ -151,6 +151,35 @@ describe("buildEntryKeyRemap", () => {
         expect(remap({ Main: { Title: "keep-as-is" } })).toEqual({ main: { Title: "keep-as-is" } });
     });
 
+    it("treats a field whose id is gone as removed, never as a rename of its neighbour", () => {
+        const old = [{ id: "a", name: "pageUrl", type: "Text" }, { id: "b", name: "heroHeadline", type: "Text" }, { id: "c", name: "heroSubheadline", type: "Text" }];
+        const next = [{ id: "b", name: "heroHeadline", type: "Text" }, { id: "c", name: "heroSubheadline", type: "Text" }];
+        const { changed, remap } = buildEntryKeyRemap(old, next);
+        expect(changed).toBe(false);
+        const entry = { pageUrl: "https://example.com/x", heroHeadline: "", heroSubheadline: "" };
+        expect(remap(entry)).toEqual(entry);
+    });
+
+    it("keeps data under the new name on a genuine rename by id, even when a neighbour was removed", () => {
+        const old = [{ id: "a", name: "pageUrl", type: "Text" }, { id: "b", name: "heroHeadline", type: "Text" }];
+        const next = [{ id: "b", name: "headline", type: "Text" }];
+        const { changed, remap } = buildEntryKeyRemap(old, next);
+        expect(changed).toBe(true);
+        expect(remap({ pageUrl: "u", heroHeadline: "H" })).toEqual({ headline: "H", pageUrl: "u" });
+    });
+
+    it("does not hand old data to a field removed and re-added with a new id", () => {
+        const old = [{ id: "a", name: "pageUrl", type: "Text" }, { id: "b", name: "heroHeadline", type: "Text" }];
+        const next = [{ id: "z", name: "pageUrl", type: "Text" }, { id: "b", name: "heroHeadline", type: "Text" }];
+        const { changed } = buildEntryKeyRemap(old, next);
+        expect(changed).toBe(false);
+    });
+
+    it("still matches id-less fields by position only to id-less fields", () => {
+        expect(buildEntryKeyRemap([{ name: "Old name", type: "Text" }], [{ name: "renamed", type: "Text" }]).remap({ "Old name": 1 })).toEqual({ renamed: 1 });
+        expect(buildEntryKeyRemap([{ name: "Old name", type: "Text" }], [{ id: "n", name: "renamed", type: "Text" }]).changed).toBe(false);
+    });
+
     it("preserves keys with no matching field", () => {
         const { remap } = buildEntryKeyRemap([{ id: "1", name: "Title" }], [{ id: "1", name: "title" }]);
         expect(remap({ Title: "Hi", orphan: 1 })).toEqual({ title: "Hi", orphan: 1 });

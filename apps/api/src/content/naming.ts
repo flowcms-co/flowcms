@@ -108,8 +108,9 @@ export function normalizeSchemaFields<T extends { fields?: AnyField[] } | Record
  *  field key is renamed or camelCased (e.g. "Title" → "title", "Cover image" →
  *  "coverImage"). Recurses through inline-component sub-fields and repeatable item
  *  arrays. Old↔new fields are matched by id first, then by camelCase-name equivalence
- *  (so an id-less imported field that is only being camelCased still maps), then
- *  positionally among same-typed fields. `changed` is true only when at least one key
+ *  (so an id-less imported field that is only being camelCased still maps), then,
+ *  for id-less fields only, positionally among same-typed id-less fields. A field
+ *  whose id is gone from the new schema was removed and maps to nothing. `changed` is true only when at least one key
  *  actually moves, so callers can skip rewriting entries on no-op saves. Library
  *  references (componentApiId) and dynamic zones move as a whole — their inner keys
  *  are owned by the referenced component type, migrated when that type is saved. */
@@ -124,16 +125,20 @@ export function buildEntryKeyRemap(
     const steps: { oldKey: string; newKey: string; child?: (d: unknown) => unknown }[] = [];
 
     const matchIndex = (of: AnyField, oi: number): number => {
-        if (of.id != null) {
-            const i = news.findIndex((nf, j) => !usedNew.has(j) && nf.id != null && nf.id === of.id);
-            if (i >= 0) return i;
-        }
+        // A field with an id is matched by that id and nothing else: an id that no
+        // longer appears in the new schema means the field was removed, never renamed.
+        // (Matching a removed field to its neighbour by position once wrote one
+        // field's data into another on every entry of a type.)
+        if (of.id != null) return news.findIndex((nf, j) => !usedNew.has(j) && nf.id != null && nf.id === of.id);
+        // Id-less fields (older imports) are matched by camelCase-name equivalence,
+        // then by position, but only to a new field that is also id-less and of the
+        // same type.
         const camel = toCamelCase(String(of.name ?? ""));
         if (camel) {
             const i = news.findIndex((nf, j) => !usedNew.has(j) && toCamelCase(String(nf.name ?? "")) === camel);
             if (i >= 0) return i;
         }
-        if (!usedNew.has(oi) && news[oi] && (news[oi].type ?? null) === (of.type ?? null)) return oi;
+        if (!usedNew.has(oi) && news[oi] && news[oi].id == null && (news[oi].type ?? null) === (of.type ?? null)) return oi;
         return -1;
     };
 
