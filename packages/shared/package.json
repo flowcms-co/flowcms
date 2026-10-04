@@ -20,6 +20,10 @@
     "./strings": {
       "types": "./dist/strings.d.ts",
       "default": "./dist/strings.js"
+    },
+    "./time": {
+      "types": "./dist/time.d.ts",
+      "default": "./dist/time.js"
     }
   },
   "files": [

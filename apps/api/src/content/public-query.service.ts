@@ -2,7 +2,12 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { ContentEntry, ContentType, Prisma } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { entryToCanonicalContent, buildJsonLd } from "./canonical-content";
-import { fieldsOf, type SchemaField } from "./entry-validation";
+import { fieldsOf, type ComponentMap, type SchemaField } from "./entry-validation";
+import { altBackfillPatch, altLookupFrom, type AltLookup } from "./alt-backfill";
+import { CacheService } from "../cache/cache.service";
+
+/** What `shape` needs to default empty alt text from the asset library. */
+type AltCtx = { components: ComponentMap; altFor: AltLookup };
 
 /** Coerce a stored reference value into an id list (single refs store a string,
  *  multiple store an array of ids). */
@@ -66,7 +71,21 @@ const absolutizeMedia = (v: unknown): unknown => {
  */
 @Injectable()
 export class PublicQueryService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly cache: CacheService,
+    ) {}
+
+    /** The workspace's asset alt text plus component schemas, for filling empty alt
+     *  fields at delivery. Cached for a minute, so an edit to an asset's alt reaches
+     *  the site without anyone re-saving the pages that use it. */
+    private async altCtx(workspaceId: string): Promise<AltCtx> {
+        const media = await this.cache.wrap(`media:alt:${workspaceId}`, 60, () =>
+            this.prisma.media.findMany({ where: { workspaceId, alt: { not: null } }, select: { url: true, alt: true } }),
+        );
+        const components: ComponentMap = Object.fromEntries(await this.componentFieldMap(workspaceId));
+        return { components, altFor: altLookupFrom(media) };
+    }
 
     async resolveType(workspaceId: string, type: string): Promise<ContentType> {
         // Reusable components (kind=COMPONENT) are not deliverable collections.
@@ -83,8 +102,11 @@ export class PublicQueryService {
         return this.prisma.contentType.findMany({ where: { workspaceId, kind: { not: "COMPONENT" } }, orderBy: { apiId: "asc" } });
     }
 
-    private shape(e: ContentEntry, fields?: string[]) {
-        const data = (e.data ?? {}) as Record<string, unknown>;
+    private shape(e: ContentEntry, fields?: string[], schema?: unknown, alt?: AltCtx) {
+        let data = (e.data ?? {}) as Record<string, unknown>;
+        // An image with no alt text of its own gets the asset's: paired alt fields
+        // and <img> tags in rich text. Alt text an author wrote is never replaced.
+        if (alt && schema) data = { ...data, ...altBackfillPatch(fieldsOf(schema), data, alt.components, alt.altFor) };
         const projected =
             fields && fields.length ? Object.fromEntries(fields.filter((f) => f in data).map((f) => [f, data[f]])) : data;
         const base: Record<string, unknown> = {
@@ -118,11 +140,12 @@ export class PublicQueryService {
         if (!ids.length) return new Map();
         const rows = await this.prisma.contentEntry.findMany({
             where: { workspaceId, id: { in: ids }, ...(preview ? {} : { status: "PUBLISHED" }) },
-            include: { contentType: { select: { apiId: true } } },
+            include: { contentType: { select: { apiId: true, schema: true } } },
         });
+        const alt = rows.length ? await this.altCtx(workspaceId) : undefined;
         return new Map(
             rows.map((e) => {
-                const shaped = this.shape(e);
+                const shaped = this.shape(e, undefined, e.contentType.schema, alt);
                 shaped.__type = e.contentType.apiId;
                 return [e.id, shaped] as const;
             }),
@@ -266,7 +289,8 @@ export class PublicQueryService {
             this.prisma.contentEntry.findMany({ where, orderBy: this.orderBy(opts.sort), take, skip }),
             this.prisma.contentEntry.count({ where }),
         ]);
-        const data = rows.map((e) => this.shape(e, opts.fields));
+        const alt = rows.length ? await this.altCtx(ct.workspaceId) : undefined;
+        const data = rows.map((e) => this.shape(e, opts.fields, ct.schema, alt));
         await this.populateRefs(ct, data, opts);
         return { data, meta: { total, limit: take, offset: skip } };
     }
@@ -276,7 +300,7 @@ export class PublicQueryService {
             where: { ...this.where(ct, { ...opts, filters: {} }), OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
         });
         if (!entry) throw new NotFoundException("Not found.");
-        const data = this.shape(entry, opts.fields);
+        const data = this.shape(entry, opts.fields, ct.schema, await this.altCtx(ct.workspaceId));
         await this.populateRefs(ct, [data], opts);
         return { data };
     }
@@ -286,7 +310,7 @@ export class PublicQueryService {
             where: this.where(ct, { ...opts, filters: {} }),
             orderBy: this.orderBy(opts.sort),
         });
-        const data = entry ? this.shape(entry, opts.fields) : null;
+        const data = entry ? this.shape(entry, opts.fields, ct.schema, await this.altCtx(ct.workspaceId)) : null;
         if (data) await this.populateRefs(ct, [data], opts);
         return { data };
     }

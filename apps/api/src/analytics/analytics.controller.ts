@@ -4,6 +4,7 @@ import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { AnalyticsService } from "./analytics.service";
 import { ConnectAnalyticsDto } from "./dto";
+import { SYNC_DAYS } from "./analytics-math";
 
 @Controller("analytics")
 export class AnalyticsController {
@@ -18,7 +19,9 @@ export class AnalyticsController {
     @Get("overview")
     @RequirePermissions(PERMISSIONS.ANALYTICS_READ)
     overview(@CurrentUser() user: AuthUser, @Query("days") days?: string) {
-        const n = Math.min(Math.max(Number(days) || 30, 1), 365);
+        // Half the synced range at most would leave room to compare, but the full range
+        // is still a valid period (it just has no previous period to compare with).
+        const n = Math.min(Math.max(Number(days) || 30, 1), SYNC_DAYS);
         return this.analytics.overview(user.workspaceId, n);
     }
 

@@ -8,6 +8,7 @@
  * enqueue runs the existing background batch-fix jobs). No new behaviour.
  */
 import { useMemo, useState } from "react";
+import { coverageNote } from "@/lib/seoDash";
 import Icon from "@/components/ui/Icon";
 import Select from "@/components/ui/Select";
 
@@ -24,6 +25,8 @@ export type IssueGroup = {
     key: string; title: string; category: string; scope: "page" | "site";
     severity: Band; effort: Effort; fix: FixKind; fixArg?: string;
     ai: "fix" | "explain" | "none"; count: number; explanation: string; fixHint: string; pages: IssuePage[];
+    /** Set when the check only looked at some pages (duplicate content, internal links). */
+    checked?: number; total?: number;
 };
 export type RowHelpers = {
     onManual: (g: IssueGroup, p?: IssuePage) => void;
@@ -113,14 +116,15 @@ export function InternalLinkingPanel({ groups, onLinks, onIgnore }: PanelProps) 
     const [openTier, setOpenTier] = useState<Band | null>("high");
     const [showAllHigh, setShowAllHigh] = useState(false);
     if (!few) return null;
+    const capped = coverageNote("Internal links", few.checked != null && few.total != null ? { checked: few.checked, total: few.total } : null);
 
     // No actionable suggestions: don't show empty "0 suggested links" rows.
     if (pages.length === 0) {
         return (
             <div className="flex flex-col items-center gap-2 rounded-2xl bg-lavender-mist/40 py-10 text-center dark:bg-dark-3/30">
                 <Icon name="check" className="h-7 w-7 fill-success" />
-                <p className="text-body-sm font-semibold text-black dark:text-white">No internal-linking opportunities right now</p>
-                <p className="max-w-md text-caption-2 text-grey">Every page that needs links has no clear in-context match yet. Publish more related content and re-run the audit to surface suggestions.</p>
+                <p className="text-body-sm font-semibold text-black dark:text-white">No internal-linking opportunities {capped ? "in the pages checked" : "right now"}</p>
+                <p className="max-w-md text-caption-2 text-grey">{capped ?? "Every page that needs links has no clear in-context match yet. Publish more related content and re-run the audit to surface suggestions."}</p>
             </div>
         );
     }
@@ -352,7 +356,7 @@ const ContentRow = ({ g, onAi, onManual, onIgnore }: { g: IssueGroup; onAi: Pane
                     <button type="button" onClick={() => setOpen((o) => !o)} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-grey hover:bg-lavender-mist dark:hover:bg-dark-3" aria-label="Toggle"><Icon name="arrow-down" className={`h-4 w-4 fill-current transition-transform ${open ? "" : "-rotate-90"}`} /></button>
                 ) : <span className="w-7 shrink-0" aria-hidden />}
                 <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${meta.tint}`}><Icon name={meta.icon} className={`h-5 w-5 ${meta.fill}`} /></span>
-                <div className="min-w-0 flex-1"><p className="text-body-sm font-semibold text-black dark:text-white">{meta.title}</p><p className="truncate text-caption-2 text-grey">{g.explanation}</p></div>
+                <div className="min-w-0 flex-1"><p className="text-body-sm font-semibold text-black dark:text-white">{meta.title}</p><p className="truncate text-caption-2 text-grey">{g.explanation}</p>{coverageNote("Coverage", g.checked != null && g.total != null ? { checked: g.checked, total: g.total } : null) && <p className="text-caption-2 text-grey">{coverageNote("Coverage", { checked: g.checked!, total: g.total! })}</p>}</div>
                 <span className="hidden shrink-0 text-caption-2 text-grey sm:block">{g.count} issue{g.count === 1 ? "" : "s"}</span>
                 <div className="flex shrink-0 items-center gap-2">
                     {expandable && <button type="button" onClick={() => setOpen((o) => !o)} className="btn-secondary btn-sm">Review</button>}

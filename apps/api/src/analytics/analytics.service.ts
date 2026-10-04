@@ -4,6 +4,7 @@ import { Integration, IntegrationType } from "@flowcms/db";
 import { decryptSecret, encryptSecret } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { ConnectAnalyticsDto } from "./dto";
+import { buildOverview, SYNC_DAYS, type Snap } from "./analytics-math";
 
 const GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
 const GA4_SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
@@ -44,14 +45,21 @@ export class AnalyticsService {
 
     /** Connect status for the dashboard (which sources, last sync). */
     async status(workspaceId: string) {
-        const rows = await this.prisma.integration.findMany({
-            where: { workspaceId, type: { in: [IntegrationType.SEARCH_CONSOLE, IntegrationType.ANALYTICS] } },
-        });
+        const [rows, counts] = await Promise.all([
+            this.prisma.integration.findMany({
+                where: { workspaceId, type: { in: [IntegrationType.SEARCH_CONSOLE, IntegrationType.ANALYTICS] } },
+            }),
+            this.prisma.metricSnapshot.groupBy({ by: ["source"], where: { workspaceId }, _count: { _all: true } }),
+        ]);
         const map = (provider: string) => {
             const i = rows.find((r) => r.provider === provider);
-            return i
-                ? { connected: i.status === "CONNECTED", status: i.status, lastSync: i.lastCheckedAt, config: i.config }
-                : { connected: false, status: "DISCONNECTED" as const, lastSync: null, config: null };
+            const stored = counts.find((c) => c.source === provider)?._count._all ?? 0;
+            if (!i) return { connected: false, status: "DISCONNECTED" as const, lastSync: null, rows: stored, config: null };
+            // lastCheckedAt also moves on connect, so the real sync time lives in config
+            // (integrations synced before that was recorded fall back to lastCheckedAt).
+            const at = (i.config as { lastSyncAt?: string } | null)?.lastSyncAt;
+            const lastSync = at ? new Date(at) : stored > 0 ? i.lastCheckedAt : null;
+            return { connected: i.status === "CONNECTED", status: i.status, lastSync, rows: stored, config: i.config };
         };
         return { gsc: map("gsc"), ga4: map("ga4") };
     }
@@ -64,14 +72,24 @@ export class AnalyticsService {
 
         let status: Integration["status"] = "CONNECTED";
         let lastError: string | null = null;
+        let found: string | null = null;
+        let siteUrl = dto.siteUrl ?? null;
         try {
-            await this.accessToken(sa, m.scope); // validates the credentials
+            // A token only proves the key is valid; read the property itself so a service
+            // account that was never granted access doesn't end up "Connected".
+            const token = await this.accessToken(sa, m.scope);
+            if (dto.type === "gsc") {
+                siteUrl = await this.findGscSite(token, dto.siteUrl!);
+                found = `Search Console property ${siteUrl}`;
+            } else {
+                found = await this.verifyGa4(token, dto.propertyId!);
+            }
         } catch (e) {
             status = "ERROR";
             lastError = e instanceof Error ? e.message : "Could not authenticate.";
         }
 
-        const config = { siteUrl: dto.siteUrl ?? null, propertyId: dto.propertyId ?? null, lastError };
+        const config = { siteUrl, propertyId: dto.propertyId ?? null, lastError };
         const existing = await this.prisma.integration.findFirst({ where: { workspaceId, provider: m.provider } });
         const data = {
             type: m.itype,
@@ -87,7 +105,12 @@ export class AnalyticsService {
             ? await this.prisma.integration.update({ where: { id: existing.id }, data })
             : await this.prisma.integration.create({ data: { workspaceId, ...data } });
 
-        return { ok: status === "CONNECTED", status, error: lastError, id: saved.id };
+        if (status !== "CONNECTED") return { ok: false, status, error: lastError, id: saved.id, found, rows: 0 };
+        // Pull data straight away so the dashboard isn't empty until someone clicks "Sync now".
+        const { results } = await this.sync(workspaceId, SYNC_DAYS, m.provider);
+        const error = results[m.provider] === "ok" ? null : results[m.provider].replace(/^error: /, "");
+        const rows = await this.prisma.metricSnapshot.count({ where: { workspaceId, source: m.provider } });
+        return { ok: !error, status: error ? ("ERROR" as const) : status, error, id: saved.id, found, rows };
     }
 
     async disconnect(workspaceId: string, provider: "gsc" | "ga4") {
@@ -96,20 +119,26 @@ export class AnalyticsService {
     }
 
     /** Pull the last `days` of data from connected sources into MetricSnapshot. */
-    async sync(workspaceId: string, days = 90) {
+    async sync(workspaceId: string, days = SYNC_DAYS, only?: string) {
         const rows = await this.prisma.integration.findMany({
-            where: { workspaceId, type: { in: [IntegrationType.SEARCH_CONSOLE, IntegrationType.ANALYTICS] } },
+            where: { workspaceId, type: { in: [IntegrationType.SEARCH_CONSOLE, IntegrationType.ANALYTICS] }, ...(only ? { provider: only } : {}) },
         });
         if (rows.length === 0) throw new BadRequestException("Connect Search Console or Analytics first.");
 
         const results: Record<string, string> = {};
         for (const integ of rows) {
             try {
-                if (integ.provider === "gsc") await this.syncGsc(workspaceId, integ, days);
+                // syncGsc returns the property string Google accepts (corrected if needed).
+                const site = integ.provider === "gsc" ? await this.syncGsc(workspaceId, integ, days) : undefined;
                 if (integ.provider === "ga4") await this.syncGa4(workspaceId, integ, days);
+                const now = new Date();
                 await this.prisma.integration.update({
                     where: { id: integ.id },
-                    data: { status: "CONNECTED", lastCheckedAt: new Date() },
+                    data: {
+                        status: "CONNECTED",
+                        lastCheckedAt: now,
+                        config: { ...(integ.config as object), ...(site ? { siteUrl: site } : {}), lastError: null, lastSyncAt: now.toISOString() },
+                    },
                 });
                 results[integ.provider] = "ok";
             } catch (e) {
@@ -130,7 +159,7 @@ export class AnalyticsService {
         const token = await this.accessToken(sa, GSC_SCOPE);
         const config = (integ.config ?? {}) as { siteUrl?: string };
         if (!config.siteUrl) throw new Error("Missing site URL.");
-        const site = await this.resolveGscSite(token, config.siteUrl, integ.id, config);
+        const site = await this.findGscSite(token, config.siteUrl);
         const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`;
         const startDate = daysAgo(days);
         const endDate = daysAgo(1);
@@ -184,20 +213,16 @@ export class AnalyticsService {
             this.prisma.metricSnapshot.deleteMany({ where: { workspaceId, source: "gsc" } }),
             ...(snapshots.length ? [this.prisma.metricSnapshot.createMany({ data: snapshots })] : []),
         ]);
+        return site;
     }
 
     /**
      * Search Console is picky about the exact property string. Rather than make
      * the user guess between `https://site.com`, `https://site.com/`, and
      * `sc-domain:site.com`, we ask Google which properties this service account
-     * can actually see and match by hostname — then persist the corrected form.
+     * can actually see and match by hostname. The caller persists the corrected form.
      */
-    private async resolveGscSite(
-        token: string,
-        configured: string,
-        integId: string,
-        config: { siteUrl?: string },
-    ): Promise<string> {
+    private async findGscSite(token: string, configured: string): Promise<string> {
         const res = await fetch("https://searchconsole.googleapis.com/webmasters/v3/sites", {
             headers: { Authorization: `Bearer ${token}` },
         });
@@ -232,13 +257,23 @@ export class AnalyticsService {
                     : `This service account isn't added to any Search Console property yet. In Search Console → Settings → Users and permissions, add the service-account email as an Owner, then sync again.`,
             );
         }
-
-        // Persist the corrected form so future syncs skip this lookup.
-        await this.prisma.integration.update({
-            where: { id: integId },
-            data: { config: { ...config, siteUrl: match } },
-        });
         return match;
+    }
+
+    /** Read the GA4 property's metadata: 403s unless the service account was granted access. */
+    private async verifyGa4(token: string, propertyId: string): Promise<string> {
+        const res = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${encodeURIComponent(propertyId)}/metadata`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+            const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+            throw new Error(
+                res.status === 403 || res.status === 404
+                    ? `This service account can't read GA4 property ${propertyId}. In GA4 Admin, Property access management, add the service-account email as a Viewer, and check the property ID.`
+                    : (data?.error?.message ?? `GA4 HTTP ${res.status}`),
+            );
+        }
+        return `GA4 property ${propertyId}`;
     }
 
     private async syncGa4(workspaceId: string, integ: Integration, days: number) {
@@ -363,49 +398,25 @@ export class AnalyticsService {
         ]);
     }
 
-    /** Aggregated metrics for the dashboard. Empty (connected:false) until synced. */
+    /** Aggregated metrics for the dashboard: the last `days` and the equal period
+     *  before it. Empty (hasData:false) until synced. */
     async overview(workspaceId: string, days = 30) {
-        const since = new Date(Date.now() - days * 86_400_000);
-        const snaps = await this.prisma.metricSnapshot.findMany({
-            where: { workspaceId, date: { gte: since } },
-            orderBy: { date: "asc" },
+        // A sync replaces every row for its source, so the table holds one sync's worth.
+        const [snaps, status] = await Promise.all([
+            this.prisma.metricSnapshot.findMany({ where: { workspaceId } }),
+            this.status(workspaceId),
+        ]);
+        const connected = status.gsc.connected || status.ga4.connected;
+        const built = buildOverview(snaps as Snap[], days);
+        if (!built) return { connected, hasData: false, status, syncedDays: SYNC_DAYS };
+        return { connected: true, hasData: true, status, days, syncedDays: SYNC_DAYS, ...built };
+    }
+
+    /** Workspaces with a Search Console or GA4 connection, for the daily sync. */
+    async syncTargets() {
+        return this.prisma.integration.findMany({
+            where: { type: { in: [IntegrationType.SEARCH_CONSOLE, IntegrationType.ANALYTICS] } },
+            select: { workspaceId: true, provider: true, config: true },
         });
-        const status = await this.status(workspaceId);
-        if (snaps.length === 0) {
-            return { connected: status.gsc.connected || status.ga4.connected, hasData: false, status };
-        }
-
-        const daily = (source: string, metric: string) =>
-            snaps
-                .filter((s) => s.source === source && s.metric === metric && !s.dimension)
-                .map((s) => ({ date: ymd(s.date), value: s.value }));
-        const sum = (rows: { value: number }[]) => rows.reduce((a, b) => a + b.value, 0);
-        const avg = (rows: { value: number }[]) => (rows.length ? sum(rows) / rows.length : 0);
-
-        const clicks = daily("gsc", "clicks");
-        const impressions = daily("gsc", "impressions");
-        const sessions = daily("ga4", "sessions");
-        const top = (dimension: string) =>
-            snaps
-                .filter((s) => s.source === "gsc" && s.dimension === dimension && s.metric === "clicks")
-                .sort((a, b) => b.value - a.value)
-                .slice(0, 10)
-                .map((s) => ({ label: s.dimensionValue ?? "", clicks: s.value }));
-
-        return {
-            connected: true,
-            hasData: true,
-            status,
-            totals: {
-                clicks: sum(clicks),
-                impressions: sum(impressions),
-                ctr: avg(daily("gsc", "ctr")),
-                position: avg(daily("gsc", "position")),
-                sessions: sum(sessions),
-            },
-            series: { clicks, impressions, sessions },
-            topQueries: top("query"),
-            topPages: top("page"),
-        };
     }
 }

@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
-import { isHomeType, routePrefixForType } from "./route-path";
+import { isHomeType, isPageType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
 import { normalizeSchemaFields, toCamelCase, toLowerId, buildEntryKeyRemap } from "./naming";
 import { migrateRepeatable, repeatableFlipped } from "./component-shape";
@@ -72,6 +72,12 @@ export class ContentTypesService {
             slugPattern: s.slugPattern ?? null,
             // Free-form page: the editor shows the Body editor even with no body field.
             freeFormBody: s.freeFormBody === true,
+            // Whether entries of this type are pages on the public site (SEO audit, crawl,
+            // "View live"). Defaults on, except reference types with no URL pattern.
+            isPage: isPageType(t),
+            // True once someone set the flag by hand. Until then it follows the default,
+            // so adding a URL pattern to a reference type turns it on.
+            isPageSet: typeof (s as { isPage?: unknown }).isPage === "boolean",
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at

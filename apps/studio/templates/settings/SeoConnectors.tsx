@@ -10,7 +10,7 @@ import { helpUrl, GUIDES } from "@/lib/help";
 import { confirm } from "@/components/providers/ConfirmProvider";
 
 type Status = {
-    pagespeed: { connected: boolean };
+    pagespeed: { connected: boolean; needsKey?: boolean };
     keyword: { connected: boolean; config: { preset?: string; baseUrl?: string } | null };
     aeo: { connected: boolean; config: { baseUrl?: string } | null };
 };
@@ -87,7 +87,11 @@ const SeoConnectors = () => {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <ConnectorCard
                     name="PageSpeed Insights"
-                    desc="Live Core Web Vitals (LCP / INP / CLS). Free Google API key."
+                    desc={
+                        status?.pagespeed.needsKey
+                            ? "PageSpeed runs are being refused: Google's shared quota is used up. Add a free Google API key to keep measuring."
+                            : "Core Web Vitals and Lighthouse scores, mobile and desktop. Works without a key until Google's shared quota runs out; a free API key lifts that."
+                    }
                     connected={psConnected}
                     onConnect={() => open("pagespeed")}
                     onDisconnect={() => disconnect("pagespeed", "PageSpeed")}

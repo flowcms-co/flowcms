@@ -12,6 +12,14 @@ export type Workspace = {
     defaultLocale: string;
     onboardedAt: string | null;
     previewUrl: string | null;
+    /** Public site origin (https://example.com): SEO crawl, PageSpeed, "View live". */
+    siteUrl?: string | null;
+    /** IANA time zone the dashboards use for "today" and weeks. */
+    timezone?: string;
+    /** The stored zone when it is not a valid IANA name (UTC is used instead). */
+    timezoneInvalid?: string | null;
+    /** Most requests per second the SEO audit and crawler send to the site. */
+    seoCrawlRps?: number;
     /** Who an entry's author is: its creator, or whoever last edited the content. */
     authorMode: "creator" | "lastEditor";
     /** White-label (applied only when licensed for `white_label`). */

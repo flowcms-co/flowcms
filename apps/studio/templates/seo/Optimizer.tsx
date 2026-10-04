@@ -14,6 +14,7 @@ import { api } from "@/lib/api";
 import { useSeoFixMode } from "@/lib/seoPrefs";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { useJobs } from "@/components/providers/JobsProvider";
+import { coverageNote, type Coverage } from "@/lib/seoDash";
 import { useRevealBatch } from "@/lib/useReveal";
 import FileGenModal from "@/templates/seo/FileGenModal";
 import InternalLinksModal from "@/templates/seo/InternalLinksModal";
@@ -52,7 +53,9 @@ type IssueGroup = {
 type CategoryMeta = { key: string; label: string; count: number };
 type IssuesResult = {
     score: number | null;
-    counts: { total: number; pages: number; aiFixable: number; clean: number };
+    counts: { total: number; pages: number; aiFixable: number; clean: number; notChecked?: number };
+    coverage?: { duplicates: Coverage; links: Coverage };
+    nonPageTypes?: { id: string; name: string; published: number; hasPattern: boolean }[];
     categories: CategoryMeta[];
     groups: IssueGroup[];
     quickWins: IssueGroup[];
@@ -142,7 +145,7 @@ type SortKey = "priority" | "effort" | "pages";
 const Optimizer = () => {
     const router = useRouter();
     const { has } = usePlan();
-    const { enqueue } = useJobs();
+    const { enqueue, jobs } = useJobs();
     const [fixMode, setFixMode] = useSeoFixMode();
     const autoUnlocked = has("seo_automation");
 
@@ -214,15 +217,29 @@ const Optimizer = () => {
         setRunning(true);
         setError("");
         try {
-            await api("/seo/scan/run", { method: "POST" });
-            const d = await load(); // computes deltas vs the previous audit's baseline
-            if (d) { const now = new Date().toISOString(); writeSnap(d.counts, now); setLastRunAt(now); }
+            // A background job: with a site URL every page's live HTML is fetched,
+            // which takes longer than a request should on a large site.
+            const job = await enqueue("/seo/scan/jobs/run", {}, "Audit pages");
+            if (!job?.id) throw new Error("not queued");
+            setAuditJob(job.id);
         } catch {
             setError("Couldn't run the audit.");
-        } finally {
             setRunning(false);
         }
     };
+    // Reload the issues when the audit job finishes.
+    const [auditJob, setAuditJob] = useState<string | null>(null);
+    const auditStatus = jobs.find((j) => j.id === auditJob)?.status;
+    useEffect(() => {
+        if (!auditJob || !auditStatus || auditStatus === "QUEUED" || auditStatus === "RUNNING") return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- state is set after the job finishes, not during render
+        void (auditStatus === "FAILED" ? Promise.resolve(null) : load()).then((d) => {
+            if (d) { const now = new Date().toISOString(); writeSnap(d.counts, now); setLastRunAt(now); }
+            else if (auditStatus === "FAILED") setError("The audit failed.");
+            setAuditJob(null);
+            setRunning(false);
+        });
+    }, [auditJob, auditStatus]);
 
     const toggleAuto = async (next: boolean) => {
         if (!auto) return;
@@ -241,6 +258,13 @@ const Optimizer = () => {
     const issuesTotal = data?.counts.total ?? 0;
     const aiFixableCount = data?.counts.aiFixable ?? 0;
     const cleanPages = data?.counts.clean ?? 0;
+    const notChecked = data?.counts.notChecked ?? 0;
+    const auditNotes = [
+        notChecked > 0 ? `${notChecked.toLocaleString("en-US")} page${notChecked === 1 ? " was" : "s were"} not checked: the site answered "too many requests" or a server error. They are not counted as clean and will be retried.` : null,
+        coverageNote("Duplicate content", data?.coverage?.duplicates),
+        coverageNote("Internal links", data?.coverage?.links),
+        ...(data?.nonPageTypes ?? []).map((t) => `${t.name}: ${t.published.toLocaleString("en-US")} published entr${t.published === 1 ? "y is" : "ies are"} not audited because the type is not marked as pages${t.hasPattern ? " (it has a URL pattern, so this may be a mistake)" : ""}.`),
+    ].filter((n): n is string => !!n);
     const lastRunLabel = relTime(lastRunAt ?? auto?.lastFullScanAt ?? auto?.lastIncrementalScanAt ?? null);
 
     // Count of deterministic "safe" fixes pending (drives the auto-apply button label).
@@ -393,6 +417,19 @@ const Optimizer = () => {
                     </Card>
                 </div>
             </div>
+
+            {/* ---------- what this audit did not cover, said plainly ---------- */}
+            {auditNotes.length > 0 && (
+                <Card reveal={false} className="!p-5">
+                    <h3 className="mb-2 font-poppins text-title font-semibold text-black dark:text-white">Not covered by this audit</h3>
+                    <ul className="flex list-disc flex-col gap-1.5 pl-5 text-caption-1 leading-relaxed text-grey">
+                        {auditNotes.map((n) => <li key={n}>{n}</li>)}
+                    </ul>
+                    {(data?.nonPageTypes?.length ?? 0) > 0 && (
+                        <Link href="/settings/content" className="mt-3 inline-flex text-caption-1 font-semibold text-primary hover:opacity-70 dark:text-lilac">Review page settings in the Schema Builder →</Link>
+                    )}
+                </Card>
+            )}
 
             {/* ---------- fix application + automatic AI auditing (mockup) ---------- */}
             <div className="grid gap-4 lg:grid-cols-2">

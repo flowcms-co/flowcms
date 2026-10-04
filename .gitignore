@@ -44,9 +44,10 @@ graphify-out/
 
 # internal docs — kept local, never published to the public repo
 # (business strategy, security audit, handovers, status, roadmaps, planning, etc.)
-# Exception: the public deploy guide is shipped.
+# Exceptions: the public deploy guide and the crawler guide are shipped.
 docs/*
 !docs/DEPLOY.md
+!docs/SEO-CRAWLER.md
 
 # AI-assistant tooling / config — not part of the product
 CLAUDE.md

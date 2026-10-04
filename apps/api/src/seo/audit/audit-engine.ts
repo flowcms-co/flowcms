@@ -41,7 +41,22 @@ export interface PageInput {
     jsonLd?: Record<string, unknown>[];
     /** Pre-fetched Core Web Vitals (free PSI data). */
     vitals?: { lcpMs?: number; cls?: number; inpMs?: number };
-    tech?: { redirectChain?: string[]; canonical?: string | null; noindex?: boolean };
+    tech?: { redirectChain?: string[]; canonical?: string | null; noindex?: boolean; unreachable?: number };
+    /** The title still holds a {token} the frontend fills in, so its length is unknown. */
+    titleTemplated?: boolean;
+    /** The description comes from somewhere else (a parent entry, or a live page that
+     *  could not be read), so an empty own field is not "missing". */
+    descriptionInherited?: boolean;
+}
+
+/** What the audit read from the rendered page at its public URL. */
+export interface LiveFacts {
+    status: number;
+    title: string;
+    description: string;
+    canonical: string;
+    noindex: boolean;
+    ldTypes: string[];
 }
 
 /** One GSC/GA row (pre-fetched free data) for the analysis task. */
@@ -95,14 +110,14 @@ export function detectMeta(p: PageInput): Finding[] {
     const out: Finding[] = [];
     const t = (p.metaTitle ?? "").trim();
     if (!t) out.push(mk("META_TITLE_MISSING"));
-    else {
+    else if (!p.titleTemplated) {
         if (t.length > 60) out.push(mk("META_TITLE_LONG", { len: t.length, cur: t, rec: trimMeta(t, 60), recLen: trimMeta(t, 60).length }));
         else if (t.length < 30) out.push(mk("META_TITLE_SHORT", { len: t.length, cur: t }));
         if (p.focusKeyword && !t.toLowerCase().includes(p.focusKeyword.toLowerCase()))
             out.push(mk("META_TITLE_NO_KEYWORD", { kw: p.focusKeyword, cur: t }));
     }
     const d = (p.metaDescription ?? "").trim();
-    if (!d) out.push(mk("META_DESC_MISSING"));
+    if (!d) { if (!p.descriptionInherited) out.push(mk("META_DESC_MISSING")); }
     else if (d.length > 160) out.push(mk("META_DESC_LONG", { len: d.length, cur: d, rec: trimMeta(d, 160), recLen: trimMeta(d, 160).length }));
     return out;
 }
@@ -160,6 +175,7 @@ export function detectTech(p: PageInput): Finding[] {
     const t = p.tech;
     if (!t) return [];
     const out: Finding[] = [];
+    if (t.unreachable !== undefined) out.push(mk("TECH_PAGE_UNREACHABLE", { status: t.unreachable || "no response" }));
     if (t.noindex) out.push(mk("TECH_NOINDEX"));
     if (t.redirectChain && t.redirectChain.length > 1) out.push(mk("TECH_REDIRECT_CHAIN", { hops: t.redirectChain.length }));
     if (t.canonical === null) out.push(mk("TECH_CANONICAL_MISSING"));
@@ -349,6 +365,8 @@ export function contentHash(p: PageInput): string {
         j: p.jsonLd ?? null,
         c: p.tech?.canonical ?? null,
         n: p.tech?.noindex ?? false,
+        u: p.url ?? "",
+        x: [p.tech?.unreachable ?? null, !!p.titleTemplated, !!p.descriptionInherited],
     });
     let h = 2166136261;
     for (let i = 0; i < norm.length; i++) {

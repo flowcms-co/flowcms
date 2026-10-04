@@ -87,6 +87,17 @@ function buildReferencePath(pattern: string, slug?: string | null, locale?: stri
     return p || "/";
 }
 
+/** Whether a type's entries are pages on the public site (so they are audited,
+ *  crawled and get a "View live" link). The explicit schema.isPage flag wins. Unset,
+ *  everything is a page except reusable components and reference types with no URL
+ *  pattern (cities or tags that only feed other pages). */
+export function isPageType(t: TypeIds & { kind?: string | null }): boolean {
+    if (t.kind === "COMPONENT") return false;
+    const flag = t.schema && typeof t.schema === "object" ? (t.schema as { isPage?: unknown }).isPage : undefined;
+    if (typeof flag === "boolean") return flag;
+    return !(isReferenceType(t) && !routePatternOf(t));
+}
+
 /** Whether a content type represents the site homepage (root, slug-less). An
  *  explicit page type wins: "home" is the root; any other preset is never the home.
  *  Legacy types (no preset) fall back to name-based detection. */

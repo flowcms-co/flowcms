@@ -6,26 +6,33 @@ import { AiService } from "../../ai/ai.service";
 import { SeoService } from "../seo.service";
 import { SeoAuditService } from "./seo-audit.service";
 import { entryToCanonicalContent } from "../../content/canonical-content";
+import { SitePagesService, absoluteUrl } from "../site-pages.service";
 
 type BatchPayload = { fix: string; key: string; pages: { id: string; url: string | null }[] };
 
-function applyAlts(body: string, alts: { src: string; alt: string }[]): string {
-    let b = body;
-    for (const a of alts) {
-        if (!a.alt?.trim()) continue;
-        const safe = a.src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const tagRe = new RegExp(`(<img\\b[^>]*src\\s*=\\s*["']${safe}["'][^>]*>)`, "i");
-        b = b.replace(tagRe, (tag) => /alt\s*=/.test(tag)
-            ? tag.replace(/alt\s*=\s*["'][^"']*["']/i, `alt="${a.alt.replace(/"/g, "&quot;")}"`)
-            : tag.replace(/<img\b/i, `<img alt="${a.alt.replace(/"/g, "&quot;")}"`));
-    }
-    return b;
+/** The audit job's one-line result: pages checked, skipped (unchanged) and failed. */
+export function auditSummary(r: { scanned: number; checked: number; unchanged: number; notChecked: number; failed: number }): string {
+    const parts = [`Checked ${r.checked} of ${r.scanned} page${r.scanned === 1 ? "" : "s"}`, `${r.unchanged} unchanged`];
+    if (r.notChecked) parts.push(`${r.notChecked} not checked (rate limited, will retry)`);
+    if (r.failed) parts.push(`${r.failed} failed`);
+    return parts.join(", ");
+}
+
+/** Which meta fields a fix may write. A field the entry leaves empty while the
+ *  live page (or a parent entry) supplies a value is inherited from a template:
+ *  writing it would override the template on the live site, so it is left alone. */
+export function writableMeta(own: { metaTitle?: unknown; metaDescription?: unknown }, live: { title?: string; description?: string } | null): { title: boolean; description: boolean } {
+    const has = (v: unknown) => typeof v === "string" && v.trim() !== "";
+    return {
+        title: has(own.metaTitle) || !live?.title?.trim(),
+        description: has(own.metaDescription) || !live?.description?.trim(),
+    };
 }
 
 /**
  * SEO background-job handlers. `seo.autoApplySafe` applies all deterministic, free,
- * lossless fixes across the workspace (self-canonical, remove-noindex, internal
- * links). `seo.batchFix` runs one issue group's per-page fix (AI for meta/schema/
+ * lossless fixes across the workspace (self-canonical as an absolute URL,
+ * remove-noindex, internal links). `seo.batchFix` runs one issue group's per-page fix (AI for meta/schema/
  * alt/content, deterministic for canonical/noindex), reusing the same services the
  * single-fix modals call, and records accepted meta/schema fixes into The Brain.
  */
@@ -38,11 +45,34 @@ export class SeoJobHandlers implements OnModuleInit {
         private readonly ai: AiService,
         private readonly seo: SeoService,
         private readonly audit: SeoAuditService,
+        private readonly sitePages: SitePagesService,
     ) {}
 
     onModuleInit() {
         this.jobs.register("seo.autoApplySafe", (j, h) => this.autoApplySafe(j, h));
         this.jobs.register("seo.batchFix", (j, h) => this.batchFix(j, h));
+        this.jobs.register("seo.auditPages", (j, h) => this.auditPages(j, h));
+        this.jobs.register("seo.pagespeed", async (j) => {
+            await this.seo.refreshVitals(j.workspaceId);
+            return { summary: "PageSpeed results updated" };
+        });
+    }
+
+    /** Re-audit every page in the background (live pages are fetched, so a large
+     *  site takes longer than a request should). */
+    private async auditPages(job: JobRow, helpers: JobHelpers) {
+        let total = 0;
+        const r = await this.audit.auditWorkspace(job.workspaceId, async ({ done, total: n, notChecked }) => {
+            if (!total) await helpers.setTotal((total = n));
+            if (done % 5 === 0 || done === n) await helpers.progress(done - notChecked, notChecked, notChecked ? "Rate limited by the site, will retry" : undefined);
+        });
+        return { summary: auditSummary(r), result: r };
+    }
+
+    /** A page's canonical as an absolute URL (site URL + real path), or null when
+     *  the workspace has no site URL: a relative "/slug" canonical is wrong. */
+    private canonicalFor(site: string | null, path: string | null): string | null {
+        return site && path ? absoluteUrl(site, path) : null;
     }
 
     /** Apply every deterministic, free fix across the workspace. */
@@ -53,7 +83,9 @@ export class SeoJobHandlers implements OnModuleInit {
         const noindex = groups.find((g) => g.key === "TECH_NOINDEX");
         const links = groups.find((g) => g.key === "INTERNAL_LINK_OPP" || g.fix === "links");
 
-        const canonPages = (canon?.pages ?? []).filter((p) => p.id && p.url);
+        // Canonicals need the site URL to be absolute; without one the fix is skipped.
+        const site = await this.sitePages.siteUrl(job.workspaceId);
+        const canonPages = site ? (canon?.pages ?? []).filter((p) => p.id && p.url) : [];
         const noindexPages = (noindex?.pages ?? []).filter((p) => p.id);
         const linkOps = links ? (await this.seo.internalLinks(job.workspaceId)).opportunities : [];
 
@@ -63,7 +95,7 @@ export class SeoJobHandlers implements OnModuleInit {
         const bump = async () => helpers.progress(done, failed);
 
         for (const p of canonPages) {
-            try { await this.entries.update(job.workspaceId, p.id!, { data: { canonical: p.url } }, job.userId); done++; }
+            try { await this.entries.update(job.workspaceId, p.id!, { data: { canonical: this.canonicalFor(site, p.url) } }, job.userId); done++; }
             catch { failed++; }
             await bump();
         }
@@ -110,13 +142,20 @@ export class SeoJobHandlers implements OnModuleInit {
         const patch: Record<string, unknown> = {};
 
         if (key === "TECH_CANONICAL_MISSING") {
-            patch.canonical = url || "/";
+            const canonical = this.canonicalFor(await this.sitePages.siteUrl(workspaceId), url);
+            if (!canonical) throw new Error("Set the site URL in Settings to write canonicals");
+            patch.canonical = canonical;
         } else if (key === "TECH_NOINDEX") {
             patch.robots = String(d.robots ?? "").replace(/noindex/gi, "").replace(/\s+/g, " ").trim();
         } else if (fix === "meta") {
             const r = await this.seo.suggestMeta(workspaceId, userId, { path: url, title: String(d.metaTitle ?? title), description: String(d.metaDescription ?? d.summary ?? "") });
-            if (r.title) patch.metaTitle = r.title;
-            if (r.description) patch.metaDescription = r.description;
+            // Inherited values stay inherited (a city page using its service's template).
+            const audited = await this.prisma.pageAudit.findUnique({ where: { workspaceId_target_task: { workspaceId, target: id, task: "page" } }, select: { live: true } });
+            const live = audited?.live as { status?: number; title?: string; description?: string } | null;
+            const can = writableMeta(d, live?.status === 200 ? live : null);
+            if (r.title && can.title) patch.metaTitle = r.title;
+            if (r.description && can.description) patch.metaDescription = r.description;
+            if (!Object.keys(patch).length) throw new Error("Title and description are inherited from a template");
             await this.seo.recordLearning(workspaceId, { kind: "meta", path: url, after: { title: r.title, description: r.description } }).catch(() => undefined);
         } else if (fix === "schema" || fix === "faq") {
             const r = await this.seo.suggestSchema(workspaceId, userId, { path: url, title, description: String(d.summary ?? d.metaDescription ?? ""), body: entryToCanonicalContent({ data: d }).plainText.slice(0, 800), kind: fix === "faq" ? "faq" : "auto" });
@@ -127,7 +166,10 @@ export class SeoJobHandlers implements OnModuleInit {
             const r = await this.audit.generatePageAlt(workspaceId, userId, id);
             const sugg = (r.suggestions ?? []).filter((s) => s.alt?.trim());
             if (!sugg.length) throw new Error("No alt generated");
-            patch.body = applyAlts(String(d.body ?? ""), sugg);
+            // Write each alt where the page keeps it (paired alt fields, rich text,
+            // body). With no such place the alt lives on the asset, already saved.
+            Object.assign(patch, await this.audit.altPatch(workspaceId, id, sugg));
+            if (!Object.keys(patch).length) return;
         } else {
             // content rewrite (thin / readability / duplicate / headings)
             const instruction =

@@ -2,11 +2,14 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/commo
 import { PrismaService } from "../../prisma/prisma.service";
 import { RedisService } from "../../redis/redis.service";
 import { SeoAuditService } from "./seo-audit.service";
+import { isPageType } from "../../content/route-path";
 
 const PAGE = "page";
 const TICK_MS = Number(process.env.SEO_DRIP_TICK_MS) || 60_000; // re-check stale pages every minute
 const BATCH = Number(process.env.SEO_DRIP_BATCH) || 10; // small batch per tick -> no CPU spike
-const CANDIDATES = BATCH * 6; // how many recent published entries to consider per tick
+// How many recent published entries to consider per tick. Entries of non-page types
+// (cities, tags) are filtered out afterwards, so look well past one batch.
+const CANDIDATES = BATCH * 30;
 
 /**
  * Deterministic L1 drip (Phase 3). A throttled background ticker that re-audits
@@ -48,19 +51,23 @@ export class SeoDripService implements OnModuleInit, OnModuleDestroy {
             // Already idempotent (contentHash change-detection), but the lease
             // avoids two instances re-auditing the same batch and wasting CPU.
             if (!(await this.redis.tryAcquire("sched:seo-drip", TICK_MS - 5_000))) return;
-            const candidates = await this.prisma.contentEntry.findMany({
-                where: { status: "PUBLISHED" },
-                select: { id: true, workspaceId: true, updatedAt: true },
-                orderBy: { updatedAt: "desc" },
-                take: CANDIDATES,
-            });
+            const candidates = (
+                await this.prisma.contentEntry.findMany({
+                    where: { status: "PUBLISHED" },
+                    select: { id: true, workspaceId: true, updatedAt: true, contentType: { select: { kind: true, schema: true, apiId: true, name: true } } },
+                    orderBy: { updatedAt: "desc" },
+                    take: CANDIDATES,
+                })
+            ).filter((c) => isPageType(c.contentType));
             if (!candidates.length) return;
 
             const audits = await this.prisma.pageAudit.findMany({
                 where: { target: { in: candidates.map((c) => c.id) }, task: PAGE },
-                select: { target: true, lastCheckedAt: true },
+                select: { target: true, lastCheckedAt: true, live: true },
             });
-            const lastChecked = new Map(audits.map((a) => [a.target, a.lastCheckedAt]));
+            // A row marked "not checked" (the site answered 429/5xx) counts as never
+            // audited, so it is retried here.
+            const lastChecked = new Map(audits.filter((a) => !(a.live as { notChecked?: string } | null)?.notChecked).map((a) => [a.target, a.lastCheckedAt]));
 
             const stale = candidates
                 .filter((c) => {

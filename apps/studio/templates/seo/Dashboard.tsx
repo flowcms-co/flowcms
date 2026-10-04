@@ -17,17 +17,19 @@ import { useConnections } from "@/lib/useConnections";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { resolveBrand } from "@/lib/brands";
+import { emptyReason, type AnalyticsStatus } from "@/lib/trafficMath";
+import { dataSources, pillarText, ratingOf, scoreCta, speedExplainer, type ConnectorsStatus, type ScorePillar } from "@/lib/seoDash";
 
 /** Compact number: 1,240,000 → 1.24M · 124,800 → 124.8K · 512 → 512. */
 const fmtNum = (n: number) =>
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${Math.round(n)}`;
 
-type Kpi = { value: number; delta: number | null; goodWhenUp: boolean };
+type Kpi = { value: number; delta: number | null; goodWhenUp: boolean; spark?: number[] };
 type Summary = {
     hasData: boolean;
+    days?: number;
     kpis?: { clicks: Kpi; impressions: Kpi; ctr: Kpi; position: Kpi; sessions: Kpi; bounce: Kpi };
 };
-type ScorePillar = { key: string; label: string; source: string; weight: number; score: number | null; live: boolean };
 type ScoreResp = { hasData: boolean; score: number | null; pillars: ScorePillar[] };
 type IssuesResp = {
     score: number | null;
@@ -43,6 +45,8 @@ type RefDomain = { domain: string; sessions: number };
 type BacklinksResp = {
     hasData: boolean;
     source: "ga4" | "provider";
+    /** "Referral traffic" when the numbers are GA4 referral sessions, not backlinks. */
+    label?: string;
     provider?: string;
     metric: "sessions" | "backlinks";
     referringDomains: number;
@@ -89,15 +93,10 @@ const PLATFORM_COLOR: Record<string, string> = {
 };
 const platformColor = (name: string, i: number) => PLATFORM_COLOR[name] ?? ["#6C5CE7", "#3B82F6", "#00B894", "#E91E63", "#F5A623"][i % 5];
 
-const DATA_SOURCES = [
-    { label: "Google Search Console", icon: "search", color: "#4285F4" },
-    { label: "GA4", icon: "chart", color: "#E37400" },
-    { label: "PageSpeed Insights", icon: "overview", color: "#34A853" },
-    { label: "Site Crawler", icon: "compass", color: "#6C5CE7" },
-];
-
-const ratingOf = (s: number) =>
-    s >= 90 ? { label: "Excellent", color: "#00B894" } : s >= 75 ? { label: "Good", color: "#00B894" } : s >= 50 ? { label: "Fair", color: "#F5A623" } : { label: "Needs work", color: "#E24B4A" };
+const SOURCE_ICON: Record<string, { icon: string; color: string }> = {
+    "PageSpeed Insights": { icon: "overview", color: "#34A853" },
+    "Site Crawler": { icon: "compass", color: "#6C5CE7" },
+};
 
 /** Inline up/down delta chip (curved-square, no pill). */
 const DeltaChip = ({ good, dir, children }: { good: boolean; dir: "up" | "down"; children: React.ReactNode }) => (
@@ -137,7 +136,10 @@ const SeoDashboard = () => {
     const [aeo, setAeo] = useState<AeoResp | null>(null);
     const [rerunning, setRerunning] = useState(false);
     const [updatedLabel, setUpdatedLabel] = useState("just now");
-    const { connections: conn, loading: connLoading } = useConnections();
+    const [analytics, setAnalytics] = useState<AnalyticsStatus | null>(null);
+    const [connectors, setConnectors] = useState<ConnectorsStatus | null>(null);
+    const [vitals, setVitals] = useState<{ needsKey?: boolean; message?: string; refreshing?: boolean; pages?: { url: string; path: string; strategy: string; performance: number | null; error?: string }[] } | null>(null);
+    const { connections: conn, loading: connLoading, forbidden } = useConnections();
 
     const loadCore = useCallback(() => {
         api<Summary>("/seo/summary").then((d) => setSummary(d.hasData ? d : null)).catch(() => {});
@@ -147,6 +149,9 @@ const SeoDashboard = () => {
         api<BacklinksResp>("/seo/backlinks").then((d) => setBacklinks(d.hasData ? d : null)).catch(() => {});
         api<IssuesResp>("/seo/scan/issues").then(setIssues).catch(() => {}).finally(() => setIssuesLoaded(true));
         api<AeoResp>("/seo/aeo").then(setAeo).catch(() => {});
+        api<AnalyticsStatus>("/analytics/status").then(setAnalytics).catch(() => {});
+        api<ConnectorsStatus>("/seo/connectors").then(setConnectors).catch(() => {});
+        api<NonNullable<typeof vitals>>("/seo/vitals").then(setVitals).catch(() => {});
     }, []);
 
     useEffect(() => {
@@ -156,7 +161,8 @@ const SeoDashboard = () => {
     const refresh = async () => {
         if (rerunning) return;
         setRerunning(true);
-        // Re-run the crawl + speed test so the score recomputes, then reload everything.
+        // Re-run the crawl (awaited) and start a PageSpeed run (background; its
+        // results show on the next refresh), then reload everything.
         await Promise.all([
             api("/seo/audit?refresh=1").catch(() => {}),
             api("/seo/vitals?refresh=1").catch(() => {}),
@@ -191,7 +197,7 @@ const SeoDashboard = () => {
         const k = liveKpis?.[d.key];
         if (k) {
             const dir: "up" | "down" = (k.delta ?? 0) >= 0 ? "up" : "down";
-            return { ...d, value: d.fmt(k.value), deltaStr: k.delta == null ? null : `${Math.abs(k.delta)}%`, dir, good: (dir === "up") === d.goodWhenUp, spark: [] as number[] };
+            return { ...d, value: d.fmt(k.value), deltaStr: k.delta == null ? null : `${Math.abs(k.delta)}%`, dir, good: (dir === "up") === d.goodWhenUp, spark: k.spark ?? [] };
         }
         return { ...d, value: "—", deltaStr: null, dir: "up" as const, good: true, spark: [] as number[] };
     });
@@ -226,9 +232,14 @@ const SeoDashboard = () => {
                     { value: "—", label: "AI Visibility" },
                     { value: "—", label: "Queries Cited" },
                 ];
-    const platformRows: { name: string; sessions: number; change: number | null; color: string }[] = aiReferral
-        ? aiReferral.slice(0, 5).map((r, i) => ({ name: r.platform, sessions: r.sessions, change: null as number | null, color: platformColor(r.platform, i) }))
+    const platformRows: { name: string; sessions: number; color: string }[] = aiReferral
+        ? aiReferral.slice(0, 5).map((r, i) => ({ name: r.platform, sessions: r.sessions, color: platformColor(r.platform, i) }))
         : [];
+    // Why a card is empty: no access, not connected, never synced, or no data yet.
+    const noData = forbidden.seo || forbidden.analytics ? "No access" : emptyReason(analytics ?? undefined);
+    const cta = scoreCta(connectors?.site, forbidden.seo);
+    const speedPillar = pillars.find((p) => p.key === "speed");
+    const speedNote = speedExplainer(speedPillar?.detail);
     const maxAiSessions = Math.max(1, ...platformRows.map((r) => r.sessions));
 
     // ── Top pages / keywords (GSC) ──
@@ -271,7 +282,7 @@ const SeoDashboard = () => {
                     <div className="mb-2 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                             <h2 className="text-h5 text-black dark:text-white">SEO Health</h2>
-                            <LiveBadge live={scoreLive} source="FlowCMS score" />
+                            <LiveBadge live={scoreLive} source="FlowCMS score" reason={forbidden.seo ? "No access" : connectors && !connectors.site ? "No site URL" : "No score yet"} />
                         </div>
                     </div>
                     {!scoreLive ? (
@@ -280,9 +291,9 @@ const SeoDashboard = () => {
                                 <EmptyState
                                     variant="bare"
                                     icon="search"
-                                    title="No scan yet"
-                                    description="Run a site scan to see your SEO health."
-                                    action={{ label: "Run a scan", href: "/seo/optimizer" }}
+                                    title={cta.title}
+                                    description={vitals?.needsKey ? `${cta.description} ${vitals.message ?? ""}` : cta.description}
+                                    action={cta.href ? { label: cta.label!, href: cta.href } : undefined}
                                 />
                             </div>
                         )
@@ -301,12 +312,43 @@ const SeoDashboard = () => {
                                                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: c }} />
                                                     {p.label}
                                                 </span>
-                                                <CountUp value={p.score ?? 0} className="font-poppins text-h6 font-bold tabular-nums" style={{ color: c }} />
+                                                {p.score != null ? (
+                                                    <CountUp value={p.score} className="font-poppins text-h6 font-bold tabular-nums" style={{ color: c }} />
+                                                ) : (
+                                                    <span className="text-caption-1 text-grey">{pillarText(p).value} {pillarText(p).note}</span>
+                                                )}
                                             </div>
                                             <MetricBar percent={p.score ?? 0} color={c} trackClassName="h-2 rounded-full bg-lavender-mist dark:bg-grey-light/10" barClassName="rounded-full" />
+                                            {p.key === "speed" && p.detail && (
+                                                <div className="mt-2 text-caption-2 leading-relaxed text-grey">
+                                                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                                                        {p.detail.metrics.map((m) => (
+                                                            <span key={m.metric}>
+                                                                <span className="font-semibold text-black dark:text-white">{m.metric}</span> {m.value}
+                                                                {m.source === "lab" && !m.metric.includes("lab") ? " (lab)" : ""}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                    <div className="mt-1">{speedNote}</div>
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })}
+                                {vitals?.pages && vitals.pages.length > 1 && (
+                                    <details className="text-caption-2 text-grey">
+                                        <summary className="cursor-pointer text-primary hover:opacity-70 dark:text-lilac">PageSpeed by page{vitals.refreshing ? " (refreshing)" : ""}</summary>
+                                        <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-x-4 gap-y-1.5">
+                                            {vitals.pages.map((pg) => (
+                                                <div key={`${pg.strategy}:${pg.url}`} className="contents">
+                                                    <span className="min-w-0 truncate text-black dark:text-white">{pg.path}</span>
+                                                    <span>{pg.strategy}</span>
+                                                    <span className="text-right font-semibold text-black dark:text-white" title={pg.error}>{pg.performance ?? "unavailable"}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </details>
+                                )}
                             </div>
                         </div>
                     )}
@@ -317,7 +359,9 @@ const SeoDashboard = () => {
                     <div className="mb-4 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                             <h2 className="text-h5 text-black dark:text-white">Issues Snapshot</h2>
-                            <LiveBadge live={issuesLive} source="Crawler" />
+                            {/* The page audit (entry content plus each page's live HTML when a
+                                site URL is set), not the 40-URL site crawl. */}
+                            <LiveBadge live={issuesLive} source="Page audit" reason={forbidden.seo ? "No access" : "No audit yet"} />
                         </div>
                         <Link href="/seo/optimizer" className="text-caption-1 text-primary hover:opacity-70">View all issues →</Link>
                     </div>
@@ -327,9 +371,9 @@ const SeoDashboard = () => {
                                 <EmptyState
                                     variant="bare"
                                     icon="search"
-                                    title="No scan yet"
-                                    description="Run a site scan to see your SEO health."
-                                    action={{ label: "Run a scan", href: "/seo/optimizer" }}
+                                    title={issues ? "No issues found" : "No audit yet"}
+                                    description={issues && issues.counts.pages > 0 ? `${issues.counts.pages} pages audited, nothing to fix.` : "Run the page audit in the AI Optimizer to list issues."}
+                                    action={{ label: "Open AI Optimizer", href: "/seo/optimizer" }}
                                 />
                             </div>
                         )
@@ -387,7 +431,7 @@ const SeoDashboard = () => {
                             <StatNumber value={String(k.value)} className="block font-poppins text-[1.75rem] leading-none font-extrabold text-black dark:text-white" />
                             {k.deltaStr && <DeltaChip good={k.good} dir={k.dir}>{k.deltaStr}</DeltaChip>}
                         </div>
-                        <div className="mb-3 mt-1 text-caption-2 text-grey">vs previous 30 days</div>
+                        <div className="mb-3 mt-1 text-caption-2 text-grey">{k.deltaStr ? `vs previous ${summary?.days ?? 30} days` : `last ${summary?.days ?? 30} days`}</div>
                         <Sparkline data={k.spark} color={k.color} height={40} />
                     </Card>
                 ))}
@@ -408,7 +452,7 @@ const SeoDashboard = () => {
                 <Card className="!p-6">
                     <div className="mb-5 flex items-center gap-2">
                         <h2 className="text-h5 text-black dark:text-white">AI Search & Answer Engines</h2>
-                        <LiveBadge live={aiLive} source={aiSource} />
+                        <LiveBadge live={aiLive} source={aiSource} reason={noData} />
                     </div>
                     <div className="mb-7 grid grid-cols-3">
                         {aiStats.map((s, i) => (
@@ -419,10 +463,7 @@ const SeoDashboard = () => {
                     </div>
                     <div className="mb-3 flex items-center justify-between gap-2 text-caption-2">
                         <span className="font-semibold text-black dark:text-white">Traffic by platform</span>
-                        <span className="flex items-center gap-5 text-grey">
-                            <span className="w-12 text-right">Sessions</span>
-                            <span className="w-12 text-right">Change</span>
-                        </span>
+                        <span className="w-12 text-right text-grey">Sessions</span>
                     </div>
                     <div className="flex flex-col">
                         {platformRows.map((p) => (
@@ -433,16 +474,6 @@ const SeoDashboard = () => {
                                     <MetricBar percent={Math.round((p.sessions / maxAiSessions) * 100)} color={p.color} trackClassName="h-1.5 rounded-md bg-grey-light/70 dark:bg-grey-light/10" barClassName="rounded-md" />
                                 </div>
                                 <CountUp value={p.sessions} className="w-12 shrink-0 text-right text-caption-1 font-bold text-black dark:text-white" />
-                                <span className="flex w-12 shrink-0 items-center justify-end">
-                                    {p.change != null ? (
-                                        <span className="inline-flex items-center gap-0.5 text-caption-2 font-bold text-success">
-                                            <Icon className="h-3 w-3 rotate-180 fill-success" name="arrow-down" />
-                                            {p.change}%
-                                        </span>
-                                    ) : (
-                                        <span className="text-caption-2 text-grey">{aiLive ? "—" : `<1%`}</span>
-                                    )}
-                                </span>
                             </div>
                         ))}
                     </div>
@@ -461,8 +492,9 @@ const SeoDashboard = () => {
                 >
                 <Card className="!p-6">
                     <div className="mb-5 flex items-center gap-2">
-                        <h2 className="text-h5 text-black dark:text-white">Backlinks Overview</h2>
-                        <LiveBadge live={blLive} source={blProvider ? backlinks!.provider ?? "Provider" : "GA4"} />
+                        {/* Without a backlinks provider these are GA4 referral sessions, so say so. */}
+                        <h2 className="text-h5 text-black dark:text-white">{blProvider ? "Backlinks Overview" : "Referral traffic"}</h2>
+                        <LiveBadge live={blLive} source={blProvider ? backlinks!.provider ?? "Provider" : "GA4"} reason={noData} />
                     </div>
                     <div className="mb-7 grid grid-cols-3">
                         {blStats.map((s, i) => (
@@ -503,7 +535,7 @@ const SeoDashboard = () => {
                 <Card className="!p-6">
                     <div className="mb-4 flex items-center gap-2">
                         <h2 className="text-h5 text-black dark:text-white">Top Pages</h2>
-                        <LiveBadge live={!!livePages} source="Search Console" />
+                        <LiveBadge live={!!livePages} source="Search Console" reason={noData} />
                     </div>
                     <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-6 gap-y-3 text-caption-2">
                         <span className="text-grey">Page</span>
@@ -540,33 +572,20 @@ const SeoDashboard = () => {
                 <Card className="!p-6">
                     <div className="mb-4 flex items-center gap-2">
                         <h2 className="text-h5 text-black dark:text-white">Top Keywords</h2>
-                        <LiveBadge live={!!liveKeywords} source="Search Console" />
+                        <LiveBadge live={!!liveKeywords} source="Search Console" reason={noData} />
                     </div>
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-6 gap-y-3 text-caption-2">
+                    {/* No "Change" column: position history per keyword is not stored. */}
+                    <div className="grid grid-cols-[1fr_auto_auto] gap-x-6 gap-y-3 text-caption-2">
                         <span className="text-grey">Keyword</span>
                         <span className="text-right text-grey">Position</span>
-                        <span className="text-right text-grey">Change</span>
                         <span className="text-right text-grey">Clicks</span>
-                        {kwRows.map((k) => {
-                            const delta = "delta" in k ? (k as { delta: number }).delta : null;
-                            return (
-                                <div key={k.id} className="contents">
-                                    <span className="min-w-0 truncate text-body-sm text-black dark:text-white">{k.term}</span>
-                                    <CountUp value={k.position} decimals={1} prefix="#" className="text-right text-body-sm font-semibold text-black dark:text-white" />
-                                    <span className="flex items-center justify-end">
-                                        {delta != null ? (
-                                            <span className={cn("inline-flex items-center gap-0.5 text-caption-2 font-bold", delta >= 0 ? "text-success" : "text-error")}>
-                                                <Icon className={cn("h-3 w-3", delta >= 0 ? "rotate-180 fill-success" : "fill-error")} name="arrow-down" />
-                                                <CountUp value={Math.abs(delta)} decimals={delta % 1 === 0 ? 0 : 1} />
-                                            </span>
-                                        ) : (
-                                            <span className="text-caption-2 text-grey">—</span>
-                                        )}
-                                    </span>
-                                    <CountUp value={k.clicks} className="text-right text-body-sm text-grey" />
-                                </div>
-                            );
-                        })}
+                        {kwRows.map((k) => (
+                            <div key={k.id} className="contents">
+                                <span className="min-w-0 truncate text-body-sm text-black dark:text-white">{k.term}</span>
+                                <CountUp value={k.position} decimals={1} prefix="#" className="text-right text-body-sm font-semibold text-black dark:text-white" />
+                                <CountUp value={k.clicks} className="text-right text-body-sm text-grey" />
+                            </div>
+                        ))}
                     </div>
                     <Link href="/seo/keywords" className="mt-5 inline-flex text-caption-1 text-primary hover:opacity-70">View all keywords →</Link>
                 </Card>
@@ -581,14 +600,14 @@ const SeoDashboard = () => {
                 </button>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                     <span>Data sources:</span>
-                    {DATA_SOURCES.map((s) => (
-                        <span key={s.label} className="inline-flex items-center gap-1.5">
+                    {dataSources(analytics, connectors).map((s) => (
+                        <span key={s.label} className={cn("inline-flex items-center gap-1.5", !s.on && "opacity-60")}>
                             {resolveBrand(s.label) ? (
                                 <BrandIcon brand={s.label} size={14} bare label={s.label} />
                             ) : (
-                                <Icon className="h-3.5 w-3.5" name={s.icon} fill={s.color} />
+                                <Icon className="h-3.5 w-3.5" name={SOURCE_ICON[s.label]?.icon ?? "info"} fill={SOURCE_ICON[s.label]?.color ?? "#9999B0"} />
                             )}
-                            {s.label}
+                            {s.label}: {s.state}
                         </span>
                     ))}
                 </div>

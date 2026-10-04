@@ -95,3 +95,11 @@ export function mapBackendRole(key: string, dashboard?: string | null): Role {
             return "editor";
     }
 }
+
+/** The note shown while a Super Admin previews another role's dashboard. "View as"
+ *  only swaps the layout: every number is still fetched as the Super Admin. Null
+ *  when nobody is previewing. */
+export function layoutPreviewNote(realRole: Role, viewAs: Role | null): string | null {
+    if (!viewAs || viewAs === realRole) return null;
+    return `Layout preview: this is the ${ROLES[viewAs].label} layout. The numbers and items shown are still your own, not what a ${ROLES[viewAs].label} would see.`;
+}

@@ -8,20 +8,44 @@ import Icon from "@/components/ui/Icon";
 import Avatar from "@/components/ui/Avatar";
 import Checkbox from "@/components/ui/Checkbox";
 import EmptyState from "@/components/ui/EmptyState";
-import {
-    actionMeta,
-    activityRoleFilters,
-    roleMeta,
-    type ActivityRole,
-    type ActivityAction,
-} from "@/mocks/dashboard";
-import { useDashboardSummary } from "@/lib/useDashboard";
+import { useDashboard, type DashboardSummary } from "@/lib/useDashboard";
+
+/** Who acted, as a filter bucket. Custom roles are "other"; the scheduler and API
+ *  tokens (no person behind the action) are "system". */
+type ActivityRole = "super" | "admin" | "seo" | "editor" | "other" | "system";
+type ActivityAction = "created" | "edited" | "submitted" | "approved" | "scheduled" | "published" | "unpublished" | "archived";
+
+const ROLE_FILTERS: { id: ActivityRole; label: string; on: boolean }[] = [
+    { id: "super", label: "Super Admin", on: true },
+    { id: "admin", label: "Admin", on: true },
+    { id: "seo", label: "Search Strategist", on: true },
+    { id: "editor", label: "Editor", on: true },
+    { id: "other", label: "Other roles", on: true },
+    { id: "system", label: "Automation", on: true },
+];
+
+const ROLE_COLOR: Record<ActivityRole, string> = { super: "#6C5CE7", admin: "#3B82F6", seo: "#00B894", editor: "#F5A623", other: "#8B5CF6", system: "#A29BFE" };
+
+/** Action verb → badge color + icon. */
+const actionMeta: Record<ActivityAction, { label: string; color: string; icon: string }> = {
+    created: { label: "created", color: "#A29BFE", icon: "edit" },
+    edited: { label: "edited", color: "#6C5CE7", icon: "edit" },
+    submitted: { label: "submitted for approval", color: "#F5A623", icon: "clock" },
+    approved: { label: "approved", color: "#00B894", icon: "check" },
+    scheduled: { label: "scheduled", color: "#3B82F6", icon: "calendar" },
+    published: { label: "published", color: "#00B894", icon: "check" },
+    unpublished: { label: "unpublished", color: "#9999B0", icon: "clock" },
+    archived: { label: "archived", color: "#9999B0", icon: "document" },
+};
 
 /** Card-local activity row shape (carries the actor's avatar identity). */
 type ActivityRow = {
     id: string;
+    entryId: string;
     person: string;
     role: ActivityRole;
+    /** The actor's real role name ("Legal Reviewer"), shown on the tag. */
+    roleName: string;
     action: ActivityAction;
     target: string;
     type: string;
@@ -31,8 +55,9 @@ type ActivityRow = {
     avatarStyle?: string | null;
 };
 
-const ROLE_BUCKET: Record<string, ActivityRole> = { super_admin: "super", admin: "admin", search_strategist: "seo", editor: "editor" };
-const ACTIONS = new Set<ActivityAction>(["published", "edited", "submitted", "approved", "scheduled", "generated"]);
+const ROLE_BUCKET: Record<string, ActivityRole> = { super_admin: "super", admin: "admin", search_strategist: "seo", editor: "editor", system: "system" };
+/** How many rows the compact card shows, and how many "Show more" expands to. */
+const COMPACT = 5;
 const relTime = (iso: string) => {
     const diff = Date.now() - +new Date(iso);
     const h = Math.floor(diff / 3_600_000);
@@ -42,41 +67,45 @@ const relTime = (iso: string) => {
     return d === 1 ? "yesterday" : `${d}d ago`;
 };
 
+/** Recorded content events → card rows: the role bucket to filter on, the actor's
+ *  real role name for the tag, and the action exactly as it happened. */
+export function toActivityRows(activity: NonNullable<DashboardSummary["activity"]>): ActivityRow[] {
+    return activity.map((a) => ({
+        id: a.id,
+        entryId: a.entryId,
+        person: a.person,
+        role: ROLE_BUCKET[a.role] ?? "other",
+        roleName: a.roleName,
+        action: (a.action in actionMeta ? a.action : "edited") as ActivityAction,
+        target: a.target,
+        type: a.type,
+        time: relTime(a.at),
+        authorId: a.authorId,
+        avatarUrl: a.avatarUrl,
+        avatarStyle: a.avatarStyle,
+    }));
+}
+
+/** Filter by role FIRST, then cut to the visible count, so a filter never empties
+ *  a list that still has matching rows further down. */
+export const visibleRows = (rows: ActivityRow[], onRoles: ActivityRole[], limit: number) => rows.filter((e) => onRoles.includes(e.role)).slice(0, limit);
+
 /**
- * "Recent activity" — full-width audit log (Unity CommentsPage Activity layout).
- * Left: filter by the ROLE that performed each action (Super Admin / Admin /
- * SEO Manager / Editor / AI Agents). Rows: avatar + action-type badge, actor +
- * role tag, "{action} {content}", content type + time. Working now via state.
+ * "Recent activity": the workspace's content events (create, edit, submit,
+ * approve, schedule, publish, unpublish, archive), each with the person who did
+ * it. Left: filter by the role that acted. Rows: avatar + action badge, actor +
+ * role tag, "{action} {content}", content type + time.
  */
 const ActivityCard = () => {
     const reduce = useReducedMotion();
-    const [filters, setFilters] = useState(activityRoleFilters);
-    const summary = useDashboardSummary();
+    const [filters, setFilters] = useState(ROLE_FILTERS);
+    const [expanded, setExpanded] = useState(false);
+    const { data: summary, loading, error } = useDashboard();
 
-    // Map live audit-log activity into the card's row shape (role bucket, known
-    // action), carrying the actor's avatar identity so we show their real photo.
-    const entries: ActivityRow[] = (summary?.activity ?? []).map((a) => {
-        const action = (ACTIONS.has(a.action as ActivityAction) ? a.action : "edited") as ActivityAction;
-        return {
-            id: a.id,
-            person: a.person,
-            role: ROLE_BUCKET[a.role] ?? "editor",
-            action,
-            target: a.target,
-            type: a.type,
-            time: relTime(a.at),
-            authorId: a.authorId,
-            avatarUrl: a.avatarUrl,
-            avatarStyle: a.avatarStyle,
-        };
-    });
-
+    const entries = toActivityRows(summary?.activity ?? []);
     const onRoles = filters.filter((f) => f.on).map((f) => f.id);
-    // Compact card: show only the 5 most recent; "Load more" opens the full
-    // notifications page.
-    const rows = entries
-        .filter((e) => onRoles.includes(e.role))
-        .slice(0, 5);
+    const matching = visibleRows(entries, onRoles, entries.length);
+    const rows = matching.slice(0, expanded ? matching.length : COMPACT);
 
     const allOn = filters.every((f) => f.on);
     const someOn = filters.some((f) => f.on);
@@ -90,8 +119,10 @@ const ActivityCard = () => {
     const toggleAll = () =>
         setFilters((prev) => prev.map((f) => ({ ...f, on: !allOn })));
 
-    // Loaded (not null) but the workspace has no audit activity at all.
+    // Loaded but nothing recorded yet (events are recorded from v1.10 on).
     const noActivity = summary != null && entries.length === 0;
+    // Workspace activity is only sent to roles that can publish.
+    const noAccess = summary != null && summary.activity === null;
 
     return (
         <Card>
@@ -136,21 +167,37 @@ const ActivityCard = () => {
 
                 {/* Activity feed */}
                 <div className="grow">
-                    {summary == null ? (
-                        <div className="py-12" aria-hidden />
+                    {loading ? (
+                        <div className="flex flex-col gap-3 py-2" aria-hidden>
+                            {[0, 1, 2].map((i) => (
+                                <div key={i} className="h-11 animate-pulse rounded-2xl bg-grey-light/50 dark:bg-dark-3" />
+                            ))}
+                        </div>
+                    ) : summary == null ? (
+                        <p className="py-12 text-center text-body-sm text-error" role="alert">
+                            {error ? "Couldn’t load recent activity. Reload to try again." : "Recent activity is unavailable."}
+                        </p>
+                    ) : noAccess ? (
+                        <EmptyState
+                            variant="bare"
+                            icon="document"
+                            title="No access to workspace activity"
+                            description="Your role doesn’t include workspace-wide activity."
+                            className="py-12"
+                        />
                     ) : noActivity ? (
                         <EmptyState
                             variant="bare"
                             icon="document"
                             title="No activity yet"
-                            description="Edits, approvals and publishes will show up here."
+                            description="Edits, approvals and publishes show up here from now on, with the person who made them."
                             className="py-12"
                         />
                     ) : (
                     <div className="flex flex-col">
                         {rows.map((e, i) => {
                             const act = actionMeta[e.action];
-                            const rm = roleMeta[e.role];
+                            const roleColor = ROLE_COLOR[e.role];
                             return (
                                 <motion.div
                                     key={e.id}
@@ -186,20 +233,20 @@ const ActivityCard = () => {
                                             <span
                                                 className="px-2 py-0.5 rounded-pill text-caption-2"
                                                 style={{
-                                                    backgroundColor: `${rm.color}1a`,
-                                                    color: rm.color,
+                                                    backgroundColor: `${roleColor}1a`,
+                                                    color: roleColor,
                                                 }}
                                             >
-                                                {rm.label}
+                                                {e.roleName}
                                             </span>
                                         </div>
                                         <div className="mt-0.5 text-body-sm text-grey truncate">
                                             <span style={{ color: act.color }}>
                                                 {act.label}
                                             </span>{" "}
-                                            <span className="text-black dark:text-white">
+                                            <Link href={`/content/editor?id=${e.entryId}`} className="text-black hover:text-primary dark:text-white">
                                                 {e.target}
-                                            </span>
+                                            </Link>
                                         </div>
                                     </div>
 
@@ -224,14 +271,13 @@ const ActivityCard = () => {
                     </div>
                     )}
 
-                    <div className="mt-5 text-center">
-                        <Link
-                            href="/notifications"
-                            className="btn-secondary min-w-[11rem]"
-                        >
-                            Load more
-                        </Link>
-                    </div>
+                    {matching.length > COMPACT && (
+                        <div className="mt-5 text-center">
+                            <button type="button" onClick={() => setExpanded((v) => !v)} className="btn-secondary min-w-[11rem]">
+                                {expanded ? "Show less" : `Show ${matching.length - COMPACT} more`}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </Card>

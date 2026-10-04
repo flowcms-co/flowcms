@@ -11,16 +11,33 @@ import {
     clusterSimilarTitles,
     trimMeta,
     type Finding,
+    type LiveFacts,
     type RenderedFinding,
 } from "./audit-engine";
 import { lookupCode } from "./seo-codes";
-import { entryToPageInput } from "./parse-content";
-import { buildIssues, type IssuePage, type PageRow, type SiteFinding } from "./audit-issues";
+import { entryToPageInput, type ParseContext } from "./parse-content";
+import { SitePagesService, absoluteUrl, rankPages, type SitePage } from "../site-pages.service";
+import { isTransient } from "../polite";
+import { CacheService } from "../../cache/cache.service";
+import { ContentEntriesService } from "../../content/content-entries.service";
+import { altBackfillPatch, altLookupFrom, type AltLookup } from "../../content/alt-backfill";
+import { entryToCanonicalContent } from "../../content/canonical-content";
+import { fieldsOf } from "../../content/entry-validation";
+import { mapLimit, psiReason } from "../seo-math";
+import { buildIssues, type Coverage, type IssuePage, type PageRow, type SiteFinding } from "./audit-issues";
 import { SeoService } from "../seo.service";
 import { AssetsService } from "../../assets/assets.service";
 
 /** Synthetic task scope for a full-page L1 audit row. */
 const PAGE = "page";
+/** Pages the pairwise duplicate-content check compares. */
+const DUPLICATES_CAP = 400;
+/** Extra passes over pages the site refused (429/5xx) before leaving them for later. */
+const RETRY_ROUNDS = 3;
+
+/** Why a row holds no verdict: the live page answered 429/5xx or not at all. */
+export type NotChecked = { notChecked: "rate limited" | "server error" | "no response"; status: number };
+const notCheckedOf = (status: number): NotChecked => ({ status, notChecked: status === 429 ? "rate limited" : status === 0 ? "no response" : "server error" });
 
 @Injectable()
 export class SeoAuditService {
@@ -28,7 +45,42 @@ export class SeoAuditService {
         private readonly prisma: PrismaService,
         private readonly seo: SeoService,
         private readonly assets: AssetsService,
+        private readonly sitePages: SitePagesService,
+        private readonly cache: CacheService,
+        private readonly entries: ContentEntriesService,
     ) {}
+
+    private issuesKey(workspaceId: string) { return `seo:issues:${workspaceId}`; }
+
+    /** Asset-library alt text by image URL, for the workspace. */
+    async altLookup(workspaceId: string): Promise<AltLookup> {
+        const media = await this.prisma.media.findMany({ where: { workspaceId, alt: { not: null } }, select: { url: true, alt: true } });
+        return altLookupFrom(media);
+    }
+
+    /** What the entry inherits from the entries it references (a city page takes
+     *  its service's description and fills {City} in its title template): their
+     *  titles by field name, and whether any of them carries a description. */
+    private async parentContext(workspaceId: string, data: Record<string, unknown>): Promise<Pick<ParseContext, "refTitles" | "parentHasDescription">> {
+        const byField = new Map<string, string>();
+        for (const [k, v] of Object.entries(data)) {
+            const id = Array.isArray(v) ? v[0] : v;
+            if (typeof id === "string" && /^c[a-z0-9]{20,}$/.test(id)) byField.set(k.toLowerCase(), id);
+        }
+        if (!byField.size) return {};
+        const refs = await this.prisma.contentEntry.findMany({ where: { workspaceId, id: { in: [...new Set(byField.values())] } }, select: { id: true, title: true, data: true } });
+        const byId = new Map(refs.map((r) => [r.id, r]));
+        const refTitles: Record<string, string> = {};
+        let parentHasDescription = false;
+        for (const [field, id] of byField) {
+            const r = byId.get(id);
+            if (!r) continue;
+            if (r.title) refTitles[field] = r.title;
+            const d = (r.data ?? {}) as Record<string, unknown>;
+            if (String(d.metaDescription ?? d.summary ?? "").trim()) parentHasDescription = true;
+        }
+        return { refTitles, parentHasDescription };
+    }
 
     /** Build a rendered site-scope finding from a code (deterministic, no AI). */
     private siteFinding(
@@ -46,13 +98,40 @@ export class SeoAuditService {
         return new Date().toISOString().slice(0, 10);
     }
 
-    /** Run L1 deterministic detectors on one managed entry, upserting the ledger.
-     *  Skips re-run (and the write) when the content hash is unchanged. */
-    async auditEntry(workspaceId: string, entryId: string) {
-        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId } });
-        if (!entry) throw new NotFoundException("Entry not found.");
+    /** Run L1 deterministic detectors on one page, upserting the ledger. The page's
+     *  URL is its real site path; when the workspace has a site URL, the title,
+     *  description, canonical and JSON-LD are read from the live page. Skips the
+     *  write when nothing changed. An entry that is not a published page of a page
+     *  type is not audited (and leaves the ledger). */
+    async auditEntry(workspaceId: string, entryId: string, pre?: { page?: SitePage; site?: string | null; altFor?: AltLookup; rps?: number }) {
+        const page = pre?.page ?? (await this.sitePages.pages(workspaceId, [entryId]))[0];
+        if (!page) {
+            const exists = await this.prisma.contentEntry.count({ where: { id: entryId, workspaceId } });
+            if (!exists) throw new NotFoundException("Entry not found.");
+            await this.prisma.pageAudit.deleteMany({ where: { workspaceId, target: entryId, task: PAGE } });
+            return { skipped: true, notPage: true, findings: [] as Finding[] };
+        }
+        const site = pre ? (pre.site ?? null) : await this.sitePages.siteUrl(workspaceId);
+        const altFor = pre?.altFor ?? (await this.altLookup(workspaceId));
+        const rps = pre?.rps ?? (site ? await this.sitePages.crawlRps(workspaceId) : undefined);
+        const live: LiveFacts | null = site ? await this.seo.livePage(absoluteUrl(site, page.path), rps) : null;
+        if (live && isTransient(live.status)) {
+            // The site said "not now" (429, 5xx, no response). That is not a fact about
+            // the page: keep whatever was found before, record no finding, and mark the
+            // row so it is retried and never counted as checked or clean.
+            const mark = notCheckedOf(live.status) as unknown as Prisma.InputJsonValue;
+            await this.prisma.pageAudit.upsert({
+                where: { workspaceId_target_task: { workspaceId, target: entryId, task: PAGE } },
+                create: { workspaceId, target: entryId, entryId, task: PAGE, url: page.path, contentHash: "", live: mark },
+                update: { contentHash: "", live: mark },
+            });
+            await this.cache.del(this.issuesKey(workspaceId));
+            return { skipped: false, notChecked: true as const, status: live.status, findings: [] as Finding[] };
+        }
+        // Entry fields only matter as a fallback, so only look up parents then.
+        const parents = live?.status === 200 ? {} : await this.parentContext(workspaceId, page.data);
 
-        const input = entryToPageInput({ id: entry.id, slug: entry.slug, data: entry.data as Record<string, unknown> });
+        const input = entryToPageInput({ id: page.id, slug: page.slug, title: page.title, data: page.data }, { path: page.path, altFor, hasSite: !!site, live, ...parents });
         const hash = contentHash(input);
 
         const existing = await this.prisma.pageAudit.findUnique({
@@ -67,6 +146,8 @@ export class SeoAuditService {
         const escalated = escalationTasks(findings).length > 0;
         const data = {
             contentHash: hash,
+            url: page.path,
+            live: live ? (live as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
             l1Findings: findings as unknown as Prisma.InputJsonValue,
             severity,
             escalated,
@@ -77,57 +158,77 @@ export class SeoAuditService {
             create: { workspaceId, target: entryId, entryId, task: PAGE, ...data },
             update: data,
         });
+        await this.cache.del(this.issuesKey(workspaceId));
         return { skipped: false, findings, severity, escalated };
     }
 
-    /** Audit every published managed entry (the manual "Run audit" + the drip target). */
-    async auditWorkspace(workspaceId: string) {
-        const entries = await this.prisma.contentEntry.findMany({
-            where: { workspaceId, status: "PUBLISHED" },
-            select: { id: true },
-            take: 500,
-        });
+    /** Audit every published page (the manual "Run audit"): entries of page types
+     *  only, all of them, in a stable order. Ledger rows for entries that are no
+     *  longer pages are removed. Live pages are requested at the workspace's crawl
+     *  rate (1 per second by default). Pages the site refuses with 429/5xx are not
+     *  given findings: they are retried once the site's Retry-After (or a back-off)
+     *  has passed, and any still refused are left marked "not checked" for the next
+     *  run. `onProgress` reports as it goes (background job). */
+    async auditWorkspace(workspaceId: string, onProgress?: (p: { done: number; total: number; notChecked: number }) => Promise<void> | void) {
+        const [pages, site, altFor, rps] = await Promise.all([this.sitePages.pages(workspaceId), this.sitePages.siteUrl(workspaceId), this.altLookup(workspaceId), this.sitePages.crawlRps(workspaceId)]);
+        await this.prisma.pageAudit.deleteMany({ where: { workspaceId, task: PAGE, target: { notIn: pages.map((p) => p.id) } } });
         let changed = 0;
+        let unchanged = 0;
         let escalated = 0;
-        for (const e of entries) {
-            const r = await this.auditEntry(workspaceId, e.id);
-            if (!r.skipped) {
-                changed++;
-                if (r.escalated) escalated++;
-            }
+        let failed = 0;
+        let done = 0;
+        let queue = pages;
+        for (let round = 0; queue.length && round <= RETRY_ROUNDS; round++) {
+            const refused: SitePage[] = [];
+            // Two in flight at most; the rate gate spaces them. Entry-only audits
+            // (no site URL) have nothing to wait on.
+            await mapLimit(queue, site ? 2 : 1, async (page) => {
+                const r = await this.auditEntry(workspaceId, page.id, { page, site, altFor, rps }).catch(() => null);
+                if (!r) failed++;
+                else if ("notChecked" in r && r.notChecked) { refused.push(page); return; }
+                else if (r.skipped) unchanged++;
+                else {
+                    changed++;
+                    if ("escalated" in r && r.escalated) escalated++;
+                }
+                await onProgress?.({ done: ++done, total: pages.length, notChecked: refused.length });
+            });
+            queue = refused;
         }
-        return { scanned: entries.length, changed, escalated };
+        const notChecked = queue.length;
+        await onProgress?.({ done: done + notChecked, total: pages.length, notChecked });
+        await this.cache.del(this.issuesKey(workspaceId));
+        return { scanned: pages.length, checked: changed + unchanged, changed, unchanged, notChecked, failed, escalated, live: !!site, rps: site ? rps : null };
     }
 
-    /** Rendered findings per page for the UI (codes -> readable). */
-    async list(workspaceId: string) {
+    /** Rendered findings per page for the UI (codes -> readable): every audited
+     *  page, in a stable order (worst first, then by id). Callers that show a list
+     *  page through it; counts are always taken over the whole set. */
+    async list(workspaceId: string, page?: { limit: number; offset: number }) {
         const rows = await this.prisma.pageAudit.findMany({
             where: { workspaceId, task: PAGE },
-            orderBy: [{ severity: "desc" }, { lastCheckedAt: "desc" }],
-            take: 500,
+            orderBy: [{ severity: "desc" }, { target: "asc" }],
+            ...(page ? { take: page.limit, skip: page.offset } : {}),
         });
         const titles = new Map<string, string>();
-        const urls = new Map<string, string | null>();
         const ids = rows.map((r) => r.entryId).filter((x): x is string => !!x);
         if (ids.length) {
-            const entries = await this.prisma.contentEntry.findMany({ where: { id: { in: ids } }, select: { id: true, slug: true, data: true } });
-            for (const e of entries) {
-                const t = (e.data as Record<string, unknown> | null)?.title;
-                titles.set(e.id, typeof t === "string" ? t : "Untitled");
-                // The page's URL is its slug; needed so fixes (e.g. self-canonical) can prefill it.
-                urls.set(e.id, e.slug ? `/${e.slug}` : null);
-            }
+            const entries = await this.prisma.contentEntry.findMany({ where: { id: { in: ids } }, select: { id: true, title: true } });
+            for (const e of entries) titles.set(e.id, e.title ?? "Untitled");
         }
         return rows.map((r) => {
             const findings = (r.l1Findings as unknown as Finding[]) ?? [];
             const rendered = findings.map(renderFinding).filter((x): x is RenderedFinding => !!x);
             return {
                 entryId: r.entryId,
-                url: (r.entryId ? urls.get(r.entryId) : null) ?? r.url,
+                // The page's real site path, stored by the audit (entryPath).
+                url: r.url,
                 title: r.entryId ? (titles.get(r.entryId) ?? null) : r.url,
                 severity: r.severity,
                 escalated: r.escalated,
                 lastCheckedAt: r.lastCheckedAt,
+                live: (r.live ?? null) as LiveFacts | null,
+                notChecked: !!(r.live as NotChecked | null)?.notChecked,
                 findings: rendered,
             };
         });
@@ -138,13 +239,19 @@ export class SeoAuditService {
      *  FAQ/Org schema, cannibalization, internal links, Core Web Vitals, Search Console)
      *  are composed on read from the existing deterministic services. */
     async issues(workspaceId: string) {
+        // Composed from every audited page, so cache it briefly; a re-audit or a
+        // dismissed finding clears it.
+        return this.cache.wrap(this.issuesKey(workspaceId), 120, () => this.buildIssueSet(workspaceId));
+    }
+
+    private async buildIssueSet(workspaceId: string) {
         const [rows, score, crawl, vitals, cannib, links, summary, ws] = await Promise.all([
             this.list(workspaceId),
             this.seo.score(workspaceId).catch(() => ({ score: null as number | null })),
             this.seo.crawl(workspaceId).catch(() => ({ hasData: false }) as Awaited<ReturnType<SeoService["crawl"]>>),
             this.seo.vitals(workspaceId).catch(() => ({ hasData: false }) as Awaited<ReturnType<SeoService["vitals"]>>),
             this.seo.cannibalization(workspaceId).catch(() => ({ hasData: false }) as Awaited<ReturnType<SeoService["cannibalization"]>>),
-            this.seo.internalLinks(workspaceId).catch(() => ({ opportunities: [], pages: 0 }) as Awaited<ReturnType<SeoService["internalLinks"]>>),
+            this.seo.internalLinks(workspaceId).catch(() => ({ opportunities: [], pages: 0, total: 0 }) as Awaited<ReturnType<SeoService["internalLinks"]>>),
             this.seo.summary(workspaceId).catch(() => ({ hasData: false }) as Awaited<ReturnType<SeoService["summary"]>>),
             this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { jsonLdOrg: true, ignoredFindings: true } }),
         ]);
@@ -155,11 +262,12 @@ export class SeoAuditService {
             entryId: r.entryId,
             url: r.url,
             title: r.title,
+            notChecked: r.notChecked,
             // Schema is computed per type (Article/FAQ/Organization/Service) below, so drop
             // the page-scope L1 schema finding to avoid double-counting; also drop ignored findings.
             // Schema (per-type) + internal linking (opportunity-driven) are computed below, so drop
             // the page-scope L1 versions to avoid double-counting; also drop ignored findings.
-            findings: r.findings.filter((f) =>
+            findings: (r.notChecked ? [] : r.findings).filter((f) =>
                 f.code !== "SCHEMA_MISSING" && f.code !== "SCHEMA_INVALID" && f.code !== "INTERNAL_LINKS_FEW" &&
                 !ignored.has(f.code) && !ignored.has(`${f.code}:${r.entryId}`)),
         }));
@@ -188,18 +296,19 @@ export class SeoAuditService {
             if (!f.sitemap?.present) push(this.siteFinding("AIREADY_SITEMAP_MISSING"));
         }
 
-        // --- published entries (reused for cannibalization + duplicate detection) ---
-        const published = await this.prisma.contentEntry.findMany({
-            where: { workspaceId, status: "PUBLISHED" },
-            select: { id: true, slug: true, data: true },
-            take: 300,
-        });
+        // --- published pages (schema, cannibalization, duplicate detection): all of
+        // them, at their real paths; not a 300-entry sample of every type ---
+        const published = await this.sitePages.pages(workspaceId);
+        const siteUrl = await this.sitePages.siteUrl(workspaceId);
+        const liveById = new Map(rows.map((r) => [r.entryId, r.live]));
         const entryMeta = published.map((e) => {
-            const d = (e.data ?? {}) as Record<string, unknown>;
-            const title = typeof d.title === "string" ? d.title : (e.slug ?? "Untitled");
+            const d = e.data;
+            const title = e.title;
             const fk = typeof d.focusKeyword === "string" ? d.focusKeyword.trim().toLowerCase() : "";
             const input = entryToPageInput({ id: e.id, slug: e.slug, data: d });
-            return { id: e.id, title, focusKeyword: fk, url: e.slug ? `/${e.slug}` : null, text: input.bodyText ?? "", metaTitle: input.metaTitle ?? "", metaDescription: input.metaDescription ?? "" };
+            const live = liveById.get(e.id);
+            const ok = live?.status === 200;
+            return { id: e.id, title, focusKeyword: fk, url: e.path, text: input.bodyText ?? "", metaTitle: ok ? live.title : input.metaTitle ?? "", metaDescription: ok ? live.description : input.metaDescription ?? "" };
         });
 
         // --- schema opportunities by type (Article / FAQ / Organization / Service) ---
@@ -226,14 +335,18 @@ export class SeoAuditService {
         const textById = new Map(entryMeta.map((e) => [e.id, e.text.toLowerCase()]));
         const schemaPages: Record<"article" | "faq" | "org" | "service", IssuePage[]> = { article: [], faq: [], org: [], service: [] };
         for (const e of published) {
-            const d = (e.data ?? {}) as Record<string, unknown>;
+            const d = e.data;
             const slug = (e.slug ?? "").toLowerCase();
-            const url = e.slug ? `/${e.slug}` : "/";
-            const title = typeof d.title === "string" ? d.title : (e.slug ?? "Untitled");
-            const have = schemaTypesOf(d);
+            const url = e.path;
+            const title = e.title;
+            // The frontend renders the JSON-LD on a headless site, so the live page
+            // says which types exist. With a site URL but no readable page, don't guess.
+            const live = liveById.get(e.id);
+            if (siteUrl && live?.status !== 200) continue;
+            const have = live?.status === 200 ? new Set(live.ldTypes.map((t) => t.toLowerCase())) : schemaTypesOf(d);
             const text = textById.get(e.id) ?? "";
             const hay = `${slug} ${title.toLowerCase()}`;
-            const isHome = slug === "" || slug === "home";
+            const isHome = url === "/" || slug === "home";
             const isOrgPage = isHome || /^(about|contact|team|company|careers)/.test(slug);
             const isService = /(service|pricing|solution|capabilit|what-we-do|offering|package)/.test(hay);
             const looksFaq = /\bfaq\b|frequently asked/.test(hay) || (text.match(/\?/g) || []).length >= 3;
@@ -284,7 +397,7 @@ export class SeoAuditService {
         // by the receiving page so each row has a non-zero suggested count + the source pages.
         // Only pages with real opportunities surface (no dummy "0 suggested links" rows).
         if (links.opportunities?.length) {
-            const slugToId = new Map(published.map((e) => [e.slug ? `/${e.slug}` : "/", e.id]));
+            const slugToId = new Map(published.map((e) => [e.path, e.id]));
             const byTarget = new Map<string, { title: string; count: number; sources: Set<string> }>();
             for (const o of links.opportunities) {
                 if (!o.targetUrl) continue;
@@ -307,25 +420,17 @@ export class SeoAuditService {
 
         // --- Core Web Vitals (PageSpeed) ---
         if (vitals.hasData && vitals.vitals?.length) {
-            for (const v of vitals.vitals) {
-                if (v.status === "good") continue;
+            for (const v of vitals.vitals as { metric: string; status: string; value: string }[]) {
                 const code =
-                    v.metric === "LCP" ? (v.status === "poor" ? "CWV_LCP_POOR" : "CWV_LCP_WARN")
-                    : v.metric === "CLS" ? "CWV_CLS_POOR"
-                    : v.metric === "INP" ? "CWV_INP_POOR"
+                    v.metric === "LCP" ? (v.status === "poor" ? "CWV_LCP_POOR" : v.status === "warning" ? "CWV_LCP_WARN" : null)
+                    : v.metric === "CLS" && v.status === "poor" ? "CWV_CLS_POOR"
+                    : v.metric === "INP" && v.status === "poor" ? "CWV_INP_POOR"
                     : null;
-                if (code && v.status === "poor") push(this.siteFinding(code, { values: { value: v.value } }));
-                else if (code && v.metric === "LCP" && v.status === "warning") push(this.siteFinding("CWV_LCP_WARN", { values: { value: v.value } }));
+                if (code) push(this.siteFinding(code, { values: { value: v.value } }));
             }
-        } else {
-            // No PageSpeed key connected: surface ONE clearly-labelled sample perf issue
-            // (with a realistic LCP) so the Performance group + the actionable
-            // recommendations are demonstrable. Replaced by live data once PSI is connected.
-            push(this.siteFinding("CWV_LCP_POOR", {
-                values: { lcp: 4200 },
-                count: 1,
-                pages: [{ id: null, url: "/", title: "Home", detail: "Sample data · connect a PageSpeed Insights key in Settings for live Core Web Vitals" }],
-            }));
+        } else if (vitals.reason !== "no-site" && vitals.reason !== "pending") {
+            // No made-up numbers: say PageSpeed is unavailable, and why.
+            push(this.siteFinding("PSI_UNAVAILABLE", { values: { reason: psiReason(vitals.reason, vitals.needsKey) } }));
         }
 
         // --- PageSpeed opportunities (render-blocking, image opt, unminified, etc.) ---
@@ -352,7 +457,19 @@ export class SeoAuditService {
         else if (gscRows === 0) push(this.siteFinding("GSC_NO_DATA"));
 
         // --- duplicate content / self-plagiarism (cross-page shingle over published bodies) ---
-        const dups = detectDuplicatePages(entryMeta.map((e) => ({ id: e.id, title: e.title, url: e.url ?? undefined, text: e.text })));
+        // ponytail: pairwise comparison, so capped; a shingle index would lift that if
+        // large sites need it. The pages compared are the most-seen ones (Search
+        // Console impressions), else the newest, and the result carries how many of
+        // the total were covered so a partial check never reads as "no duplicates".
+        const impressions = await this.seo.impressionsByPath(workspaceId).catch(() => new Map<string, number>());
+        const by: Coverage["by"] = impressions.size ? "impressions" : "recency";
+        const metaById0 = new Map(entryMeta.map((e) => [e.id, e]));
+        const dupSet = rankPages(published, impressions).slice(0, DUPLICATES_CAP).map((p) => metaById0.get(p.id)!);
+        const coverage = {
+            duplicates: { checked: dupSet.length, total: published.length, capped: dupSet.length < published.length, by },
+            links: { checked: links.pages ?? 0, total: (links as { total?: number }).total ?? links.pages ?? 0, capped: (links.pages ?? 0) < ((links as { total?: number }).total ?? 0), by },
+        };
+        const dups = detectDuplicatePages(dupSet.map((e) => ({ id: e.id, title: e.title, url: e.url ?? undefined, text: e.text })));
         if (dups.length) {
             const pages: IssuePage[] = dups.map((d) => ({
                 id: d.id, url: d.url ?? null, title: d.title,
@@ -363,6 +480,12 @@ export class SeoAuditService {
         }
 
         const result = buildIssues(pageRows, site, score.score ?? null);
+        result.coverage = coverage;
+        for (const g of result.groups) {
+            const c = g.key === "DUPLICATE_CONTENT" ? coverage.duplicates : g.key === "INTERNAL_LINKS_FEW" ? coverage.links : null;
+            if (c) { g.checked = c.checked; g.total = c.total; }
+        }
+        result.nonPageTypes = await this.sitePages.nonPageTypes(workspaceId);
 
         // Metadata current/recommended is derived from LIVE entry data at render time
         // (the L1 finding ledger is cached by contentHash, so values added to the meta
@@ -397,31 +520,20 @@ export class SeoAuditService {
         const set = new Set(ws?.ignoredFindings ?? []);
         if (ignore) set.add(key); else set.delete(key);
         await this.prisma.workspace.update({ where: { id: workspaceId }, data: { ignoredFindings: [...set] } });
+        await this.cache.del(this.issuesKey(workspaceId));
         return { ignored: [...set] };
     }
 
-    /** Generate AI alt text for an entry's in-body images that are missing it.
-     *  Reuses the proven vision alt-gen (AssetsService) per mapped Media row; review-first. */
+    /** Generate AI alt text for the page images that are missing it: the same image
+     *  set the audit flags (rich text, sections and components, top-level image
+     *  fields), not only <img> tags in `data.body`. Reuses the vision alt-gen per
+     *  asset, which also saves the alt on the asset; review-first for the page. */
     async generatePageAlt(workspaceId: string, userId: string, entryId: string) {
-        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId } });
-        if (!entry) throw new NotFoundException("Entry not found.");
-        const body = String((entry.data as Record<string, unknown> | null)?.body ?? "");
-
-        const srcs: string[] = [];
-        const re = /<img\b[^>]*>/gi;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(body))) {
-            const tag = m[0];
-            const alt = /alt\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1];
-            if (alt && alt.trim()) continue; // already has alt
-            const src = /src\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
-            if (src) srcs.push(src);
-        }
-        const uniq = [...new Set(srcs)].slice(0, 5);
+        const uniq = (await this.missingAlt(workspaceId, entryId)).slice(0, 8);
         if (!uniq.length) return { suggestions: [], skipped: [], provider: undefined, model: undefined };
 
         const medias = await this.prisma.media.findMany({ where: { workspaceId }, select: { id: true, url: true } });
-        const baseName = (u: string) => (u.split("?")[0].split("/").pop() ?? u).toLowerCase();
+        const baseName = (u: string) => (u.split(/[?#]/)[0].split("/").pop() ?? u).toLowerCase();
         const byKey = new Map(medias.map((x) => [baseName(x.url), x.id]));
 
         const suggestions: { src: string; alt: string }[] = [];
@@ -441,6 +553,27 @@ export class SeoAuditService {
             }
         }
         return { suggestions, skipped, provider, model };
+    }
+
+    /** The page images with no alt text anywhere (own field, paired field, asset). */
+    async missingAlt(workspaceId: string, entryId: string): Promise<string[]> {
+        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId } });
+        if (!entry) throw new NotFoundException("Entry not found.");
+        const data = ((entry.status === "PUBLISHED" ? entry.draftData ?? entry.data : entry.data) ?? {}) as Record<string, unknown>;
+        const images = entryToCanonicalContent({ data }, { altFor: await this.altLookup(workspaceId) }).images;
+        return [...new Set(images.filter((i) => i.src && !i.alt?.trim()).map((i) => i.src))];
+    }
+
+    /** The entry values to change so the given alts land where the page keeps them:
+     *  the paired alt field next to an image field, and <img> tags in rich text and
+     *  the body. Empty when the page has no place to store them (the alt then lives
+     *  on the asset, which the audit and the delivery API both read). */
+    async altPatch(workspaceId: string, entryId: string, alts: { src: string; alt: string }[]) {
+        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId }, include: { contentType: { select: { schema: true } } } });
+        if (!entry) throw new NotFoundException("Entry not found.");
+        const data = ((entry.status === "PUBLISHED" ? entry.draftData ?? entry.data : entry.data) ?? {}) as Record<string, unknown>;
+        const altFor = altLookupFrom(alts.filter((a) => a.alt?.trim()).map((a) => ({ url: a.src, alt: a.alt })));
+        return altBackfillPatch(fieldsOf(entry.contentType.schema), data, await this.entries.componentMap(workspaceId), altFor);
     }
 
     // --- free-quota helpers (the chooser's quotaAvailable gate; used in Phase 4) ---

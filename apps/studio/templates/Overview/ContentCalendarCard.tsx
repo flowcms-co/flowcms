@@ -12,7 +12,8 @@ import {
     type TimelineEvent,
     type WeekDay,
 } from "@/mocks/dashboard";
-import { useDashboardSummary } from "@/lib/useDashboard";
+import { zonedClock, zonedDayStart, zonedWeekday } from "@flowcms/shared/time";
+import { useDashboard } from "@/lib/useDashboard";
 import { cn } from "@/lib/cn";
 
 const dotColor: Record<string, string> = { done: "bg-success", active: "bg-primary", muted: "bg-grey-light" };
@@ -27,37 +28,31 @@ const TYPE_COLOR = ["#E91E63", "#6C5CE7", "#FF9800", "#4CAF50", "#00B894"];
 /** A timeline event that may carry the entry id (live data) so the chip can deep-link. */
 type CalEvent = TimelineEvent & { id?: string };
 
-const startOfWeekMon = (d: Date) => {
-    const x = new Date(d);
-    x.setHours(0, 0, 0, 0);
-    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
-    return x;
-};
-
 /**
- * Content Calendar (overview) — week timeline of scheduled/published entries.
- * Live from /dashboard/summary (this week's items placed by day + hour), with a
- * left category filter built from the content types present. Sample fallback.
+ * Content Calendar (overview): week timeline of what is scheduled and what went
+ * live. The server sends this week's items only (in the workspace's time zone);
+ * they are placed by day + hour in that same zone, with a left category filter
+ * built from the content types present.
  */
 const ContentCalendarCard = () => {
     const [category, setCategory] = useState("all");
     const reduce = useReducedMotion();
-    const summary = useDashboardSummary();
+    const { data: summary, loading, error } = useDashboard();
 
-    const built = useMemo(() => buildLive(summary?.calendar), [summary]);
+    const built = useMemo(() => (summary?.calendar ? buildLive(summary.calendar, summary.weekStart, summary.timezone) : null), [summary]);
     const live = built !== null;
+    // Why there is no timeline: still loading, the fetch failed, or this role
+    // doesn't get the workspace calendar.
+    const reason = loading ? "Loading" : !summary ? (error ? "Couldn’t load" : "Unavailable") : "No access";
 
-    // Current week's date numbers (Mon..Sun), shown under each day letter in the
-    // header. (Dashboard cards render client-side behind the auth gate, so a
-    // date computed here is hydration-safe.)
+    // This week's date numbers (Mon..Sun) under each day letter, in the workspace's
+    // zone once known. (Dashboard cards render client-side behind the auth gate, so
+    // a date computed here is hydration-safe.)
     const weekDates = useMemo(() => {
-        const start = startOfWeekMon(new Date());
-        return Array.from({ length: 7 }, (_, i) => {
-            const d = new Date(start);
-            d.setDate(d.getDate() + i);
-            return d.getDate();
-        });
-    }, []);
+        const tz = summary?.timezone ?? "UTC";
+        const start = summary ? new Date(summary.weekStart) : zonedDayStart(new Date(), tz, -zonedWeekday(new Date(), tz));
+        return Array.from({ length: 7 }, (_, i) => zonedClock(zonedDayStart(start, tz, i), tz).day);
+    }, [summary]);
 
     // Layout scaffolding (day-letter header, "All content" filter, month label)
     // is built from real data once loaded, or a neutral empty week while loading.
@@ -77,7 +72,7 @@ const ContentCalendarCard = () => {
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     <h2 className="text-h5 text-black dark:text-white">Content calendar</h2>
-                    <LiveBadge live={live} source="Content" />
+                    <LiveBadge live={live} source="Content" reason={reason} />
                 </div>
                 <Link href="/content/calendar" className="text-caption-1 text-primary transition-opacity hover:opacity-70">Open calendar</Link>
             </div>
@@ -138,12 +133,16 @@ const ContentCalendarCard = () => {
                                 <EmptyState
                                     variant="bare"
                                     icon="calendar"
-                                    title="Nothing scheduled"
-                                    description="Scheduled content will appear on this timeline."
+                                    title="Nothing this week"
+                                    description="Content scheduled or published this week appears on this timeline."
                                     className="py-10"
                                 />
-                            ) : (
+                            ) : loading ? (
                                 <div className="py-10" aria-hidden />
+                            ) : (
+                                <p className="py-10 text-center text-body-sm text-grey" role={summary ? undefined : "alert"}>
+                                    {summary ? "Your role doesn’t include the workspace calendar." : "Couldn’t load the calendar. Reload to try again."}
+                                </p>
                             )
                         ) : (
                             <div className="relative flex flex-col gap-5">
@@ -191,14 +190,12 @@ const ContentCalendarCard = () => {
 
 type CalItem = { id: string; title: string; type: string; date: string | null; status: string };
 
-/** Build week header, categories, hour rows and bars from this week's scheduled/published items. */
-function buildLive(calendar: CalItem[] | undefined): { week: WeekDay[]; categories: CalendarCategory[]; hours: string[]; events: CalEvent[]; monthLabel: string } | null {
-    if (!calendar) return null;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const weekStart = startOfWeekMon(today);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 7);
+/** Build week header, categories, hour rows and bars from this week's items. Days
+ *  and hours are read in the workspace's time zone, the same one the server used
+ *  to pick the week, so an item never lands on a different day than it was sent for. */
+export function buildLive(calendar: CalItem[], weekStartIso: string, tz: string, now = new Date()): { week: WeekDay[]; categories: CalendarCategory[]; hours: string[]; events: CalEvent[]; monthLabel: string } {
+    const weekStart = new Date(weekStartIso);
+    const weekEnd = zonedDayStart(weekStart, tz, 7);
 
     const inWeek = calendar
         .map((e) => ({ ...e, d: e.date ? new Date(e.date) : null }))
@@ -215,27 +212,25 @@ function buildLive(calendar: CalItem[] | undefined): { week: WeekDay[]; categori
     // Per-day dots from highest-priority status that day.
     const byDay = new Map<number, string[]>();
     for (const e of inWeek) {
-        const col = (e.d.getDay() + 6) % 7;
+        const col = zonedWeekday(e.d, tz);
         const list = byDay.get(col) ?? [];
         list.push(e.status);
         byDay.set(col, list);
     }
+    const todayCol = now >= weekStart && now < weekEnd ? zonedWeekday(now, tz) : -1;
     const week: WeekDay[] = Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(weekStart);
-        d.setDate(d.getDate() + i);
         const statuses = byDay.get(i) ?? [];
         const dot = statuses.includes("PUBLISHED") ? "done" : statuses.includes("SCHEDULED") || statuses.includes("APPROVED") ? "active" : statuses.length ? "muted" : undefined;
-        return { key: `d${i}`, label: DAY_LETTERS[i], dot: dot as WeekDay["dot"], today: +d === +today };
+        return { key: `d${i}`, label: DAY_LETTERS[i], dot: dot as WeekDay["dot"], today: i === todayCol };
     });
 
     const events: CalEvent[] = inWeek.map((e) => {
-        const col = (e.d.getDay() + 6) % 7;
-        const hh = String(e.d.getHours()).padStart(2, "0");
-        return { id: e.id, hour: `${hh}:00`, title: e.title, startCol: col, span: 1, color: STATUS_COLOR[e.status] ?? "#6C5CE7", category: e.type };
+        const hh = String(zonedClock(e.d, tz).hour).padStart(2, "0");
+        return { id: e.id, hour: `${hh}:00`, title: e.title, startCol: zonedWeekday(e.d, tz), span: 1, color: STATUS_COLOR[e.status] ?? "#6C5CE7", category: e.type };
     });
     const hours = [...new Set(events.map((e) => e.hour))].sort();
 
-    return { week, categories, hours, events, monthLabel: MONTHS[today.getMonth()] };
+    return { week, categories, hours, events, monthLabel: MONTHS[zonedClock(now, tz).month - 1] };
 }
 
 export default ContentCalendarCard;

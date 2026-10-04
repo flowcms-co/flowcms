@@ -8,8 +8,7 @@ import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import Card from "@/components/ui/Card";
 import CountUp from "@/components/motion/CountUp";
 import MetricBar from "@/components/ui/MetricBar";
-import Sparkline from "@/components/charts/Sparkline";
-import { useDashboardSummary, type DashboardSummary, type WorkItem } from "@/lib/useDashboard";
+import { useDashboard, type DashboardSummary, type WorkItem } from "@/lib/useDashboard";
 import { useRevealBatch } from "@/lib/useReveal";
 
 /* Inline outline icons for precise sizing/colour (lucide-style). */
@@ -39,47 +38,48 @@ const Stroke = ({ d, color, className }: { d: string; color?: string; className?
     </svg>
 );
 
-const relTime = (iso?: string) => {
+export const relTime = (iso?: string, now = Date.now()) => {
     if (!iso) return "";
-    const h = Math.floor((Date.now() - +new Date(iso)) / 3_600_000);
-    if (h < 24) return h < 1 ? "just now" : "today";
+    const h = Math.floor((now - +new Date(iso)) / 3_600_000);
+    if (h < 24) return h < 1 ? "just now" : `${h}h ago`;
     const d = Math.floor(h / 24);
     return d === 1 ? "yesterday" : `${d} days ago`;
 };
 const dayLabel = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
 
-/** Honest empty "my work" snapshot, shown on a fresh install / before this user
- *  has authored anything (the cards each render their own empty state from it). */
-const EMPTY_MY: DashboardSummary["my"] = {
-    drafts: 0,
-    inReview: 0,
-    scheduled: 0,
-    dueToday: 0,
-    published30d: 0,
-    publishedThisWeek: 0,
-    publishedLastWeek: 0,
-    aiGenerations: 0,
-    tasks: [],
-    work: { dueToday: [], inProgress: [], scheduled: [] },
-    recentlyPublished: [],
-    contentMix: { published: 0, inReview: 0, drafts: 0, scheduled: 0 },
-    insights: { wordsThisMonth: 0 },
-    weekly: { done: 0, published: 0, scheduled: 0, target: 5, topic: null, streakDays: 0, week: [false, false, false, false, false, false, false] },
-};
-
 const EditorOverview = () => {
-    const summary = useDashboardSummary();
-    // Real per-user data once loaded; honest zeroes while loading / on a fresh
-    // install. Each card renders its own empty state from these values.
-    const my = summary?.my ?? EMPTY_MY;
+    const { data: summary, loading, error } = useDashboard();
 
     const scope = useRef<HTMLDivElement>(null);
     useRevealBatch(scope);
+
+    // No numbers until they are real: a skeleton while loading, a message on
+    // failure. Zeroes are only ever shown when the server says zero.
+    if (!summary) {
+        return loading ? (
+            <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading your dashboard">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+                    {[0, 1, 2, 3].map((i) => (
+                        <div key={i} className="h-[4.25rem] animate-pulse rounded-2xl bg-grey-light/50 dark:bg-dark-3" />
+                    ))}
+                </div>
+                <div className="h-72 animate-pulse rounded-2xl bg-grey-light/50 dark:bg-dark-3" />
+            </div>
+        ) : (
+            <Card className="!p-6">
+                <p className="text-body-sm text-error" role="alert">
+                    {error ? "Couldn’t load your dashboard. Reload to try again." : "Your dashboard is unavailable right now."}
+                </p>
+            </Card>
+        );
+    }
+    const my = summary.my;
 
     return (
         <div ref={scope} className="flex flex-col gap-6">
             <div className="reveal-up">
                 <EditorKpis my={my} />
+                {summary.perLocale && <p className="mt-2 text-caption-2 text-grey">Counts are per locale: each translation of a piece is counted on its own.</p>}
             </div>
 
             <div className="reveal-up grid grid-cols-1 items-stretch gap-6 xl:grid-cols-[65fr_35fr]">
@@ -93,7 +93,7 @@ const EditorOverview = () => {
             <div className="reveal-up grid grid-cols-1 gap-6 xl:grid-cols-3">
                 <RecentlyPublished items={my.recentlyPublished} />
                 <ContentActivity mix={my.contentMix} />
-                <WritingInsights wordsThisMonth={my.insights.wordsThisMonth} aiGenerations={my.aiGenerations} />
+                <WritingInsights wordsRecent={my.insights.wordsRecent} aiGenerations={my.aiGenerations} />
             </div>
         </div>
     );
@@ -104,13 +104,12 @@ const EditorOverview = () => {
 const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
     const pubDelta = my.publishedThisWeek - my.publishedLastWeek;
     // Same base design as the super-admin KPI strip: tinted icon · number · label ·
-    // (real) delta on one row, with a small trend line beneath. The number is real;
-    // the sparkline is light trend texture (we keep no per-metric daily history).
+    // (real) delta on one row. No trend lines: no per-metric history is kept.
     const kpis = [
-        { key: "due", icon: PATHS.edit, color: "#6C5CE7", value: my.dueToday, label: "Due today", delta: null as number | null, spark: [1, 2, 1, 2, 3, 2, 3, 2, Math.max(1, my.dueToday)], href: "/content?author=me" },
-        { key: "prog", icon: PATHS.clock, color: "#F5A623", value: my.drafts, label: "In progress", delta: null, spark: [3, 4, 3, 5, 4, 6, 5, 6, Math.max(1, my.drafts)], href: "/content?status=draft&author=me" },
-        { key: "sched", icon: PATHS.calendar, color: "#00B894", value: my.scheduled, label: "Scheduled", delta: null, spark: [1, 1, 2, 1, 2, 3, 2, 3, Math.max(1, my.scheduled)], href: "/content?status=scheduled&author=me" },
-        { key: "pub", icon: PATHS.sparkles, color: "#E91E63", value: my.publishedThisWeek, label: "Published this week", delta: pubDelta, spark: [2, 3, 2, 4, 3, 5, 4, my.publishedLastWeek || 4, Math.max(1, my.publishedThisWeek)], href: "/content?status=published&author=me" },
+        { key: "review", icon: PATHS.edit, color: "#6C5CE7", value: my.awaitingReview, label: "Awaiting review", delta: null as number | null, href: "/content?status=review&author=me" },
+        { key: "prog", icon: PATHS.clock, color: "#F5A623", value: my.drafts, label: "In progress", delta: null, href: "/content?status=draft&author=me" },
+        { key: "sched", icon: PATHS.calendar, color: "#00B894", value: my.scheduled, label: "Scheduled", delta: null, href: "/content?status=scheduled&author=me" },
+        { key: "pub", icon: PATHS.sparkles, color: "#E91E63", value: my.publishedThisWeek, label: "Published this week", delta: pubDelta, href: "/content?status=live&author=me" },
     ];
     return (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
@@ -132,9 +131,6 @@ const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
                                     </span>
                                 )}
                             </div>
-                            <div className="mt-3 -mb-1">
-                                <Sparkline data={k.spark} color={k.color} height={34} />
-                            </div>
                         </Card>
                     </Link>
                 );
@@ -147,16 +143,17 @@ const EditorKpis = ({ my }: { my: DashboardSummary["my"] }) => {
 
 // Icon per group; the icon TINT rotates through a soft palette by item position
 // (coral, green, blue) so the list reads with the same colour rhythm as the design.
-const GROUP_ICON: Record<string, string> = { due: PATHS.edit, prog: PATHS.doc, sched: PATHS.calendar };
+const GROUP_ICON: Record<string, string> = { review: PATHS.edit, approved: PATHS.check, prog: PATHS.doc, sched: PATHS.calendar };
 const ITEM_PALETTE = ["#F2655C", "#00B894", "#3B82F6"];
-const STATE_CTA: Record<string, string> = { review: "Review", draft: "Continue", scheduled: "View", live: "View" };
+const STATE_CTA: Record<string, string> = { IN_REVIEW: "Review", DRAFT: "Continue", SCHEDULED: "View", APPROVED: "View", PUBLISHED: "View" };
 // How many items to show per group, so the card height stays in step with the
 // Weekly-goal + AI-assistant column beside it (the rest live behind "View all").
 const PER_GROUP = 2;
 
 const MyWork = ({ work }: { work: DashboardSummary["my"]["work"] }) => {
     const groups: { key: string; label: string; items: WorkItem[] }[] = [
-        { key: "due", label: "Due Today", items: work.dueToday },
+        { key: "review", label: "Awaiting Review", items: work.awaitingReview },
+        { key: "approved", label: "Ready to Publish", items: work.approved },
         { key: "prog", label: "In Progress", items: work.inProgress },
         { key: "sched", label: "Scheduled", items: work.scheduled },
     ].filter((g) => g.items.length > 0);
@@ -204,15 +201,15 @@ const MyWork = ({ work }: { work: DashboardSummary["my"]["work"] }) => {
                                                 <div className="min-w-0 grow">
                                                     <div className="truncate text-body-sm font-medium text-black dark:text-white">{t.title}</div>
                                                     <div className="mt-0.5 text-caption-2 text-grey">
-                                                        {t.type} &middot; {g.key === "sched" ? dayLabel(t.due) : g.key === "due" ? "Due today" : relTime(t.due)}
+                                                        {t.type} &middot; {g.key === "sched" ? dayLabel(t.due) : relTime(t.due)}
                                                     </div>
                                                 </div>
                                                 {isReview ? (
-                                                    <Link href="/content/editor" className="shrink-0 inline-flex h-8 items-center justify-center rounded-[0.4rem] bg-[#F2655C]/12 px-3 text-caption-1 font-semibold text-[#D8463C] transition-colors hover:bg-[#F2655C]/20 dark:text-[#FF8A80]">
+                                                    <Link href={`/content/editor?id=${t.id}`} className="shrink-0 inline-flex h-8 items-center justify-center rounded-[0.4rem] bg-[#F2655C]/12 px-3 text-caption-1 font-semibold text-[#D8463C] transition-colors hover:bg-[#F2655C]/20 dark:text-[#FF8A80]">
                                                         Review
                                                     </Link>
                                                 ) : (
-                                                    <Link href="/content/editor" className="btn-secondary btn-sm shrink-0">
+                                                    <Link href={`/content/editor?id=${t.id}`} className="btn-secondary btn-sm shrink-0">
                                                         {cta}
                                                     </Link>
                                                 )}
@@ -380,7 +377,7 @@ const WeeklyGoalCard = ({ weekly }: { weekly: DashboardSummary["my"]["weekly"] }
                     </span>
                     <div>
                         <div className="text-caption-2 text-grey">Next milestone</div>
-                        <div className="text-caption-1 font-semibold text-black dark:text-white">{nextMilestone.count} published</div>
+                        <div className="text-caption-1 font-semibold text-black dark:text-white">{nextMilestone.count} published or scheduled</div>
                     </div>
                 </div>
                 <span className="inline-flex items-center gap-1.5 text-caption-1 font-semibold text-grey">{nextMilestone.label} 🎁</span>
@@ -450,7 +447,7 @@ const RecentlyPublished = ({ items }: { items: DashboardSummary["my"]["recentlyP
     <Card className="flex flex-col !p-6">
         <div className="mb-4 flex items-center justify-between">
             <h2 className="text-h5 text-black dark:text-white">Recently published</h2>
-            <Link href="/content?status=published&author=me" className="inline-flex items-center gap-1 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
+            <Link href="/content?status=live&author=me" className="inline-flex items-center gap-1 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
                 View all
                 <Stroke d={PATHS.arrowRight} className="h-3.5 w-3.5" />
             </Link>
@@ -460,13 +457,19 @@ const RecentlyPublished = ({ items }: { items: DashboardSummary["my"]["recentlyP
         ) : (
             <div className="flex flex-col">
                 {items.map((p, i) => (
-                    <Link key={p.id} href="/content/editor" className={`flex items-start justify-between gap-3 py-3 ${i > 0 ? "border-t border-grey-light dark:border-grey-light/10" : ""}`}>
-                        <div className="min-w-0">
+                    <div key={p.id} className={`flex items-start justify-between gap-3 py-3 ${i > 0 ? "border-t border-grey-light dark:border-grey-light/10" : ""}`}>
+                        <Link href={`/content/editor?id=${p.id}`} className="min-w-0">
                             <div className="truncate text-body-sm font-medium text-black dark:text-white">{p.title}</div>
                             <div className="mt-0.5 text-caption-2 text-grey">{p.type} &middot; {relTime(p.publishedAt)}</div>
-                        </div>
-                        <span className={`${STATUS_BADGE} shrink-0`}>Published</span>
-                    </Link>
+                        </Link>
+                        {p.liveUrl ? (
+                            <a href={p.liveUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 text-caption-1 font-semibold text-primary transition-opacity hover:opacity-70 dark:text-lilac">
+                                View live
+                            </a>
+                        ) : (
+                            <span className={`${STATUS_BADGE} shrink-0`}>Published</span>
+                        )}
+                    </div>
                 ))}
             </div>
         )}
@@ -479,6 +482,7 @@ const ContentActivity = ({ mix }: { mix: DashboardSummary["my"]["contentMix"] })
     const rows = [
         { label: "Published", value: mix.published, color: "#00B894" },
         { label: "In review", value: mix.inReview, color: "#F5A623" },
+        { label: "Approved", value: mix.approved, color: "#3B82F6" },
         { label: "Drafts", value: mix.drafts, color: "#A29BFE" },
         { label: "Scheduled", value: mix.scheduled, color: "#E91E63" },
     ];
@@ -489,7 +493,7 @@ const ContentActivity = ({ mix }: { mix: DashboardSummary["my"]["contentMix"] })
         <Card className="flex flex-col !p-6">
             <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-h5 text-black dark:text-white">Content activity</h2>
-                <span className="rounded-pill bg-lavender-mist px-2.5 py-0.5 text-caption-2 font-medium text-grey dark:bg-dark-3">This month</span>
+                <span className="rounded-pill bg-lavender-mist px-2.5 py-0.5 text-caption-2 font-medium text-grey dark:bg-dark-3">All time</span>
             </div>
 
             <div className="relative mx-auto h-[164px] w-[164px]">
@@ -531,23 +535,24 @@ const ContentActivity = ({ mix }: { mix: DashboardSummary["my"]["contentMix"] })
 
 /* ---------------- Writing insights ---------------- */
 
-const WritingInsights = ({ wordsThisMonth, aiGenerations }: { wordsThisMonth: number; aiGenerations: number }) => {
+const WritingInsights = ({ wordsRecent, aiGenerations }: { wordsRecent: number; aiGenerations: number }) => {
     const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`);
-    // Only real, currently-available signals: words written this month (from the
-    // user's entry bodies) and AI generations in the last 30 days (usage records).
+    // Only real, currently-available signals: the size of the pieces this person
+    // edited in the last 30 days (all text fields; not words typed, no edit history
+    // is diffed) and AI generations in the last 30 days (usage records).
     // We keep no per-metric history, so no trend deltas, and no fabricated rows
     // (avg. writing time / AI assistance rate / pieces improved) until those are
     // actually tracked.
     const rows = [
-        { icon: PATHS.pen, color: "#3B82F6", value: fmt(wordsThisMonth), label: "Words written" },
+        { icon: PATHS.pen, color: "#3B82F6", value: fmt(wordsRecent), label: "Words in pieces you edited" },
         { icon: PATHS.sparkles, color: "#6C5CE7", value: fmt(aiGenerations), label: "AI generations" },
     ];
-    const empty = wordsThisMonth === 0 && aiGenerations === 0;
+    const empty = wordsRecent === 0 && aiGenerations === 0;
     return (
         <Card className="flex flex-col !p-6">
             <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-h5 text-black dark:text-white">Writing insights</h2>
-                <span className="text-caption-2 text-grey">This month</span>
+                <span className="text-caption-2 text-grey">Last 30 days</span>
             </div>
             <div className="flex grow flex-col justify-center gap-2">
                 {empty ? (

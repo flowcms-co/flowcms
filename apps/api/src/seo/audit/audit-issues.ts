@@ -70,6 +70,19 @@ export interface IssueGroup {
     explanation: string;
     fixHint: string;
     pages: IssuePage[];
+    /** Set when the check behind this group only looked at some of the pages. */
+    checked?: number;
+    total?: number;
+}
+
+/** How much of the site a capped check covered. `capped` means the result is
+ *  partial and must not be read as "nothing found anywhere". */
+export interface Coverage {
+    checked: number;
+    total: number;
+    capped: boolean;
+    /** How the checked pages were chosen. */
+    by: "impressions" | "recency";
 }
 
 export interface CategoryMeta {
@@ -80,7 +93,13 @@ export interface CategoryMeta {
 
 export interface IssuesResult {
     score: number | null;
-    counts: { total: number; pages: number; aiFixable: number; clean: number };
+    /** `pages` and `clean` count checked pages only; `notChecked` are pages whose live
+     *  URL answered 429/5xx (rate limited) and are waiting for a retry. */
+    counts: { total: number; pages: number; aiFixable: number; clean: number; notChecked: number };
+    /** Coverage of the checks that do not look at every page. */
+    coverage?: { duplicates: Coverage; links: Coverage };
+    /** Types with published entries that are not marked as pages (not audited). */
+    nonPageTypes?: { id: string; name: string; published: number; hasPattern: boolean }[];
     categories: CategoryMeta[];
     groups: IssueGroup[];
     quickWins: IssueGroup[];
@@ -147,6 +166,7 @@ const CODE_EFFORT: Record<string, Effort> = {
     H1_MISSING: "easy", H1_MULTIPLE: "easy", HEADING_SKIP: "easy", THIN_CONTENT: "hard", INTERNAL_LINKS_FEW: "easy", READABILITY_HARD: "med", DUPLICATE_CONTENT: "med",
     GSC_CTR_DROP: "med", GSC_POSITION_DROP: "med", GSC_STRIKING_DISTANCE: "med",
     TECH_REDIRECT_CHAIN: "med", TECH_CANONICAL_MISSING: "easy", TECH_NOINDEX: "easy",
+    TECH_PAGE_UNREACHABLE: "med",
     AIREADY_LLMS_MISSING: "easy", AIREADY_ROBOTS_MISSING: "easy", AIREADY_ROBOTS_BLOCKS_AI: "easy", AIREADY_SITEMAP_MISSING: "easy", AIREADY_SITEMAP_NOT_IN_ROBOTS: "easy",
     CANNIBALIZATION: "hard", INTERNAL_LINK_OPP: "easy",
     PERF_RENDER_BLOCKING: "hard", PERF_IMAGE_OPT: "med", PERF_UNMINIFIED: "med", PERF_TEXT_COMPRESSION: "easy", PERF_TOTAL_WEIGHT: "hard",
@@ -188,6 +208,8 @@ export function fixKindOf(code: string, ai: RenderedFinding["ai"]): { kind: FixK
             return { kind: "cannibalization" };
         case "THIN_CONTENT": case "READABILITY_HARD": case "DUPLICATE_CONTENT": case "H1_MISSING": case "H1_MULTIPLE": case "HEADING_SKIP": case "TECH_NOINDEX": case "TECH_CANONICAL_MISSING":
             return { kind: "editor" }; // content / on-page edits happen in the block editor
+        case "TECH_PAGE_UNREACHABLE": case "PSI_UNAVAILABLE":
+            return { kind: "instructions" };
         default:
             // CWV, PageSpeed opportunities, GSC drops, redirect chains, cannibalization: explain + instructions
             return { kind: ai === "fix" ? "editor" : "instructions" };
@@ -211,6 +233,8 @@ export interface PageRow {
     url: string | null;
     title: string | null;
     findings: RenderedFinding[];
+    /** The live page could not be checked (rate limited / server error). */
+    notChecked?: boolean;
 }
 
 function toGroup(code: string, sample: RenderedFinding, scope: "page" | "site", pages: IssuePage[], count: number): IssueGroup {
@@ -265,7 +289,10 @@ export function buildIssues(pageRows: PageRow[], site: SiteFinding[], score: num
     // Page-scope: group findings by code across pages.
     const byCode = new Map<string, { sample: RenderedFinding; pages: IssuePage[] }>();
     let clean = 0;
+    let notChecked = 0;
     for (const row of pageRows) {
+        // A page we could not read is neither clean nor at fault: it is unknown.
+        if (row.notChecked) { notChecked++; continue; }
         if (!row.findings.length) clean++;
         for (const f of row.findings) {
             const g = byCode.get(f.code) ?? { sample: f, pages: [] };
@@ -310,7 +337,7 @@ export function buildIssues(pageRows: PageRow[], site: SiteFinding[], score: num
 
     return {
         score,
-        counts: { total: totalInstances, pages: pageRows.length, aiFixable, clean },
+        counts: { total: totalInstances, pages: pageRows.length - notChecked, aiFixable, clean, notChecked },
         categories,
         groups,
         quickWins,

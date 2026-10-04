@@ -11,6 +11,6 @@ export class DashboardController {
 
     @Get("summary")
     summary(@CurrentUser() user: AuthUser) {
-        return this.dashboard.summary(user.workspaceId, user.id);
+        return this.dashboard.summary(user);
     }
 }

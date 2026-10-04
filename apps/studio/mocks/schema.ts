@@ -324,6 +324,11 @@ export type ContentTypeSchema = {
     /** Free-form page: entries get the Body (rich text) editor even though the type
      *  has no "body" field. Off = a type with no fields shows no Body editor. */
     freeFormBody?: boolean;
+    /** Entries of this type are pages on the public site (audited, crawled, linkable).
+     *  Off for types that only feed other pages, like cities or tags without a URL. */
+    isPage?: boolean;
+    /** The page flag was set by hand; until then it follows the default. */
+    isPageSet?: boolean;
     fields: SchemaField[];
 };
 

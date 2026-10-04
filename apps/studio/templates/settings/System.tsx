@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import Select from "@/components/ui/Select";
+import TimeZoneSelect from "@/components/ui/TimeZoneSelect";
 import WhiteLabelCard from "@/templates/settings/WhiteLabelCard";
 import ApprovalsCard from "@/templates/settings/ApprovalsCard";
 import { api, ApiError } from "@/lib/api";
@@ -19,6 +20,10 @@ import { helpUrl, GUIDES } from "@/lib/help";
 const System = () => {
     const [name, setName] = useState("");
     const [previewUrl, setPreviewUrl] = useState("");
+    const [siteUrl, setSiteUrl] = useState("");
+    const [timezone, setTimezone] = useState("UTC");
+    const [timezoneInvalid, setTimezoneInvalid] = useState<string | null>(null);
+    const [crawlRps, setCrawlRps] = useState("1");
     const [authorMode, setAuthorMode] = useState<Workspace["authorMode"]>("creator");
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -30,6 +35,10 @@ const System = () => {
                 if (off) return;
                 setName(w.name);
                 setPreviewUrl(w.previewUrl ?? "");
+                setSiteUrl(w.siteUrl ?? "");
+                setTimezone(w.timezone ?? "UTC");
+                setTimezoneInvalid(w.timezoneInvalid ?? null);
+                setCrawlRps(String(w.seoCrawlRps ?? 1));
                 setAuthorMode(w.authorMode ?? "creator");
             })
             .catch(() => {});
@@ -42,8 +51,9 @@ const System = () => {
         setSaving(true);
         setMsg(null);
         try {
-            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), authorMode }) });
+            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), siteUrl: siteUrl.trim(), timezone, seoCrawlRps: Math.min(10, Math.max(0.1, Number(crawlRps) || 1)), authorMode }) });
             clearWorkspaceCache();
+            setTimezoneInvalid(null);
             setMsg({ ok: true, text: "Saved" });
         } catch (e) {
             setMsg({ ok: false, text: e instanceof ApiError ? e.message : "Could not save." });
@@ -88,6 +98,30 @@ const System = () => {
                 >
                     Use the bundled example frontend →
                 </button>
+                <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field label="Site URL">
+                        <input value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} placeholder="https://yoursite.com" spellCheck={false} className="flow-input" />
+                    </Field>
+                    <Field label="Time zone">
+                        <TimeZoneSelect value={timezone} onChange={setTimezone} />
+                    </Field>
+                    <Field label="SEO crawl rate (requests per second)">
+                        <input type="number" min={0.1} max={10} step={0.1} value={crawlRps} onChange={(e) => setCrawlRps(e.target.value)} className="flow-input" />
+                    </Field>
+                </div>
+                {timezoneInvalid && (
+                    <p role="alert" className="mt-2.5 rounded-xl border border-warning/40 bg-warning/[0.08] p-3 text-caption-2 text-black dark:text-white">
+                        The saved time zone &ldquo;{timezoneInvalid}&rdquo; is not a valid zone, so dashboards are using UTC. Pick a zone and save.
+                    </p>
+                )}
+                <p className="mt-2.5 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
+                    The site URL is your public website. The SEO crawl, PageSpeed and &ldquo;View live&rdquo; links use it, with or
+                    without Search Console. The crawler identifies itself as{" "}
+                    <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">FlowCMS-SEO-Auditor</code>;
+                    allow that user agent if your site blocks bots. The time zone (an IANA name) sets what &ldquo;today&rdquo; and
+                    &ldquo;this week&rdquo; mean on the dashboards. The crawl rate is the most requests per second the SEO audit and
+                    crawler send to your site (1 by default); if the site answers &ldquo;too many requests&rdquo; they wait and resume.
+                </p>
                 <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Content author">
                         <Select

@@ -55,8 +55,11 @@ export interface CanonicalContent {
 
 // ── pure HTML helpers (shared; re-exported via parse-content for back-compat) ──
 
-import { stripTags } from "@flowcms/shared";
+import { stripTags, pairedAltField } from "@flowcms/shared";
 export { stripTags };
+
+/** Asset-library alt text for an image URL (Media.alt), when the caller has it. */
+export type AltLookup = (url: string) => string | undefined;
 
 export function str(v: unknown): string {
     return typeof v === "string" ? v : "";
@@ -142,7 +145,12 @@ const META_KEYS = new Set([
 ]);
 
 const isHtml = (s: string) => /<[a-z][\s\S]*>/i.test(s);
-const isImageUrl = (s: string) => /\.(jpe?g|png|gif|webp|avif|svg)(\?|$)/i.test(s) || /(^|\/)(images?|media|uploads|picsum)\b/i.test(s);
+/** A real image URL or path: one token that starts like a URL/path and either ends
+ *  in an image extension or sits under a media folder. Plain text that merely starts
+ *  with "Image" or "Media" ("Media coverage of…") is not an image. */
+export const isImageUrl = (s: string) =>
+    /^(https?:\/\/|\/|data:image\/)\S+$/i.test(s) &&
+    (/^data:image\//i.test(s) || /\.(jpe?g|png|gif|webp|avif|svg)([?#]|$)/i.test(s) || /\/(images?|media|uploads)\//i.test(s) || /\/\/picsum\.photos\//i.test(s));
 const isUrlOrPath = (s: string) => /^(https?:\/\/|\/|data:|mailto:|tel:|#)/i.test(s) || s.split(/\s+/).length === 1;
 
 type Acc = {
@@ -151,7 +159,25 @@ type Acc = {
     images: { src: string; alt?: string | null }[];
     links: number;
     specs: StructuredDataSpec[];
+    altFor?: AltLookup;
 };
+
+/** Images in rich text; an empty alt falls back to the asset's alt text. */
+function htmlImages(html: string, acc: Acc) {
+    for (const i of extractImages(html)) acc.images.push(i.alt?.trim() ? i : { src: i.src, alt: acc.altFor?.(i.src) ?? i.alt ?? null });
+}
+
+/** Collect an image value held in `obj[key]`. Its alt is the paired alt field
+ *  beside it (same rule the editor and the delivery API use), else the asset's
+ *  alt text, else null. */
+function pushImage(obj: Record<string, unknown>, key: string, src: string, acc: Acc) {
+    const fields = Object.entries(obj)
+        .filter(([, v]) => typeof v === "string")
+        .map(([name, v]) => ({ name, type: isImageUrl((v as string).trim()) ? "Media" : "Text" }));
+    const altName = pairedAltField(fields, { name: key });
+    const paired = altName ? str(obj[altName]).trim() : "";
+    acc.images.push({ src, alt: paired || acc.altFor?.(src) || null });
+}
 
 /** Map a recognised component instance to a structured-data hint. */
 function structuredFor(component: string, item: Record<string, unknown>): StructuredDataSpec | null {
@@ -195,10 +221,10 @@ function collectInstance(obj: Record<string, unknown>, acc: Acc, depth: number) 
             if (!s) continue;
             if (isHtml(s)) {
                 acc.html.push(s);
-                acc.images.push(...extractImages(s));
+                htmlImages(s, acc);
                 acc.links += countInternalLinks(s);
             } else if (isImageUrl(s)) {
-                acc.images.push({ src: s, alt: null });
+                pushImage(obj, k, s, acc);
             } else if (isUrlOrPath(s)) {
                 // CTA url / single-token value — not body content.
             } else {
@@ -231,20 +257,22 @@ function collectValue(value: unknown, acc: Acc, depth: number) {
  *  - Other top-level **rich-text** strings (containing HTML) are included; plain
  *    top-level strings (title, labels, meta) are NOT (so body-only entries are
  *    unchanged and a flat "Headline" label isn't counted as body).
+ *  - Top-level **image** values (Media fields) are collected as page images, with
+ *    the alt from their paired alt field or the asset library.
  *  - Top-level **objects/arrays** are treated as component/section instances and
  *    recursed: inside a component, BOTH rich text and plain text fields count as
  *    content (a Hero's Title/Subtitle are real page text); url/single-token and
  *    image values are skipped from text (images are collected separately).
  */
-export function entryToCanonicalContent(entry: EntryLike): CanonicalContent {
+export function entryToCanonicalContent(entry: EntryLike, opts?: { altFor?: AltLookup }): CanonicalContent {
     const d = (entry.data ?? {}) as Record<string, unknown>;
-    const acc: Acc = { html: [], text: [], images: [], links: 0, specs: [] };
+    const acc: Acc = { html: [], text: [], images: [], links: 0, specs: [], altFor: opts?.altFor };
 
     // 1. Legacy body first (keeps ordering + output identical for body-only entries).
     const body = str(d.body);
     if (body.trim()) {
         acc.html.push(body);
-        acc.images.push(...extractImages(body));
+        htmlImages(body, acc);
         acc.links += countInternalLinks(body);
     }
 
@@ -257,8 +285,11 @@ export function entryToCanonicalContent(entry: EntryLike): CanonicalContent {
             const s = value.trim();
             if (s && isHtml(s)) {
                 acc.html.push(s);
-                acc.images.push(...extractImages(s));
+                htmlImages(s, acc);
                 acc.links += countInternalLinks(s);
+            } else if (s && isImageUrl(s)) {
+                // A top-level Media field (hero image…) is a page image too.
+                pushImage(d, key, s, acc);
             }
         } else if (value && typeof value === "object") {
             collectValue(value, acc, 0);

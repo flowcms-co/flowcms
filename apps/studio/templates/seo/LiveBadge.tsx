@@ -1,5 +1,7 @@
-/** Small status pill: green "Live · {source}" when data is real, neutral "Sample data" otherwise. */
-const LiveBadge = ({ live, source = "Search Console" }: { live: boolean; source?: string }) => (
+/** Small status pill: green "Live · {source}" when data is real; otherwise a neutral
+ *  pill saying why there is nothing to show ("Not connected", "No data yet", …).
+ *  No sample numbers are ever rendered, so it never claims "Sample data". */
+const LiveBadge = ({ live, source = "Search Console", reason = "No data yet" }: { live: boolean; source?: string; reason?: string }) => (
     <span
         className={
             live
@@ -8,7 +10,7 @@ const LiveBadge = ({ live, source = "Search Console" }: { live: boolean; source?
         }
     >
         {live && <span className="h-1.5 w-1.5 rounded-full bg-current" />}
-        {live ? `Live · ${source}` : "Sample data"}
+        {live ? `Live · ${source}` : reason}
     </span>
 );
 

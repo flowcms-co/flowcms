@@ -7,6 +7,7 @@ import ConnectNotice from "@/components/ai/ConnectNotice";
 import { api } from "@/lib/api";
 import { checkGrammar, readabilityScore, checkOriginality, type CorpusPage } from "@/lib/textTools";
 import { useAiProviders, runAi, aiErrorMessage } from "@/lib/useAi";
+import { entryText } from "@/lib/entryText";
 import { cn } from "@/lib/cn";
 
 const PATHS = {
@@ -39,13 +40,14 @@ const SCAN_LIMIT = 40;
 /** Flesch Reading Ease below this reads as "hard"; flag it. */
 const READABILITY_FLOOR = 60;
 
-const plainBody = (e: Entry) =>
-    String((e.data as { body?: string } | null)?.body ?? "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+/** Pages with less text than this are too short to judge and are not scanned. */
+const MIN_CHARS = 60;
 
 const s = (n: number) => (n === 1 ? "" : "s");
+
+/** "12 pages scanned." or, when some were too short, "9 of 12 latest pages scanned." */
+export const scanNote = (scanned: number, fetched: number) =>
+    scanned === fetched ? `${scanned} page${s(scanned)} scanned.` : `${scanned} of ${fetched} latest pages scanned.`;
 
 /** Icon chip + title + description, shared by the link/expand row variants. */
 const Head = ({ item }: { item: Suggestion }) => (
@@ -70,6 +72,9 @@ const Head = ({ item }: { item: Suggestion }) => (
 const QuickSuggestionsCard = () => {
     const [mode, setMode] = useState<"auto" | "ai">("auto");
     const [scanning, setScanning] = useState(true);
+    // How many of the latest pages had enough text to scan, out of how many fetched.
+    const [scan, setScan] = useState({ scanned: 0, fetched: 0 });
+    const [failed, setFailed] = useState(false);
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
     const [openKey, setOpenKey] = useState<string | null>(null);
 
@@ -87,13 +92,22 @@ const QuickSuggestionsCard = () => {
         let off = false;
         (async () => {
             const [entries, links] = await Promise.all([
-                api<Entry[]>(`/entries?status=PUBLISHED&limit=${SCAN_LIMIT}`).catch(() => [] as Entry[]),
+                api<Entry[]>(`/entries?status=PUBLISHED&limit=${SCAN_LIMIT}`).catch(() => null),
                 api<LinkScan>("/seo/internal-links").catch(() => ({}) as LinkScan),
             ]);
             if (off) return;
+            // A failed fetch is a failure, not a clean bill of health.
+            if (!entries) {
+                setFailed(true);
+                setScanning(false);
+                return;
+            }
+            // Text from every text field of the page (any field name, components and
+            // sections included), not just a field called "body".
             const scanned = entries
-                .map((e) => ({ id: e.id, title: e.title || "Untitled", text: plainBody(e) }))
-                .filter((e) => e.text.length >= 60);
+                .map((e) => ({ id: e.id, title: e.title || "Untitled", text: entryText(e.data) }))
+                .filter((e) => e.text.length >= MIN_CHARS);
+            setScan({ scanned: scanned.length, fetched: entries.length });
             const corpus: CorpusPage[] = scanned.map((e) => ({ title: e.title, body: e.text }));
 
             const lowRead: Page[] = [];
@@ -174,16 +188,29 @@ const QuickSuggestionsCard = () => {
                             <span className="h-7 w-7 animate-spin rounded-full border-[3px] border-lavender-mist border-t-primary" />
                             <p className="text-caption-1 text-grey">Scanning your site&hellip;</p>
                         </div>
+                    ) : failed ? (
+                        <div className="flex grow flex-col items-center justify-center gap-2 py-8 text-center" role="alert">
+                            <p className="text-body-sm font-semibold text-black dark:text-white">Couldn&rsquo;t scan your content</p>
+                            <p className="text-caption-2 text-grey">The latest pages could not be loaded. Reload to try again.</p>
+                        </div>
+                    ) : scan.scanned === 0 ? (
+                        <div className="flex grow flex-col items-center justify-center gap-2 py-8 text-center">
+                            <p className="text-body-sm font-semibold text-black dark:text-white">Nothing to scan yet</p>
+                            <p className="text-caption-2 text-grey">
+                                {scan.fetched === 0 ? "No published pages yet." : `None of the ${scan.fetched} latest published page${s(scan.fetched)} has enough text to check.`}
+                            </p>
+                        </div>
                     ) : suggestions.length === 0 ? (
                         <div className="flex grow flex-col items-center justify-center gap-2 py-8 text-center">
                             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-success/10">
                                 <Stroke d={PATHS.check} color="#00B894" className="h-5 w-5" />
                             </span>
                             <p className="text-body-sm font-semibold text-black dark:text-white">All clear</p>
-                            <p className="text-caption-2 text-grey">No issues detected in your latest content.</p>
+                            <p className="text-caption-2 text-grey">{scanNote(scan.scanned, scan.fetched)} No issues found.</p>
                         </div>
                     ) : (
-                        suggestions.map((item) => {
+                        <>
+                        {suggestions.map((item) => {
                             const expandable = item.pages.length > 0;
                             const isOpen = openKey === item.key;
                             return (
@@ -220,7 +247,9 @@ const QuickSuggestionsCard = () => {
                                     )}
                                 </div>
                             );
-                        })
+                        })}
+                        <p className="px-1 pt-1 text-caption-2 text-grey">{scanNote(scan.scanned, scan.fetched)}</p>
+                        </>
                     )}
                 </div>
             ) : (

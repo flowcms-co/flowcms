@@ -5,6 +5,14 @@ type Json = Record<string, unknown>;
 /** Asset alt text for an image URL, or undefined when it isn't a library image with alt. */
 export type AltLookup = (url: string) => string | undefined;
 
+/** Lookup from asset rows, matched on the unique object key (the URL's last
+ *  segment), so relative /media/<key> and absolute CDN URLs both resolve. */
+export function altLookupFrom(media: { url: string; alt: string | null }[]): AltLookup {
+    const key = (url: string) => url.split(/[?#]/)[0].split("/").pop() ?? "";
+    const byKey = new Map(media.filter((m) => m.alt?.trim()).map((m) => [key(m.url), m.alt!.trim()]));
+    return (url) => byKey.get(key(url));
+}
+
 const isObj = (v: unknown): v is Json => !!v && typeof v === "object" && !Array.isArray(v);
 const filled = (v: unknown) => typeof v === "string" && v.trim() !== "";
 

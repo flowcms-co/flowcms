@@ -3,6 +3,7 @@
 import { useRef } from "react";
 import Image from "next/image";
 import { useRole } from "@/components/providers/RoleProvider";
+import { layoutPreviewNote } from "@/lib/roles";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { illustrationSrc, legacyIllustrationSrc, resolveCharacter, withAvatarFallback } from "@/lib/avatar";
 import { useHeaderReveal } from "@/lib/useReveal";
@@ -28,7 +29,8 @@ function greetingFor(d: Date): { hello: string; emoji: string; label: string } {
  *   - super / admin → full shared dashboard (SharedOverview)
  */
 const Overview = () => {
-    const { role, meta } = useRole();
+    const { role, meta, realRole, viewAs } = useRole();
+    const previewNote = layoutPreviewNote(realRole, viewAs);
     const { user } = useAuth();
     const firstName = meta.user.name.split(" ")[0];
     // The dashboard figure matches the avatar the user picked (illustrations are
@@ -81,6 +83,12 @@ const Overview = () => {
                     className="reveal-pop hidden h-auto w-[clamp(15rem,22vw,21rem)] shrink-0 select-none md:block"
                 />
             </div>
+
+            {previewNote && (
+                <p role="note" className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2.5 text-body-sm text-black dark:text-white">
+                    {previewNote}
+                </p>
+            )}
 
             {role === "editor" ? <EditorOverview /> : role === "seo" ? <SeoOverview /> : <SharedOverview />}
         </div>

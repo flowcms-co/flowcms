@@ -6,6 +6,7 @@
 import { PrismaClient } from "@flowcms/db";
 import { SeoAuditService } from "./seo-audit.service";
 import { SeoDripService } from "./seo-drip.service";
+import { SitePagesService } from "../site-pages.service";
 
 const prisma = new PrismaClient();
 const PAGE = "page";
@@ -16,7 +17,7 @@ const assert = (c: boolean, m: string) => { if (!c) { failures++; console.error(
 (async () => {
     // SeoService + AssetsService are only used by issues()/generatePageAlt; the drip path doesn't need them.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const audit = new SeoAuditService(prisma as any, null as any, null as any);
+    const audit = new SeoAuditService(prisma as any, null as any, null as any, new SitePagesService(prisma as any), { del: async () => undefined } as any, null as any);
     // Redis stub: the verify script runs single-instance, so the lock always grants.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const redisStub = { tryAcquire: async () => true } as any;

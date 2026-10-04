@@ -16,6 +16,7 @@ import { entryPath } from "./route-path";
 import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
 import { keepStoredShape } from "./component-shape";
 import { placeholdersIn, resolvePlaceholders, slugFromPattern } from "./slug-pattern";
+import { eventForStatusChange, type ContentEvent } from "./content-events";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
  *  which carries the page type that `entryPath` uses to build the public path
@@ -141,6 +142,25 @@ export class ContentEntriesService {
                     this.logger.warn(`Reverse propagation to owner ${ownerId} failed: ${(err as Error).message}`);
                 }
             }
+        }
+    }
+
+    /** Record who did what to an entry in the audit log (the dashboard's Recent
+     *  activity reads these). Best-effort. Autosave would flood it, so repeat edits
+     *  by one person to one entry within an hour collapse into a single row. */
+    private async logEvent(workspaceId: string, actorId: string | null | undefined, action: ContentEvent, entryId: string) {
+        try {
+            const userId = actorId ?? null;
+            if (action === "content.edit") {
+                const recent = await this.prisma.auditLog.findFirst({
+                    where: { workspaceId, resourceId: entryId, userId, action, createdAt: { gte: new Date(Date.now() - 3_600_000) } },
+                    select: { id: true },
+                });
+                if (recent) return;
+            }
+            await this.prisma.auditLog.create({ data: { workspaceId, userId, action, resource: "ContentEntry", resourceId: entryId } });
+        } catch (e) {
+            this.logger.warn(`content event not recorded (${action}): ${(e as Error).message}`);
         }
     }
 
@@ -292,6 +312,7 @@ export class ContentEntriesService {
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(entryId, entry.data, "APPROVED", reviewerId);
+            await this.logEvent(workspaceId, reviewerId, "content.approve", entryId);
             await this.notifyTransition(workspaceId, reviewerId, entry, this.title(e), "IN_REVIEW", "APPROVED");
             this.fire(workspaceId, "content.updated", this.shape(e));
         }
@@ -697,6 +718,7 @@ export class ContentEntriesService {
             e = await insert(this.prisma);
         }
         await this.snapshot(e.id, data, "DRAFT", userId);
+        await this.logEvent(workspaceId, userId, "content.create", e.id);
         await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, data);
         await this.propagateReverse(workspaceId, e.id, e.contentType.schema, submittedReverse, { actorId: userId ?? undefined, role });
         const shaped = this.shape(e);
@@ -778,6 +800,7 @@ export class ContentEntriesService {
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(updated.id, draft, existing.status, actorId);
+            if (this.changed(base, draft)) await this.logEvent(workspaceId, actorId, "content.edit", id);
             await this.propagateReverse(workspaceId, updated.id, existing.contentType.schema, submittedReverse, { actorId, role, actorPermissions });
             const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
             this.fire(workspaceId, "content.updated", shaped);
@@ -842,6 +865,8 @@ export class ContentEntriesService {
             await this.prisma.contentReview.deleteMany({ where: { entryId: id } });
         }
         await this.snapshot(e.id, merged, targetStatus, actorId);
+        if (targetStatus !== existing.status) await this.logEvent(workspaceId, actorId, eventForStatusChange(existing.status, targetStatus), id);
+        else if (dataChanged) await this.logEvent(workspaceId, actorId, "content.edit", id);
         const shaped = this.shape(e);
         this.fire(workspaceId, "content.updated", shaped);
         if (targetStatus !== existing.status) {
@@ -870,13 +895,18 @@ export class ContentEntriesService {
         }
         const e = await this.prisma.contentEntry.update({
             where: { id },
-            data: { status, publishedAt },
+            // Going live keeps the first publish date (re-publishing never moves it)
+            // and drops the schedule, which has now happened.
+            data: { status, publishedAt, ...(status === "PUBLISHED" ? { firstPublishedAt: existing.firstPublishedAt ?? existing.publishedAt ?? publishedAt, scheduledAt: null } : {}) },
             include: { contentType: { select: CT_SELECT } },
         });
         if (actorId && status !== existing.status) {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, status);
         }
-        if (status !== existing.status) await this.snapshot(e.id, existing.data, status, actorId);
+        if (status !== existing.status) {
+            await this.snapshot(e.id, existing.data, status, actorId);
+            await this.logEvent(workspaceId, actorId, eventForStatusChange(existing.status, status), id);
+        }
         const shaped = this.shape(e);
         if (status === "PUBLISHED") this.fire(workspaceId, "content.published", shaped);
         else if (status === "DRAFT" && existing.status === "PUBLISHED") this.fire(workspaceId, "content.unpublished", shaped);
@@ -912,10 +942,11 @@ export class ContentEntriesService {
             validateEntryData(fieldsOf(existing.contentType.schema), promoted, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId) });
             const e = await this.prisma.contentEntry.update({
                 where: { id },
-                data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date() },
+                data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date(), firstPublishedAt: existing.firstPublishedAt ?? existing.publishedAt ?? new Date(), scheduledAt: null },
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(e.id, promoted, "PUBLISHED", actorId);
+            await this.logEvent(workspaceId, actorId, "content.publish", id);
             await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, promoted);
             const shaped = this.shape(e);
             this.fire(workspaceId, "content.published", shaped);
@@ -936,6 +967,7 @@ export class ContentEntriesService {
                 include: { contentType: { select: CT_SELECT } },
             });
             await this.snapshot(e.id, e.data, "DRAFT", actorId);
+            await this.logEvent(workspaceId, actorId, "content.unpublish", id);
             await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, (e.data ?? {}) as Record<string, unknown>);
             const shaped = this.shape(e);
             this.fire(workspaceId, "content.unpublished", shaped);
@@ -946,7 +978,7 @@ export class ContentEntriesService {
 
     /** Approve a published entry's pending draft (step 1 of the two-step Approve →
      *  Publish promotion). Rejects an incomplete draft so Publish can't 400 later. */
-    async approveDraft(workspaceId: string, id: string, _actorId?: string) {
+    async approveDraft(workspaceId: string, id: string, actorId?: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
             include: { contentType: { select: CT_SELECT } },
@@ -959,6 +991,9 @@ export class ContentEntriesService {
             data: { draftApproved: true },
             include: { contentType: { select: CT_SELECT } },
         });
+        await this.logEvent(workspaceId, actorId, "content.approve", id);
+        // The "Ready to publish" count includes approved drafts of live pages.
+        void this.cache.delByPrefix(`dash:${workspaceId}:`);
         const draft = (e.draftData ?? {}) as { title?: string };
         return { ...this.shape(e), data: e.draftData, title: draft.title ?? "Untitled" };
     }

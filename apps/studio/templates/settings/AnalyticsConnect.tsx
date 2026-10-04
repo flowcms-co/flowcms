@@ -10,8 +10,10 @@ import { api, ApiError } from "@/lib/api";
 import { ANALYTICS_GUIDES } from "@/lib/integrationGuides";
 import { helpUrl, GUIDES } from "@/lib/help";
 import { confirm } from "@/components/providers/ConfirmProvider";
+import { refreshConnections } from "@/lib/useConnections";
+import { syncAge } from "@/lib/trafficMath";
 
-type Source = { connected: boolean; status: string; lastSync: string | null; config: { siteUrl?: string; propertyId?: string; lastError?: string } | null };
+type Source = { connected: boolean; status: string; lastSync: string | null; rows?: number; config: { siteUrl?: string; propertyId?: string; lastError?: string } | null };
 type Status = { gsc: Source; ga4: Source };
 
 const SOURCES = [
@@ -70,7 +72,7 @@ const AnalyticsConnect = () => {
         setSaving(true);
         setModalError(null);
         try {
-            const res = await api<{ ok: boolean; error?: string }>("/analytics/connect", {
+            const res = await api<{ ok: boolean; error?: string; found?: string | null; rows?: number }>("/analytics/connect", {
                 method: "POST",
                 body: JSON.stringify({
                     type: active.key,
@@ -80,11 +82,13 @@ const AnalyticsConnect = () => {
                 }),
             });
             await load();
+            refreshConnections(); // unlock the dashboard cards that were waiting on this source
             if (res.ok) {
                 setActive(null);
-                setNote(`${active.name} connected. Click "Sync now" to pull data.`);
+                // Connect verifies the property is readable and syncs straight away.
+                setNote(`${active.name} connected: ${res.found ?? "property verified"}. ${res.rows ? `Synced ${res.rows.toLocaleString()} rows.` : "No data returned yet; a new property can take a few days to report."}`);
             } else {
-                setModalError(res.error || "Connected, but authentication failed: check the JSON + access.");
+                setModalError(res.error || "Could not read the property: check the JSON and that the service account has access.");
             }
         } catch (e) {
             setModalError(e instanceof ApiError ? e.message : "Could not connect.");
@@ -97,9 +101,11 @@ const AnalyticsConnect = () => {
         setSyncing(true);
         setNote(null);
         try {
-            await api("/analytics/sync", { method: "POST" });
+            const { results } = await api<{ results: Record<string, string> }>("/analytics/sync", { method: "POST" });
             await load();
-            setNote("Synced. Your dashboard charts now use live data.");
+            refreshConnections();
+            const failed = Object.values(results).filter((r) => r !== "ok");
+            setNote(failed.length ? failed[0].replace(/^error: /, "Sync failed: ") : "Synced. Your dashboard charts now use live data.");
         } catch (e) {
             setNote(e instanceof ApiError ? e.message : "Sync failed.");
         } finally {
@@ -111,6 +117,7 @@ const AnalyticsConnect = () => {
         if (!(await confirm({ title: `Disconnect ${name}?`, confirmLabel: "Disconnect", tone: "danger" }))) return;
         await api(`/analytics/${key}`, { method: "DELETE" });
         await load();
+        refreshConnections();
     };
 
     const anyConnected = status && (status.gsc.connected || status.ga4.connected);
@@ -157,6 +164,13 @@ const AnalyticsConnect = () => {
                                     <p className="text-caption-2 text-grey leading-snug">{s.description}</p>
                                 </div>
                             </div>
+                            {connected && (
+                                <p className="text-caption-2 text-grey">
+                                    {src?.lastSync ? `Last synced ${syncAge(src.lastSync)} · ${(src.rows ?? 0).toLocaleString()} rows stored` : "Not synced yet"}
+                                    {src?.lastSync && !src.rows ? " (no data yet)" : ""}
+                                    . Syncs daily.
+                                </p>
+                            )}
                             {src?.status === "ERROR" && src.config?.lastError && (
                                 <p className="rounded-xl bg-error/10 px-3 py-2 text-caption-2 text-error">{src.config.lastError}</p>
                             )}

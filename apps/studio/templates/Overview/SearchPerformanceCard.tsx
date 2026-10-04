@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Menu, Transition } from "@headlessui/react";
 import Card from "@/components/ui/Card";
 import TrendArea from "@/components/charts/TrendArea";
@@ -10,6 +11,7 @@ import LiveBadge from "../seo/LiveBadge";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useConnections } from "@/lib/useConnections";
+import { PERIODS, bucketSum, emptyReason, niceScale, pctDelta, type AnalyticsStatus } from "@/lib/trafficMath";
 
 const PATHS = {
     info: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20M12 16v-4M12 8h.01",
@@ -34,146 +36,119 @@ const Stroke = ({ d, className, color }: { d: string; className?: string; color?
     </svg>
 );
 
-/** Period options for the top-right dropdown (config, not sample data). */
-const PERIODS: { id: string; label: string }[] = [
-    { id: "month", label: "This month" },
-    { id: "30d", label: "Last 30 days" },
-    { id: "quarter", label: "This quarter" },
-    { id: "year", label: "This year" },
-    { id: "12m", label: "Last 12 months" },
-];
-
-const PERIOD_DAYS: Record<string, number> = { month: 30, "30d": 30, quarter: 90, year: 365, "12m": 365 };
 const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${Math.round(n)}`);
 
 type Pt = { date: string; value: number };
+type Totals = { clicks: number; impressions: number; ctr: number; position: number; sessions: number };
 type Overview = {
     hasData: boolean;
-    totals?: { clicks: number; impressions: number; ctr: number; position: number; sessions: number };
+    status?: AnalyticsStatus;
+    totals?: Totals;
+    /** The equal period before the selected one; null when there is none to compare. */
+    previous?: Totals | null;
     series?: { clicks: Pt[]; impressions: Pt[]; sessions: Pt[] };
 };
 
-// delta is null when there is no series long enough to compute a real change;
-// the column then renders the value with no trend arrow (rather than a fake one).
-type Metric = { key: string; label: string; value: string; delta: string | null; color: string; icon: string };
-type Built = { big: string; bigDelta: string; chart: { x: string; cur: number; prev: number }[]; metrics: Metric[] };
+// delta is null when there is no previous period to compare against; the row then
+// renders the value with no trend arrow (rather than a fake one). `good` is whether
+// the change is an improvement (a lower average position is better).
+type Metric = { key: string; label: string; value: string; delta: number | null; good: boolean; color: string; icon: string };
+type Built = { big: string; bigLabel: string; bigDelta: number | null; source: string; chart: { x: string; cur: number; prev: number }[]; scale: ReturnType<typeof niceScale>; metrics: Metric[] };
 
-const sumOf = (arr: { value: number }[], lo: number, hi: number) => arr.slice(lo, hi).reduce((a, b) => a + b.value, 0);
+const METRICS = [
+    { key: "organic", label: "Organic traffic", color: "#6C5CE7", icon: PATHS.search },
+    { key: "impr", label: "Impressions", color: "#00B894", icon: PATHS.eye },
+    { key: "pos", label: "Avg. position", color: "#E91E63", icon: PATHS.target },
+    { key: "ctr", label: "Click through rate", color: "#F59E0B", icon: PATHS.cursor },
+];
 
-/** % change between the first and second half of a series, or null if too short. */
-const halfDelta = (arr: { value: number }[]): string | null => {
-    if (arr.length < 4) return null;
-    const mid = Math.floor(arr.length / 2);
-    const f = sumOf(arr, 0, mid);
-    const s = sumOf(arr, mid, arr.length);
-    if (f === 0) return null;
-    const p = Math.round(((s - f) / f) * 100);
-    return `${p >= 0 ? "+" : ""}${p}%`;
-};
-
-/** % change of the CTR ratio (clicks/impressions) between the two halves. */
-const ctrDelta = (clk: { value: number }[], imp: { value: number }[]): string | null => {
-    const n = Math.min(clk.length, imp.length);
-    if (n < 4) return null;
-    const mid = Math.floor(n / 2);
-    const i1 = sumOf(imp, 0, mid);
-    const i2 = sumOf(imp, mid, n);
-    if (i1 === 0 || i2 === 0) return null;
-    const c1 = sumOf(clk, 0, mid) / i1;
-    const c2 = sumOf(clk, mid, n) / i2;
-    if (c1 === 0) return null;
-    const p = Math.round(((c2 - c1) / c1) * 100);
-    return `${p >= 0 ? "+" : ""}${p}%`;
-};
-
-/* Empty state — rendered once analytics has loaded but there is no live data:
-   an empty chart and "—" placeholders instead of any sample dataset. */
+/* Empty state: an empty chart and "—" placeholders, no delta and no sample dataset. */
 const EMPTY: Built = {
     big: "—",
-    bigDelta: "+0%",
+    bigLabel: "Search clicks",
+    bigDelta: null,
+    source: "Search Console",
     chart: [],
-    metrics: [
-        { key: "organic", label: "Organic traffic", value: "—", delta: null, color: "#6C5CE7", icon: PATHS.search },
-        { key: "impr", label: "Impressions", value: "—", delta: null, color: "#00B894", icon: PATHS.eye },
-        { key: "pos", label: "Avg. position", value: "—", delta: null, color: "#E91E63", icon: PATHS.target },
-        { key: "ctr", label: "Click through rate", value: "—", delta: null, color: "#F59E0B", icon: PATHS.cursor },
-    ],
+    scale: niceScale(0),
+    metrics: METRICS.map((m) => ({ ...m, value: "—", delta: null, good: true })),
 };
 
-function buildLive(o: Overview): Built | null {
+export function buildLive(o: Overview): Built | null {
     if (!o.hasData || !o.totals) return null;
     const t = o.totals;
-    const clicks = o.series?.clicks ?? [];
-    const impressions = o.series?.impressions ?? [];
-    const sessions = o.series?.sessions ?? [];
-    const step = Math.max(1, Math.ceil(clicks.length / 6));
-    const pts = clicks.filter((_, i) => i % step === 0);
-    const chart = pts.map((p) => ({ x: p.date.slice(5), cur: +(p.value / 1000).toFixed(1), prev: 0 }));
-    // Headline trend follows the same series as the headline number (sessions when
-    // GA4 is connected, else clicks), so the "%" matches what is shown above it.
-    const big = halfDelta(sessions.length ? sessions : clicks);
+    const p = o.previous ?? null;
+    const gsc = (o.series?.clicks.length ?? 0) > 0;
+    // The headline is GA4 sessions when GA4 has data, else Search Console clicks;
+    // the label, the chart and the "%" all follow that same series.
+    const ga4 = (o.series?.sessions.length ?? 0) > 0;
+    const buckets = bucketSum((ga4 ? o.series?.sessions : o.series?.clicks) ?? []);
+    const scale = niceScale(Math.max(0, ...buckets.map((b) => b.value)));
+    const d = [pctDelta(p?.clicks, t.clicks), pctDelta(p?.impressions, t.impressions), pctDelta(p?.position, t.position), pctDelta(p?.ctr, t.ctr)];
+    const values = [fmt(t.clicks), fmt(t.impressions), t.position.toFixed(1), `${t.ctr.toFixed(1)}%`];
     return {
-        big: fmt(t.sessions || t.clicks),
-        bigDelta: big ?? "+0%",
-        chart,
-        // Every delta is computed from the real daily series; metrics with no
-        // series long enough (e.g. average position, which has no daily series
-        // here) show no trend arrow rather than a fabricated one.
-        metrics: [
-            { key: "organic", label: "Organic traffic", value: fmt(t.clicks), delta: halfDelta(clicks), color: "#6C5CE7", icon: PATHS.search },
-            { key: "impr", label: "Impressions", value: fmt(t.impressions), delta: halfDelta(impressions), color: "#00B894", icon: PATHS.eye },
-            { key: "pos", label: "Avg. position", value: t.position.toFixed(1), delta: null, color: "#E91E63", icon: PATHS.target },
-            { key: "ctr", label: "Click through rate", value: `${t.ctr.toFixed(1)}%`, delta: ctrDelta(clicks, impressions), color: "#F59E0B", icon: PATHS.cursor },
-        ],
+        big: fmt(ga4 ? t.sessions : t.clicks),
+        bigLabel: ga4 ? "Sessions (GA4)" : "Search clicks (Search Console)",
+        bigDelta: ga4 ? pctDelta(p?.sessions, t.sessions) : d[0],
+        source: ga4 && gsc ? "GA4 + Search Console" : ga4 ? "GA4" : "Search Console",
+        chart: buckets.map((b) => ({ x: b.x, cur: +(b.value / scale.div).toFixed(1), prev: 0 })),
+        scale,
+        // The four rows are Search Console metrics: dashes when only GA4 is connected.
+        metrics: METRICS.map((m, i) => ({ ...m, value: gsc ? values[i] : "—", delta: gsc ? d[i] : null, good: m.key === "pos" ? (d[i] ?? 0) <= 0 : (d[i] ?? 0) >= 0 })),
     };
 }
 
 /**
- * Search-performance card. White area chart of total pageviews over the period,
- * with a metric column (organic traffic / impressions / avg. position / CTR).
- * Live from /analytics/overview (GSC + GA4); falls back to a labelled sample.
+ * Search-performance card. Area chart of the headline series over the period (GA4
+ * sessions, else Search Console clicks), with a metric column (organic traffic /
+ * impressions / avg. position / CTR), each compared with the previous equal period.
+ * Live from /analytics/overview; with no data it says why instead of showing numbers.
  * The top-right dropdown switches the period.
  */
 const SearchPerformanceCard = () => {
-    const [periodId, setPeriodId] = useState(PERIODS[0].id);
-    const label = PERIODS.find((p) => p.id === periodId)!.label;
+    const [periodId, setPeriodId] = useState("30d");
+    const period = PERIODS.find((p) => p.id === periodId)!;
+    const label = period.label;
     const [live, setLive] = useState<Built | null>(null);
+    const [status, setStatus] = useState<AnalyticsStatus | undefined>();
     const [loading, setLoading] = useState(true);
-    const { connections: conn, loading: connLoading } = useConnections();
+    const [error, setError] = useState(false);
+    const { connections: conn, loading: connLoading, forbidden } = useConnections();
 
     useEffect(() => {
         let off = false;
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setLoading(true); // show the skeleton while the new period loads
-        api<Overview>(`/analytics/overview?days=${PERIOD_DAYS[periodId] ?? 30}`)
+        api<Overview>(`/analytics/overview?days=${period.days}`)
             .then((o) => {
                 if (off) return;
                 setLive(buildLive(o));
+                setStatus(o.status);
+                setError(false);
                 setLoading(false);
             })
             .catch(() => {
                 if (off) return;
                 setLive(null);
+                setError(true);
                 setLoading(false);
             });
         return () => {
             off = true;
         };
-    }, [periodId]);
+    }, [period.days]);
 
     // Loaded with no live data → empty chart + "—" placeholders (never sample data).
     const d = live ?? EMPTY;
-    const up = !d.bigDelta.startsWith("-");
-    // Clean Y axis: 0 → next multiple of 10 above the peak, in 10K steps.
-    const niceMax = Math.max(10, Math.ceil(Math.max(0, ...d.chart.map((c) => c.cur)) / 10) * 10);
-    const yTicks = Array.from({ length: niceMax / 10 + 1 }, (_, i) => i * 10);
+    const up = (d.bigDelta ?? 0) >= 0;
+    // Why there is nothing to show: a failed request is not the same as no data yet.
+    const reason = loading ? "Loading" : error ? "Couldn't load" : emptyReason(status);
 
     return (
         <Card className="flex h-full flex-col !p-6">
             <div className="mb-5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 font-poppins text-[15px] font-semibold text-black dark:text-white">
                     Search performance &middot; {label}
-                    <span className="ml-1"><LiveBadge live={!!live} source="Search Console" /></span>
+                    <span className="ml-1"><LiveBadge live={!!live} source={d.source} reason={reason} /></span>
                     <Stroke d={PATHS.info} className="h-4 w-4 text-grey" />
                 </div>
                 <Menu as="div" className="relative">
@@ -198,12 +173,15 @@ const SearchPerformanceCard = () => {
                 </Menu>
             </div>
 
+            {forbidden.analytics ? (
+                <p className="flex grow items-center justify-center py-16 text-body-sm text-grey">You don&rsquo;t have access to this data.</p>
+            ) : (
             <ConnectLock
-                connected={conn.gsc}
+                connected={conn.gsc || conn.ga4}
                 loading={connLoading}
                 brand="Google Search Console"
                 title="Connect Search Console"
-                description="Connect Google Search Console to track search clicks, impressions, CTR and average position from real search traffic."
+                description="Connect Google Search Console or Google Analytics to track search clicks, impressions, CTR, average position and sessions from real traffic."
                 href="/settings/integrations?tab=analytics"
                 ctaLabel="Connect Search Console"
                 className="grow"
@@ -231,24 +209,33 @@ const SearchPerformanceCard = () => {
             <div className="grid grow grid-cols-1 gap-5 lg:grid-cols-[1fr_13rem]">
                 {/* Chart + headline */}
                 <div className="flex min-h-0 flex-col">
-                    <div className="text-caption-1 text-grey">Total pageviews</div>
+                    <div className="text-caption-1 text-grey">{d.bigLabel}</div>
                     <StatNumber value={d.big} className="mt-1 font-poppins text-[clamp(2rem,1.7rem_+_1.1vw,2.75rem)] leading-none font-bold text-black dark:text-white" />
-                    <span className={cn("mt-1.5 inline-flex items-center gap-1 text-caption-1 font-semibold", up ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
-                        <Stroke d={up ? PATHS.arrowUp : PATHS.arrowDown} className="h-3.5 w-3.5" />
-                        {d.bigDelta.replace(/^[+-]/, "")} vs last month
-                    </span>
+                    {d.bigDelta != null ? (
+                        <span className={cn("mt-1.5 inline-flex items-center gap-1 text-caption-1 font-semibold", up ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
+                            <Stroke d={up ? PATHS.arrowUp : PATHS.arrowDown} className="h-3.5 w-3.5" />
+                            {Math.abs(d.bigDelta)}% vs previous {period.days} days
+                        </span>
+                    ) : (
+                        // No delta without data, and none when the synced history has no earlier period.
+                        <span className="mt-1.5 text-caption-1 text-grey">
+                            {error ? "Couldn\u2019t load search performance. Reload to try again." : live ? "No earlier period to compare with" : (
+                                <>{reason}. <Link href="/settings/integrations?tab=analytics" className="font-semibold text-primary hover:opacity-70">Open analytics settings</Link></>
+                            )}
+                        </span>
+                    )}
                     {/* Gap from the headline, then the chart fills to the card's bottom so
                         its baseline lines up with the metric column. min-height keeps it
                         from collapsing when the row stacks to one column (mobile). */}
                     <div className="mt-6 grow min-h-[16rem]">
-                        <TrendArea data={d.chart} height="100%" unit="K" color={LINE} fillOpacity={0.16} showPrev={false} domain={[0, niceMax]} ticks={yTicks} insetClass="-ml-1" />
+                        <TrendArea data={d.chart} height="100%" unit={d.scale.unit} color={LINE} fillOpacity={0.16} showPrev={false} domain={[0, d.scale.max]} ticks={d.scale.ticks} insetClass="-ml-1" />
                     </div>
                 </div>
 
                 {/* Metric column */}
                 <div className="flex flex-col divide-y divide-grey-light/70 lg:border-l lg:border-grey-light/70 lg:pl-5 dark:divide-grey-light/10 dark:lg:border-grey-light/10">
                     {d.metrics.map((m) => {
-                        const mUp = m.delta != null && !m.delta.startsWith("-");
+                        const mUp = (m.delta ?? 0) >= 0;
                         return (
                             <div key={m.key} className="flex flex-1 items-center gap-3 py-3.5">
                                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${m.color}1f` }}>
@@ -258,11 +245,11 @@ const SearchPerformanceCard = () => {
                                     <div className="text-caption-2 text-grey">{m.label}</div>
                                     <div className="font-poppins text-title font-bold text-black dark:text-white">{m.value}</div>
                                 </div>
-                                {/* Only render a trend arrow when we have a real delta from the series. */}
+                                {/* Only render a trend arrow when there is a previous period to compare with. */}
                                 {m.delta != null && (
-                                    <span className={cn("inline-flex shrink-0 items-center gap-0.5 text-caption-2 font-semibold", mUp ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
+                                    <span className={cn("inline-flex shrink-0 items-center gap-0.5 text-caption-2 font-semibold", m.good ? "text-[#0a7a5f] dark:text-success" : "text-[#c0453f] dark:text-[#E17055]")}>
                                         <Stroke d={mUp ? PATHS.arrowUp : PATHS.arrowDown} className="h-3 w-3" />
-                                        {m.delta.replace(/^[+-]/, "")}
+                                        {Math.abs(m.delta)}%
                                     </span>
                                 )}
                             </div>
@@ -272,6 +259,7 @@ const SearchPerformanceCard = () => {
             </div>
             )}
             </ConnectLock>
+            )}
         </Card>
     );
 };

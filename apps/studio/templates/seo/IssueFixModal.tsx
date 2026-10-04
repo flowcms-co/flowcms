@@ -102,6 +102,7 @@ const IssueFixModal = ({ issue, onClose, onSaved }: { issue: FixIssue | null; on
     const [jsonld, setJsonld] = useState("");
     const [body, setBody] = useState("");
     const [alts, setAlts] = useState<{ src: string; alt: string }[]>([]);
+    const [altFromAi, setAltFromAi] = useState(false);
 
     const bodyText = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
@@ -136,17 +137,13 @@ const IssueFixModal = ({ issue, onClose, onSaved }: { issue: FixIssue | null; on
                     : ""));
                 const b = String(d.body ?? "");
                 setBody(b);
-                // alt: collect images missing alt
-                const imgs: { src: string; alt: string }[] = [];
-                const re = /<img\b[^>]*>/gi;
-                let m: RegExpExecArray | null;
-                while ((m = re.exec(b))) {
-                    const tag = m[0];
-                    const cur = /alt\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? "";
-                    const src = /src\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
-                    if (src && !cur.trim()) imgs.push({ src, alt: "" });
-                }
-                setAlts(imgs);
+                // alt: the images the audit flags (rich text, sections, image fields),
+                // not only <img> tags in the body.
+                setAlts([]);
+                if (issue.fix === "alt")
+                    void api<{ images: string[] }>(`/seo/scan/alt/${issue.id}`)
+                        .then((r) => setAlts(r.images.map((src) => ({ src, alt: "" }))))
+                        .catch(() => undefined);
             })
             .catch(() => setError("Couldn't load this page."))
             .finally(() => setLoading(false));
@@ -170,6 +167,7 @@ const IssueFixModal = ({ issue, onClose, onSaved }: { issue: FixIssue | null; on
                 const r = await api<{ suggestions: { src: string; alt: string }[] }>(`/seo/scan/alt/${issue.id}`, { method: "POST" });
                 const map = new Map(r.suggestions.map((s) => [s.src.split("/").pop(), s.alt]));
                 setAlts((prev) => prev.map((a) => ({ ...a, alt: map.get(a.src.split("/").pop() ?? "") ?? a.alt })));
+                setAltFromAi(r.suggestions.length > 0); // generated alt is already saved on the asset
             } else if (mode === "content") {
                 const instruction =
                     issue.key === "THIN_CONTENT" ? "Expand this page with useful, original, well-structured detail (keep the same topic and voice)."
@@ -202,18 +200,15 @@ const IssueFixModal = ({ issue, onClose, onSaved }: { issue: FixIssue | null; on
         else if (mode === "noindex") patch.robots = String(data.robots ?? "").replace(/noindex/gi, "").trim();
         else if (mode === "schema" || mode === "faq") { patch.jsonLdType = schemaType; if (jsonld) patch.jsonLd = jsonld; }
         else if (mode === "headings" || mode === "content") patch.body = body;
-        else if (mode === "alt") {
-            let b = body;
-            for (const a of alts) {
-                if (!a.alt.trim()) continue;
-                const safe = a.src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                const tagRe = new RegExp(`(<img\\b[^>]*src\\s*=\\s*["']${safe}["'][^>]*>)`, "i");
-                b = b.replace(tagRe, (tag) => /alt\s*=/.test(tag) ? tag.replace(/alt\s*=\s*["'][^"']*["']/i, `alt="${a.alt.replace(/"/g, "&quot;")}"`) : tag.replace(/<img\b/i, `<img alt="${a.alt.replace(/"/g, "&quot;")}"`));
-            }
-            patch.body = b;
-        }
         try {
-            await api(`/entries/${issue.id}`, { method: "PATCH", body: JSON.stringify({ data: patch }) });
+            if (mode === "alt") {
+                // The server writes each alt where the page keeps it: the paired alt
+                // field beside an image field, or the <img> tag in rich text.
+                const r = await api<{ patch: Record<string, unknown> }>(`/seo/scan/alt/${issue.id}/apply`, { method: "POST", body: JSON.stringify({ alts }) });
+                Object.assign(patch, r.patch);
+                if (!Object.keys(patch).length && !altFromAi) throw new ApiError(400, "This page has no alt field for these images. Edit the alt text on the asset in the Media library instead.");
+            }
+            if (Object.keys(patch).length) await api(`/entries/${issue.id}`, { method: "PATCH", body: JSON.stringify({ data: patch }) });
             // Learn from the fix: record it into the SEO memory (The Brain) so future
             // suggestions + the auto-apply pass follow what the user actually accepts.
             setLearned(await learnFromFix(mode, issue.path || canonical, { metaTitle, metaDesc, schemaType }));

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 /**
  * Which third-party data integrations the current workspace has connected.
@@ -19,6 +19,10 @@ export type Connections = {
     ai: boolean; // at least one BYO AI provider key
 };
 
+/** Which status endpoints answered 403: the user's role can't read that data, which
+ *  is different from the source not being connected. */
+export type Forbidden = { analytics: boolean; seo: boolean; integrations: boolean };
+
 const EMPTY: Connections = { gsc: false, ga4: false, pagespeed: false, keyword: false, aeo: false, backlinks: false, ai: false };
 
 type AnalyticsStatus = { gsc?: { connected?: boolean }; ga4?: { connected?: boolean } };
@@ -32,14 +36,23 @@ type AiIntegration = { type?: string; status?: string };
 
 // Module-level cache so every card/page shares one fetch (and re-mounts are instant).
 let cache: Connections | null = null;
+let forbidden: Forbidden = { analytics: false, seo: false, integrations: false };
+let fetchedAt = 0;
 let inflight: Promise<Connections> | null = null;
 const subscribers = new Set<(c: Connections) => void>();
+const FRESH_MS = 30_000; // a mount after this revalidates, so a new connection unlocks its cards
 
-async function fetchConnections(): Promise<Connections> {
+export async function fetchConnections(): Promise<Connections> {
+    const denied: Forbidden = { analytics: false, seo: false, integrations: false };
+    const get = <T,>(path: string, key: keyof Forbidden) =>
+        api<T>(path).catch((e) => {
+            if (e instanceof ApiError && e.status === 403) denied[key] = true;
+            return null;
+        });
     const [analytics, connectors, ai] = await Promise.all([
-        api<AnalyticsStatus>("/analytics/status").catch(() => null),
-        api<ConnectorsStatus>("/seo/connectors").catch(() => null),
-        api<AiIntegration[]>("/integrations").catch(() => null),
+        get<AnalyticsStatus>("/analytics/status", "analytics"),
+        get<ConnectorsStatus>("/seo/connectors", "seo"),
+        get<AiIntegration[]>("/integrations", "integrations"),
     ]);
     const next: Connections = {
         gsc: !!analytics?.gsc?.connected,
@@ -55,19 +68,24 @@ async function fetchConnections(): Promise<Connections> {
             ai.some((i) => i.type === "AI_PROVIDER" && i.status !== "ERROR" && i.status !== "DISCONNECTED"),
     };
     cache = next;
+    forbidden = denied;
+    fetchedAt = Date.now();
     subscribers.forEach((fn) => fn(next));
     return next;
 }
 
-/** Force a refetch (e.g. after returning from the integrations settings page). */
+/** Refetch in the background (after connecting or disconnecting a source). The old
+ *  value stays on screen until the new one arrives. */
 export function refreshConnections(): void {
-    cache = null;
-    inflight = fetchConnections().finally(() => {
-        inflight = null;
-    });
+    inflight =
+        inflight ??
+        fetchConnections().finally(() => {
+            inflight = null;
+        });
+    inflight.catch(() => undefined);
 }
 
-export function useConnections(): { connections: Connections; loading: boolean } {
+export function useConnections(): { connections: Connections; loading: boolean; forbidden: Forbidden } {
     const [connections, setConnections] = useState<Connections>(cache ?? EMPTY);
     const [loading, setLoading] = useState(cache == null);
 
@@ -82,6 +100,7 @@ export function useConnections(): { connections: Connections; loading: boolean }
             // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from the module cache on mount
             setConnections(cache);
             setLoading(false);
+            if (Date.now() - fetchedAt > FRESH_MS) refreshConnections();
         } else {
             inflight =
                 inflight ??
@@ -95,5 +114,6 @@ export function useConnections(): { connections: Connections; loading: boolean }
         };
     }, []);
 
-    return { connections, loading };
+    // Read at render: it is set together with `cache`, whose update re-renders us.
+    return { connections, loading, forbidden };
 }

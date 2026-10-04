@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { coverageNote } from "@/lib/seoDash";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import { api } from "@/lib/api";
@@ -15,7 +16,7 @@ type Opp = {
     anchor: string;
     snippet: string;
 };
-type ScanResult = { opportunities: Opp[]; pages: number };
+type ScanResult = { opportunities: Opp[]; pages: number; total?: number };
 
 const keyOf = (o: Opp) => `${o.sourceId}|${o.targetId}|${o.anchor.toLowerCase()}`;
 
@@ -105,7 +106,7 @@ const InternalLinks = () => {
             const order = parsed && Array.isArray(parsed.keep) ? parsed.keep.filter((i) => i >= 0 && i < opps.length) : [];
             const kept = order.map((i) => opps[i]);
             if (kept.length) {
-                setData({ opportunities: kept, pages: data?.pages ?? 0 });
+                setData({ opportunities: kept, pages: data?.pages ?? 0, total: data?.total });
                 setRefined(true);
             }
         } catch (e) {
@@ -173,12 +174,16 @@ const InternalLinks = () => {
                     </span>
                     <h3 className="text-h6 text-black dark:text-white">No new linking opportunities</h3>
                     <p className="mx-auto mt-1 max-w-md text-caption-2 text-grey">
-                        We scanned {data?.pages ?? 0} published page{(data?.pages ?? 0) === 1 ? "" : "s"} and found no
-                        unlinked mentions between them. Publish more related content, then rescan.
+                        We scanned {data?.pages ?? 0}{(data?.total ?? 0) > (data?.pages ?? 0) ? ` of ${data?.total}` : ""} published page{(data?.total ?? data?.pages ?? 0) === 1 ? "" : "s"} and found no
+                        unlinked mentions between them.{" "}
+                        {(data?.total ?? 0) > (data?.pages ?? 0) ? "The rest were not checked, so this is not a result for the whole site." : "Publish more related content, then rescan."}
                     </p>
                 </Card>
             ) : (
                 <>
+                    {coverageNote("Internal links", data ? { checked: data.pages, total: data.total ?? data.pages } : null) && (
+                        <p className="text-caption-2 text-grey">{coverageNote("Internal links", { checked: data!.pages, total: data!.total ?? data!.pages })}</p>
+                    )}
                     {refined && <p className="text-caption-2 text-grey">Refined with AI — showing the most relevant matches first.</p>}
                     {groups.map((g) => (
                         <Card key={g.title} className="overflow-hidden !p-0">

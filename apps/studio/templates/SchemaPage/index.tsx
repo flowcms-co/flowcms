@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { needsPageFlag, storedPageFlag } from "@/lib/seoDash";
 import { Reorder, useDragControls } from "framer-motion";
 import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
@@ -223,6 +224,8 @@ const SchemaPage = () => {
                                   routePattern: active.pageType !== "home" ? active.routePattern?.trim() || undefined : undefined,
                                   slugPattern: active.pageType !== "home" ? active.slugPattern?.trim() || undefined : undefined,
                                   freeFormBody: active.freeFormBody || undefined,
+                                  // Stored explicitly so the choice survives a later page-type change.
+                                  isPage: storedPageFlag(active),
                               }
                             : { jsonLd: active.jsonLd }),
                         fields,
@@ -455,6 +458,31 @@ const SchemaPage = () => {
                                         </span>
                                     </span>
                                     <Switch checked={!!active.freeFormBody} onChange={(v) => patchActive({ freeFormBody: v })} aria-label="Free-form page" />
+                                </div>
+                            )}
+
+                            {tab === "types" && (
+                                <div className="mb-5 flex items-start justify-between gap-4">
+                                    <span className="flex flex-col gap-0.5">
+                                        <span className="text-caption-1 text-grey">Entries are pages on the site</span>
+                                        <span className="text-caption-2 leading-relaxed text-grey">
+                                            Pages are included in the SEO audit, the crawl and internal linking, at the URL above. Turn off for types
+                                            that only feed other pages, like cities or tags with no page of their own.
+                                        </span>
+                                    </span>
+                                    <Switch checked={active.isPage !== false} onChange={(v) => patchActive({ isPage: v, isPageSet: true })} aria-label="Entries are pages on the site" />
+                                </div>
+                            )}
+
+                            {tab === "types" && needsPageFlag(active) && (
+                                <div role="alert" className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-warning/40 bg-warning/[0.08] p-3.5">
+                                    <span className="text-caption-2 leading-relaxed text-black dark:text-white">
+                                        This type has a URL pattern, so its entries have pages, but it is not marked as pages. The SEO audit,
+                                        crawl and internal linking skip it until you turn that on.
+                                    </span>
+                                    <button type="button" onClick={() => patchActive({ isPage: true, isPageSet: true })} className="btn-secondary btn-sm shrink-0">
+                                        Mark as pages
+                                    </button>
                                 </div>
                             )}
 

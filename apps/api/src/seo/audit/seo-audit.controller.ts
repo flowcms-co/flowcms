@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { IsArray, IsOptional, IsString } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../../auth/decorators";
@@ -35,8 +35,8 @@ export class SeoAuditController {
 
     /** Rendered findings per page (codes already expanded to readable UI). */
     @Get()
-    list(@CurrentUser() user: AuthUser) {
-        return this.audit.list(user.workspaceId);
+    list(@CurrentUser() user: AuthUser, @Query("limit") limit?: string, @Query("offset") offset?: string) {
+        return this.audit.list(user.workspaceId, { limit: Math.min(Math.max(Number(limit) || 100, 1), 500), offset: Math.max(Number(offset) || 0, 0) });
     }
 
     /** The unified, grouped issue set for the AI Optimizer + Dashboard: page-scope
@@ -51,6 +51,26 @@ export class SeoAuditController {
     @Post("run")
     run(@CurrentUser() user: AuthUser) {
         return this.audit.auditWorkspace(user.workspaceId);
+    }
+
+    /** The same audit as a background job with progress: with a site URL every
+     *  page's live HTML is fetched, which outlasts a request on a large site. */
+    @Post("jobs/run")
+    runJob(@CurrentUser() user: AuthUser) {
+        return this.jobs.enqueue(user.workspaceId, user.id, "seo.auditPages", "Audit pages", {});
+    }
+
+    /** The page images missing alt text: the set the audit flags and the fixer fills. */
+    @Get("alt/:id")
+    async missingAlt(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+        return { images: await this.audit.missingAlt(user.workspaceId, id) };
+    }
+
+    /** Write generated alt text where the page keeps it (paired alt fields, rich text). */
+    @Post("alt/:id/apply")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    async applyAlt(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: { alts?: { src: string; alt: string }[] }) {
+        return { patch: await this.audit.altPatch(user.workspaceId, id, Array.isArray(dto?.alts) ? dto.alts : []) };
     }
 
     /** Re-audit a single entry. */

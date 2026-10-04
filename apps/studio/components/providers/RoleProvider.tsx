@@ -22,8 +22,9 @@ const RoleContext = createContext<RoleContextValue | null>(null);
 
 /**
  * Derives the UI role + display meta from the authenticated user. A Super Admin
- * can preview the app as any other role ("view as") — a front-end-only overlay;
- * the backend still enforces their real permissions on every request.
+ * can preview the app as any other role ("view as"): a layout preview only. The
+ * data is still fetched as the Super Admin (see layoutPreviewNote), and the backend
+ * still enforces their real permissions on every request.
  */
 export function RoleProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
@@ -38,7 +39,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     const meta: RoleMeta = user
         ? {
               id: role,
-              label: previewing ? `Viewing as ${ROLES[role].label}` : user.title || user.role.name,
+              label: previewing ? `Layout preview: ${ROLES[role].label}` : user.title || user.role.name,
               description: base.description,
               user: {
                   name: user.name || user.email,

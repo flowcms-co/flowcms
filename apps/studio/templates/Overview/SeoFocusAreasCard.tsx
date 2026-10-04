@@ -6,6 +6,8 @@ import Card from "@/components/ui/Card";
 import ScoreRing from "@/components/ui/ScoreRing";
 import EmptyState from "@/components/ui/EmptyState";
 import { api } from "@/lib/api";
+import { scoreCta } from "@/lib/seoDash";
+import { useConnections } from "@/lib/useConnections";
 
 const bandFor = (s: number) => (s >= 80 ? "Strong" : s >= 70 ? "Good" : s >= 50 ? "Fair" : "Poor");
 const colorFor = (s: number) => (s >= 70 ? "#00B894" : s >= 50 ? "#F5A623" : "#E5484D");
@@ -30,10 +32,18 @@ const PILLARS: Pillar[] = [
 
 const SeoFocusAreasCard = () => {
     const [scores, setScores] = useState<Record<string, number>>({});
+    const [notes, setNotes] = useState<Record<string, string>>({});
+    const [failed, setFailed] = useState(false);
+    const [site, setSite] = useState<string | null | undefined>(undefined);
+    const { forbidden } = useConnections();
 
     useEffect(() => {
-        void api<{ hasData: boolean; pillars?: { key: string; score: number | null }[] }>("/seo/score")
+        // The API shares one crawl and one stored PageSpeed result between this card
+        // and the SEO Health card, so two cards asking is one piece of work.
+        void api<{ site?: string | null }>("/seo/connectors").then((d) => setSite(d.site ?? null)).catch(() => {});
+        void api<{ hasData: boolean; pillars?: { key: string; score: number | null; note?: string }[] }>("/seo/score")
             .then((d) => {
+                setNotes(Object.fromEntries((d.pillars ?? []).filter((p) => p.note).map((p) => [p.key, p.note as string])));
                 const next: Record<string, number> = {};
                 for (const key of ["visibility", "technical", "speed"]) {
                     const v = d.pillars?.find((p) => p.key === key)?.score;
@@ -41,7 +51,7 @@ const SeoFocusAreasCard = () => {
                 }
                 if (Object.keys(next).length) setScores((s) => ({ ...s, ...next }));
             })
-            .catch(() => {});
+            .catch(() => setFailed(true));
         void api<{ hasData: boolean; score?: number }>("/seo/aeo")
             .then((d) => {
                 if (d.hasData && typeof d.score === "number") setScores((s) => ({ ...s, ai: d.score as number }));
@@ -60,13 +70,11 @@ const SeoFocusAreasCard = () => {
 
             {!hasAnyScore ? (
                 <Card className="!p-6">
-                    <EmptyState
-                        variant="bare"
-                        icon="search"
-                        title="No pillar scores yet"
-                        description="Run a scan and connect your sources to score search visibility, technical health, Core Web Vitals and AI visibility."
-                        action={{ label: "Run a scan", href: "/seo/optimizer" }}
-                    />
+                    {forbidden.seo || failed ? (
+                        <EmptyState variant="bare" icon="search" title={forbidden.seo ? "No access" : "Couldn't load pillar scores"} description={forbidden.seo ? "You don't have access to this data." : "Something went wrong fetching the scores. Reload to try again."} />
+                    ) : (
+                        <EmptyState variant="bare" icon="search" title={scoreCta(site, false).title} description={scoreCta(site, false).description} action={{ label: scoreCta(site, false).label!, href: scoreCta(site, false).href! }} />
+                    )}
                 </Card>
             ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
@@ -74,7 +82,7 @@ const SeoFocusAreasCard = () => {
                     const score = scores[p.key];
                     const has = score != null;
                     const color = has ? colorFor(score) : "#9999B0";
-                    const band = has ? bandFor(score) : "Not scored";
+                    const band = has ? bandFor(score) : notes[p.key] ?? "Not scored";
                     return (
                         <Card key={p.key} className="flex flex-col items-center !p-5 text-center transition-shadow hover:shadow-[0_0.75rem_2rem_rgba(26,26,46,0.08)]">
                             <h3 className="font-poppins text-title font-semibold text-black dark:text-white">{p.title}</h3>

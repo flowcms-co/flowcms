@@ -8,6 +8,15 @@ import { safeFetch } from "../common/ssrf";
 import { CacheService } from "../cache/cache.service";
 import { ContentEntriesService } from "../content/content-entries.service";
 import { entryToCanonicalContent } from "../content/canonical-content";
+import { SitePagesService, absoluteUrl } from "./site-pages.service";
+import { crawlSeeds, mapLimit, parsePsi, pctChange, periods, psiReason, psiUrl, singleFlight, sitemapLocs, speedScore, weightedCtr, weightedPosition, type PsiResult } from "./seo-math";
+import type { LiveFacts } from "./audit/audit-engine";
+import { rankPages } from "./site-pages.service";
+import { HostGate, DEFAULT_RPS, politeRequest, retryAfterMs } from "./polite";
+
+/** The crawler identifies itself with this user agent. Sites with bot or geo rules
+ *  need to allow it (documented in docs/SEO-CRAWLER.md). */
+export const CRAWLER_UA = "FlowCMS-SEO-Auditor/1.0 (+https://flowcms.co)";
 
 /** Splits the packed "querypage" dimensionValue. */
 const PAIR_SEP = String.fromCharCode(1);
@@ -46,10 +55,25 @@ export class SeoService {
     // Expensive crawler-backed reads are cached through CacheService (Redis when
     // available, else in-process) so the crawler tabs share one crawl AND the cache
     // is shared across instances in a multi-instance deploy. TTLs in seconds.
+    // A crawl older than CRAWL_TTL_S is still served, and refreshed in the background;
+    // it is kept for CRAWL_KEEP_S so a page load never waits on a crawl it has seen.
     private readonly CRAWL_TTL_S = 10 * 60;
-    private readonly VITALS_TTL_S = 30 * 60;
+    private readonly CRAWL_KEEP_S = 7 * 24 * 3600;
+    private readonly CRAWL_MAX = 40; // URLs per crawl
+    private readonly PSI_TTL_MS = 24 * 3600 * 1000; // stored PageSpeed runs refresh daily
+    private readonly PSI_TIMEOUT_MS = 90_000; // mobile runs often take longer than 20s
+    private readonly PSI_MAX_URLS = 5;
     private crawlKey(workspaceId: string) { return `seo:crawl:${workspaceId}`; }
-    private vitalsKey(workspaceId: string) { return `seo:vitals:${workspaceId}`; }
+    // One crawl / PageSpeed run per workspace at a time, however many endpoints ask.
+    // ponytail: per-process; use a Redis lease if several API instances share a site.
+    private readonly flight = singleFlight();
+    // Every request to a customer's site (audit, crawl, drip) goes through this gate:
+    // one per second per host by default, held back when the host answers 429/503.
+    // ponytail: per-process, like the flight above.
+    private readonly gate = new HostGate();
+    /** Pages a capped pairwise check looks at (internal links). */
+    static readonly LINKS_CAP = 500;
+    private readonly psiRunning = new Set<string>();
 
     constructor(
         private readonly prisma: PrismaService,
@@ -57,6 +81,7 @@ export class SeoService {
         private readonly knowledge: KnowledgeService,
         private readonly entries: ContentEntriesService,
         private readonly cache: CacheService,
+        private readonly sitePages: SitePagesService,
     ) {}
 
     // ─── Internal linking ───────────────────────────────────────────────────
@@ -78,23 +103,37 @@ export class SeoService {
         };
     }
 
-    async internalLinks(workspaceId: string): Promise<{ opportunities: LinkOpportunity[]; pages: number }> {
-        const entries = await this.prisma.contentEntry.findMany({
-            where: { workspaceId, status: "PUBLISHED" },
-            select: { id: true, slug: true, data: true },
-            orderBy: { updatedAt: "desc" },
-            take: 500,
-        });
+    /** Search Console impressions by site path, for choosing which pages a capped
+     *  check covers. Empty when Search Console has no page data. */
+    async impressionsByPath(workspaceId: string): Promise<Map<string, number>> {
+        const out = new Map<string, number>();
+        for (const [url, m] of await this.gscDimension(workspaceId, "page")) {
+            try {
+                const path = new URL(url).pathname.replace(/(.)\/+$/, "$1") || "/";
+                out.set(path, (out.get(path) ?? 0) + m.impressions);
+            } catch { /* not a URL */ }
+        }
+        return out;
+    }
+
+    async internalLinks(workspaceId: string): Promise<{ opportunities: LinkOpportunity[]; pages: number; total: number }> {
+        // Pages only, at their real site paths (entryPath), so a link that already
+        // exists is recognised and the suggested URL is one the site serves.
+        // ponytail: pairwise phrase matching, so capped; index phrases if more are needed.
+        // The pages checked are the ones that matter most (most impressions, else
+        // newest), and the result says how many of the total were covered.
+        const all = await this.sitePages.pages(workspaceId);
+        const entries = rankPages(all, await this.impressionsByPath(workspaceId)).slice(0, SeoService.LINKS_CAP);
 
         // Each page is a link target; its title + keywords become candidate anchor phrases.
         const targets = entries
-            .filter((e) => e.slug)
+            .filter((e) => e.path !== "/")
             .map((e) => {
                 const { title, keywords } = this.bodyOf(e);
                 const phrases = [title, ...keywords.split(",").map((s) => s.trim())].filter(
                     (p) => p.length >= 6 && p.split(/\s+/).length <= 6,
                 );
-                return { id: e.id, title, url: `/${e.slug}`, phrases: [...new Set(phrases)] };
+                return { id: e.id, title, url: e.path, phrases: [...new Set(phrases)].map((p) => new RegExp(`\\b${escapeRe(p)}\\b`, "i")) };
             })
             .filter((t) => t.title && t.phrases.length);
 
@@ -110,12 +149,13 @@ export class SeoService {
             for (const t of targets) {
                 if (t.id === e.id) continue;
                 // Already linked to this target → not an opportunity.
-                if (lowerBody.includes(`href="${t.url}"`) || lowerBody.includes(`href='${t.url}'`)) continue;
+                // (relative or absolute href, with or without a trailing slash).
+                if (new RegExp(`href=["'][^"']*${escapeRe(t.url.toLowerCase())}/?["'#?]`).test(lowerBody)) continue;
                 // First phrase (title preferred) that appears as whole words in the source text.
                 let anchor = "";
                 let idx = -1;
                 for (const p of t.phrases) {
-                    const m = new RegExp(`\\b${escapeRe(p)}\\b`, "i").exec(text);
+                    const m = p.exec(text);
                     if (m) {
                         anchor = m[0];
                         idx = m.index;
@@ -149,7 +189,7 @@ export class SeoService {
             limited.push(o);
             if (limited.length >= 60) break;
         }
-        return { opportunities: limited, pages: entries.length };
+        return { opportunities: limited, pages: entries.length, total: all.length };
     }
 
     /** Wrap the first unlinked, in-text occurrence of `anchor` in an <a> to `url`. */
@@ -460,6 +500,7 @@ export class SeoService {
             hasData: true,
             source: "ga4",
             metric: "sessions", // GA4 gives referral traffic, not backlink counts
+            label: "Referral traffic",
             referringDomains: referral.length,
             referralSessions: referral.reduce((s, r) => s + r.sessions, 0),
             newDomains: null,
@@ -635,8 +676,8 @@ export class SeoService {
     }
 
     /** KPI strip + health score + dashboard counters (GSC/GA4, no crawl). */
-    async summary(workspaceId: string, _days = 30) {
-        const [clicks, impressions, ctr, position, sessions, bounce] = await Promise.all([
+    async summary(workspaceId: string, days = 30) {
+        const all = await Promise.all([
             this.dailyTotals(workspaceId, "gsc", "clicks"),
             this.dailyTotals(workspaceId, "gsc", "impressions"),
             this.dailyTotals(workspaceId, "gsc", "ctr"),
@@ -644,26 +685,24 @@ export class SeoService {
             this.dailyTotals(workspaceId, "ga4", "sessions"),
             this.dailyTotals(workspaceId, "ga4", "bounceRate"),
         ]);
-        const hasData = clicks.length > 0 || sessions.length > 0;
+        const hasData = all[0].length > 0 || all[4].length > 0;
         if (!hasData) return { hasData: false };
+
+        // The selected window, and the equal period before it for the deltas.
+        const [clicksP, impressionsP, , positionP, sessionsP, bounceP] = all.map((rows) => periods(rows, days));
+        const [clicks, impressions, position, sessions, bounce] = [clicksP, impressionsP, positionP, sessionsP, bounceP].map((p) => p.current);
 
         const sum = (a: { value: number }[]) => a.reduce((x, y) => x + y.value, 0);
         const avg = (a: { value: number }[]) => (a.length ? sum(a) / a.length : 0);
-        // delta = recent half vs earlier half of the window (only when enough days exist).
-        const delta = (a: { value: number }[], mode: "sum" | "avg") => {
-            if (a.length < 4) return null;
-            const mid = Math.floor(a.length / 2);
-            const first = a.slice(0, mid);
-            const second = a.slice(mid);
+        const delta = (p: { current: { value: number }[]; previous: { value: number }[] }, mode: "sum" | "avg") => {
             const fn = mode === "sum" ? sum : avg;
-            const f = fn(first);
-            const s = fn(second);
-            if (f === 0) return null;
-            return round(((s - f) / f) * 100, 1);
+            return p.previous.length ? pctChange(fn(p.current), fn(p.previous)) : null;
         };
 
-        const avgPos = avg(position);
-        const avgCtr = avg(ctr);
+        const avgPos = weightedPosition(position, impressions);
+        const avgCtr = weightedCtr(clicks, impressions);
+        const prevPos = weightedPosition(positionP.previous, impressionsP.previous);
+        const prevCtr = weightedCtr(clicksP.previous, impressionsP.previous);
         // Composite health: position-weighted, blended with CTR. Honest heuristic, GSC-only.
         // Gentle curve + floor so an indexed-but-low-ranking site lands in the teens, not 0.
         const positionScore = avgPos > 0 ? Math.max(8, Math.min(100, 100 - (avgPos - 1) * 1.6)) : 0;
@@ -705,19 +744,22 @@ export class SeoService {
                 return { label, value: Math.round(r.value), color };
             });
 
+        // Daily values inside the window, for the KPI sparklines.
+        const spark = (a: { value: number }[]) => a.map((r) => round(r.value, 2));
         return {
             hasData: true,
+            days,
             health,
             strikingDistance,
             conflicts: cannibal.groups.length,
             traffic,
             kpis: {
-                clicks: { value: Math.round(sum(clicks)), delta: delta(clicks, "sum"), goodWhenUp: true },
-                impressions: { value: Math.round(sum(impressions)), delta: delta(impressions, "sum"), goodWhenUp: true },
-                ctr: { value: round(avgCtr, 1), delta: delta(ctr, "avg"), goodWhenUp: true },
-                position: { value: round(avgPos, 1), delta: delta(position, "avg"), goodWhenUp: false },
-                sessions: { value: Math.round(sum(sessions)), delta: delta(sessions, "sum"), goodWhenUp: true },
-                bounce: { value: round(avg(bounce) * 100, 1), delta: delta(bounce, "avg"), goodWhenUp: false },
+                clicks: { value: Math.round(sum(clicks)), delta: delta(clicksP, "sum"), goodWhenUp: true, spark: spark(clicks) },
+                impressions: { value: Math.round(sum(impressions)), delta: delta(impressionsP, "sum"), goodWhenUp: true, spark: spark(impressions) },
+                ctr: { value: round(avgCtr, 1), delta: clicksP.previous.length ? pctChange(avgCtr, prevCtr) : null, goodWhenUp: true, spark: [] as number[] },
+                position: { value: round(avgPos, 1), delta: positionP.previous.length ? pctChange(avgPos, prevPos) : null, goodWhenUp: false, spark: spark(position) },
+                sessions: { value: Math.round(sum(sessions)), delta: delta(sessionsP, "sum"), goodWhenUp: true, spark: spark(sessions) },
+                bounce: { value: round(avg(bounce) * 100, 1), delta: delta(bounceP, "avg"), goodWhenUp: false, spark: [] as number[] },
             },
         };
     }
@@ -736,15 +778,16 @@ export class SeoService {
             this.vitals(workspaceId).catch(() => ({ hasData: false })),
         ])) as [any, any, any];
 
-        const CWV_PTS: Record<string, number> = { good: 100, warning: 60, poor: 25 };
-        const speedScore = (v?: { status: string }[]) =>
-            v && v.length ? Math.round(v.reduce((s, m) => s + (CWV_PTS[m.status] ?? 60), 0) / v.length) : null;
-
+        // What each pillar's number is made of (or why there is none), so the UI can
+        // explain it instead of showing a bare score or a zero.
+        const speedDetail = vitals?.hasData
+            ? { url: vitals.tested?.url, strategy: vitals.tested?.strategy, performance: vitals.performance ?? null, metrics: vitals.vitals }
+            : null;
         const pillars = [
-            { key: "visibility", label: "Visibility", source: "Search Console", weight: 40, score: summary?.hasData ? summary.health ?? null : null },
-            { key: "technical", label: "Technical", source: "Site crawl", weight: 35, score: audit?.hasData ? audit.overall ?? null : null },
-            { key: "speed", label: "Speed", source: "Core Web Vitals", weight: 25, score: vitals?.hasData ? speedScore(vitals.vitals) : null },
-        ].map((p) => ({ ...p, live: p.score != null }));
+            { key: "visibility", label: "Visibility", source: "Search Console", weight: 40, score: summary?.hasData ? summary.health ?? null : null, note: "No Search Console data" },
+            { key: "technical", label: "Technical", source: "Site crawl", weight: 35, score: audit?.hasData ? audit.overall ?? null : null, note: audit?.reason === "no-site" ? "Set the site URL in Settings" : audit?.reason === "blocked" ? "The site blocked the crawler" : audit?.reason === "pending" ? "First crawl in progress" : "No crawl yet" },
+            { key: "speed", label: "Speed", source: "Core Web Vitals", weight: 25, score: vitals?.hasData ? speedScore(vitals.vitals) : null, note: psiReason(vitals?.reason, vitals?.needsKey), detail: speedDetail },
+        ].map((p) => ({ ...p, live: p.score != null, note: p.score != null ? undefined : p.note }));
 
         const live = pillars.filter((p) => p.score != null);
         const totalWeight = live.reduce((s, p) => s + p.weight, 0);
@@ -755,28 +798,40 @@ export class SeoService {
 
     // ─── Server-side crawler (audit / meta / JSON-LD) ───────────────────────
 
-    private async siteUrlFor(workspaceId: string): Promise<string | null> {
-        const integ = await this.prisma.integration.findFirst({
-            where: { workspaceId, type: IntegrationType.SEARCH_CONSOLE },
-        });
-        const siteUrl = (integ?.config as { siteUrl?: string } | null)?.siteUrl;
-        if (!siteUrl) return null;
-        if (siteUrl.startsWith("sc-domain:")) return `https://${siteUrl.slice("sc-domain:".length)}/`;
-        return siteUrl;
+    /** The workspace's public site origin (workspace setting, else the Search Console
+     *  property, else the preview URL's origin). */
+    siteUrlFor(workspaceId: string): Promise<string | null> {
+        return this.sitePages.siteUrl(workspaceId);
     }
 
-    private async fetchHtml(url: string): Promise<{ url: string; ok: boolean; status: number; html: string }> {
+    /** Read one live page for the entry audit: HTTP status plus the tags the
+     *  frontend renders (title, description, canonical, robots, JSON-LD types). */
+    async livePage(url: string, rps = DEFAULT_RPS): Promise<LiveFacts> {
+        const f = await this.fetchHtml(url, rps);
+        if (!f.ok || !f.html) return { status: f.ok ? 204 : f.status, title: "", description: "", canonical: "", noindex: false, ldTypes: [] };
+        const p = this.parsePage(url, f.html);
+        return { status: 200, title: p.title, description: p.description, canonical: p.canonicalHref, noindex: !p.indexable, ldTypes: p.ldTypes };
+    }
+
+    private fetchHtml(url: string, rps = DEFAULT_RPS): Promise<{ url: string; ok: boolean; status: number; html: string; retryAfter?: number }> {
+        let host = url;
+        try { host = new URL(url).host; } catch { /* fetched and reported as unreachable below */ }
+        return politeRequest(this.gate, host, 1000 / rps, () => this.fetchHtmlNow(url));
+    }
+
+    private async fetchHtmlNow(url: string): Promise<{ url: string; ok: boolean; status: number; html: string; retryAfter?: number }> {
         try {
             // SSRF-guarded crawl of the user's own site; follow canonical/https
             // redirects (each hop re-validated against private ranges). 8s timeout.
             const res = await safeFetch(
                 url,
-                { headers: { "User-Agent": "FlowCMS-SEO-Auditor/1.0 (+https://flowcms.co)" } },
+                { headers: { "User-Agent": CRAWLER_UA } },
                 { timeoutMs: 8000, maxRedirects: 3 },
             );
             const ct = res.headers.get("content-type") ?? "";
             const html = ct.includes("html") ? (await res.text()).slice(0, 600_000) : "";
-            return { url, ok: res.ok, status: res.status, html };
+            // Only a 200 is a page: a 403/404/5xx body is an error page, not content.
+            return { url, ok: res.status === 200, status: res.status, html, retryAfter: retryAfterMs(res.headers.get("retry-after"), Date.now()) };
         } catch {
             return { url, ok: false, status: 0, html: "" };
         }
@@ -787,7 +842,7 @@ export class SeoService {
         try {
             const res = await safeFetch(
                 url,
-                { headers: { "User-Agent": "FlowCMS-SEO-Auditor/1.0 (+https://flowcms.co)" } },
+                { headers: { "User-Agent": CRAWLER_UA } },
                 { timeoutMs: 8000, maxRedirects: 3 },
             );
             const text = res.ok ? (await res.text()).slice(0, 200_000) : "";
@@ -808,11 +863,17 @@ export class SeoService {
         const aiBots = ["gptbot", "perplexitybot", "claudebot", "google-extended", "ccbot", "oai-searchbot"];
         // "blocked" = an AI bot is explicitly disallowed everywhere.
         const blocksAiBots = aiBots.some((b) => new RegExp(`user-agent:\\s*${b}[\\s\\S]*?disallow:\\s*/\\s`, "i").test(robots.text + "\n"));
-        const sitemapUrls = (sitemap.text.match(/<loc>/gi) ?? []).length;
+        // A sitemap index lists child sitemaps: read the first few for page URLs.
+        let locs = sitemapLocs(sitemap.text);
+        if (/<sitemapindex/i.test(sitemap.text)) {
+            const children = await Promise.all(locs.slice(0, 3).map((u) => this.fetchText(u)));
+            locs = children.flatMap((c) => sitemapLocs(c.text));
+        }
         return {
             robots: { present: robots.ok, hasSitemapRef: /sitemap:\s*http/i.test(robots.text), blocksAiBots },
-            sitemap: { present: sitemap.ok, urls: sitemapUrls },
+            sitemap: { present: sitemap.ok, urls: locs.length },
             llmsTxt: { present: llms.ok },
+            locs,
         };
     }
 
@@ -865,53 +926,59 @@ export class SeoService {
             title, titleLen: title.length,
             description, descLen: description.length,
             canonical: !!canonical,
+            canonicalHref: canonical,
             indexable, viewport, h1, ogTitle, ogImage,
             imgs: imgs.length, imgsNoAlt, internalLinks, words,
             ldTypes: [...new Set(ldTypes)], ldValid: ldCount === 0 ? true : ldValid, ldCount,
         };
     }
 
-    /** Crawl homepage + top GSC pages, parse on-page SEO. Cached per workspace.
-     *  Returns a heterogeneous object shape (SeoCacheResult), as before the cache
-     *  refactor, so downstream consumers keep their prior structural typing. */
+    /** The stored crawl. A stale one is served as-is and refreshed in the background;
+     *  a first-ever crawl also runs in the background (at one request per second it
+     *  takes most of a minute), and only a forced one is awaited. Concurrent callers
+     *  share one run. */
     async crawl(workspaceId: string, force = false): Promise<SeoCacheResult> {
-        if (!force) {
-            const cached = await this.cache.get<SeoCacheResult>(this.crawlKey(workspaceId));
-            if (cached) return cached;
+        const run = () => this.flight(`crawl:${workspaceId}`, () => this.runCrawl(workspaceId));
+        if (force) return run();
+        const cached = await this.cache.get<SeoCacheResult>(this.crawlKey(workspaceId));
+        if (!cached) {
+            void run().catch((e) => this.logger.warn(`first crawl failed: ${e instanceof Error ? e.message : e}`));
+            return { hasData: false, reason: (await this.siteUrlFor(workspaceId)) ? "pending" : "no-site" };
         }
+        const age = Date.now() - Date.parse(cached.crawledAt ?? "");
+        if (!(age < this.CRAWL_TTL_S * 1000)) void run().catch((e) => this.logger.warn(`background crawl failed: ${e instanceof Error ? e.message : e}`));
+        return cached;
+    }
 
+    /** Crawl the homepage plus pages from Search Console, the sitemap and the CMS's
+     *  own mapped page URLs; parse on-page SEO from the 200 responses only. */
+    private async runCrawl(workspaceId: string): Promise<SeoCacheResult> {
         const site = await this.siteUrlFor(workspaceId);
         if (!site) return { hasData: false, reason: "no-site" };
-        let host: string;
-        try {
-            host = new URL(site).hostname;
-        } catch {
-            return { hasData: false, reason: "bad-site" };
-        }
 
-        const pageMap = await this.gscDimension(workspaceId, "page");
-        const topPages = [...pageMap.entries()]
-            .sort((a, b) => b[1].impressions - a[1].impressions)
-            .map(([u]) => u)
-            .filter((u) => {
-                try {
-                    return new URL(u).hostname === host; // SSRF guard: same-host only
-                } catch {
-                    return false;
-                }
-            });
-        const urls = [...new Set([site, ...topPages])].slice(0, 8);
-
-        const [fetched, files] = await Promise.all([
-            Promise.all(urls.map((u) => this.fetchHtml(u))),
+        const [{ locs, ...files }, pageMap, mapped] = await Promise.all([
             this.rootFiles(site),
+            this.gscDimension(workspaceId, "page"),
+            this.sitePages.pages(workspaceId).catch(() => []),
         ]);
-        const pages = fetched.filter((f) => f.html).map((f) => this.parsePage(f.url, f.html));
-        const reachable = fetched.filter((f) => f.ok).length;
+        const gscTop = [...pageMap.entries()].sort((a, b) => b[1].impressions - a[1].impressions).map(([u]) => u).slice(0, 10);
+        const seenType = new Set<string>();
+        const perType = mapped.filter((p) => !seenType.has(p.typeId) && !!seenType.add(p.typeId)).map((p) => absoluteUrl(site, p.path));
+        const urls = crawlSeeds(site, [gscTop, perType, locs, mapped.map((p) => absoluteUrl(site, p.path))], this.CRAWL_MAX);
+
+        // Two in flight at most; the gate spaces them to the workspace's crawl rate.
+        const rps = await this.sitePages.crawlRps(workspaceId);
+        const fetched = await mapLimit(urls, 2, (u) => this.fetchHtml(u, rps));
+        // Non-200 responses are reported, never audited: a 403 or 404 page would
+        // otherwise show up as "missing canonical, missing H1".
+        const pages = fetched.filter((f) => f.ok && f.html).map((f) => this.parsePage(f.url, f.html));
+        const blocked = fetched.filter((f) => !f.ok).map((f) => ({ url: f.url, status: f.status }));
+        const crawledAt = new Date().toISOString();
 
         if (pages.length === 0) {
-            const data = { hasData: false, reason: "unreachable", crawled: urls.length, reachable };
-            await this.cache.set(this.crawlKey(workspaceId), data, this.CRAWL_TTL_S);
+            const denied = blocked.some((b) => b.status === 401 || b.status === 403 || b.status === 429);
+            const data = { hasData: false, reason: denied ? "blocked" : "unreachable", site, crawledAt, crawled: urls.length, reachable: 0, blocked, userAgent: CRAWLER_UA };
+            await this.cache.set(this.crawlKey(workspaceId), data, this.CRAWL_KEEP_S);
             return data;
         }
 
@@ -1003,8 +1070,11 @@ export class SeoService {
         const data = {
             hasData: true,
             site,
-            crawledAt: new Date().toISOString(),
+            crawledAt,
             crawled: pages.length,
+            attempted: urls.length,
+            blocked, // URLs that did not return 200, with their status ("blocked: 403")
+            userAgent: CRAWLER_UA,
             overall,
             quickFixes,
             categories,
@@ -1014,84 +1084,97 @@ export class SeoService {
             coverage,
             files, // robots.txt / sitemap.xml / llms.txt presence + signals
         };
-        await this.cache.set(this.crawlKey(workspaceId), data, this.CRAWL_TTL_S);
+        await this.cache.set(this.crawlKey(workspaceId), data, this.CRAWL_KEEP_S);
         return data;
     }
 
-    /** Core Web Vitals via PageSpeed Insights. Uses the connected API key when present (higher quota).
-     *  Returns a heterogeneous object shape (SeoCacheResult), as before the cache refactor. */
+    /** One PageSpeed Insights run. Never throws: a failure is a result with `error`. */
+    private async runPsi(url: string, strategy: "mobile" | "desktop", key: string): Promise<PsiResult> {
+        const failed = (error: string, needsKey = false): PsiResult => ({ url, strategy, fetchedAt: new Date().toISOString(), performance: null, vitals: [], opportunities: [], error, needsKey });
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.PSI_TIMEOUT_MS);
+        try {
+            const res = await fetch(psiUrl(url, strategy, key), { signal: controller.signal });
+            if (!res.ok) return failed(`psi-${res.status}`, res.status === 429 && !key);
+            return parsePsi(url, strategy, await res.json());
+        } catch (e) {
+            this.logger.warn(`PSI ${strategy} ${url} failed: ${e instanceof Error ? e.message : e}`);
+            return failed(controller.signal.aborted ? "psi-timeout" : "psi-error");
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /** Run PageSpeed for the homepage and one page per page type, mobile and
+     *  desktop, and store each result (failures too, so the reason is shown and a
+     *  failing run is not retried on every page load). */
+    async refreshVitals(workspaceId: string): Promise<void> {
+        const site = await this.siteUrlFor(workspaceId);
+        if (!site) return;
+        this.psiRunning.add(workspaceId);
+        try {
+            const key = await this.connectorKey(workspaceId, "pagespeed");
+            const mapped = await this.sitePages.pages(workspaceId).catch(() => []);
+            const seenType = new Set<string>();
+            const perType = mapped.filter((p) => !seenType.has(p.typeId) && !!seenType.add(p.typeId)).map((p) => absoluteUrl(site, p.path));
+            const urls = crawlSeeds(site, [perType], this.PSI_MAX_URLS);
+            const runs = urls.flatMap((url) => (["mobile", "desktop"] as const).map((strategy) => ({ url, strategy })));
+            const results = await mapLimit(runs, 2, (r) => this.runPsi(r.url, r.strategy, key));
+            const targets = results.map((r) => `${r.strategy}:${r.url}`);
+            for (const [i, r] of results.entries()) {
+                const data = { url: r.url, contentHash: "", live: r as unknown as object, score: r.performance, lastCheckedAt: new Date() };
+                await this.prisma.pageAudit.upsert({
+                    where: { workspaceId_target_task: { workspaceId, target: targets[i], task: "psi" } },
+                    create: { workspaceId, target: targets[i], task: "psi", ...data },
+                    update: data,
+                });
+            }
+            await this.prisma.pageAudit.deleteMany({ where: { workspaceId, task: "psi", target: { notIn: targets } } });
+        } finally {
+            this.psiRunning.delete(workspaceId);
+        }
+    }
+
+    /** Core Web Vitals from the stored PageSpeed runs (per URL, mobile and desktop).
+     *  Never calls PageSpeed on the request path: a missing, day-old or forced read
+     *  starts a background run and returns what is stored. The headline metrics are
+     *  the homepage on mobile. */
     async vitals(workspaceId: string, force = false): Promise<SeoCacheResult> {
         const site = await this.siteUrlFor(workspaceId);
         if (!site) return { hasData: false, reason: "no-site" };
 
-        if (!force) {
-            const cached = await this.cache.get<SeoCacheResult>(this.vitalsKey(workspaceId));
-            if (cached) return cached;
+        const rows = await this.prisma.pageAudit.findMany({ where: { workspaceId, task: "psi" }, orderBy: { target: "asc" } });
+        const newest = Math.max(0, ...rows.map((r) => r.lastCheckedAt.getTime()));
+        if (force || Date.now() - newest > this.PSI_TTL_MS) {
+            this.psiRunning.add(workspaceId);
+            void this.flight(`psi:${workspaceId}`, () => this.refreshVitals(workspaceId)).catch((e) => {
+                this.psiRunning.delete(workspaceId);
+                this.logger.warn(`PageSpeed refresh failed: ${e instanceof Error ? e.message : e}`);
+            });
         }
-
-        const key = await this.connectorKey(workspaceId, "pagespeed");
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 20_000);
-        try {
-            const res = await fetch(
-                `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&url=${encodeURIComponent(site)}${key ? `&key=${key}` : ""}`,
-                { signal: controller.signal },
-            );
-            if (!res.ok) return { hasData: false, reason: `psi-${res.status}`, needsKey: res.status === 429 && !key };
-            const data = (await res.json()) as any;
-            const cruxMetrics = data?.loadingExperience?.metrics ?? {};
-            const lh = data?.lighthouseResult?.audits ?? {};
-
-            const fromCrux = (key: string) => cruxMetrics?.[key]?.percentile;
-            const lcpMs = fromCrux("LARGEST_CONTENTFUL_PAINT_MS") ?? Math.round((lh["largest-contentful-paint"]?.numericValue ?? 0));
-            const inpMs = fromCrux("INTERACTION_TO_NEXT_PAINT") ?? Math.round((lh["interactive"]?.numericValue ?? 0));
-            const clsRaw = fromCrux("CUMULATIVE_LAYOUT_SHIFT_SCORE");
-            const cls = clsRaw != null ? clsRaw / 100 : lh["cumulative-layout-shift"]?.numericValue ?? 0;
-            const source = Object.keys(cruxMetrics).length ? "field" : "lab";
-
-            const vitals = [
-                { metric: "LCP", value: `${round(lcpMs / 1000, 1)}s`, target: "< 2.5s", status: lcpMs <= 2500 ? "good" : lcpMs <= 4000 ? "warning" : "poor" },
-                { metric: "INP", value: `${Math.round(inpMs)}ms`, target: "< 200ms", status: inpMs <= 200 ? "good" : inpMs <= 500 ? "warning" : "poor" },
-                { metric: "CLS", value: `${round(cls, 2)}`, target: "< 0.1", status: cls <= 0.1 ? "good" : cls <= 0.25 ? "warning" : "poor" },
-            ];
-
-            // Lighthouse improvement opportunities (same response, no extra call).
-            // Map each Lighthouse audit id to our codebook code; flag when its score is low.
-            const OPP_MAP: { audits: string[]; code: string }[] = [
-                { audits: ["render-blocking-resources"], code: "PERF_RENDER_BLOCKING" },
-                { audits: ["uses-optimized-images", "modern-image-formats", "offscreen-images", "uses-responsive-images"], code: "PERF_IMAGE_OPT" },
-                { audits: ["unminified-css", "unminified-javascript", "unused-css-rules", "unused-javascript"], code: "PERF_UNMINIFIED" },
-                { audits: ["uses-text-compression"], code: "PERF_TEXT_COMPRESSION" },
-                { audits: ["total-byte-weight"], code: "PERF_TOTAL_WEIGHT" },
-            ];
-            const seen = new Set<string>();
-            const opportunities: { code: string; title: string; savingsMs: number }[] = [];
-            for (const { audits, code } of OPP_MAP) {
-                if (seen.has(code)) continue;
-                let savings = 0;
-                let title = "";
-                for (const a of audits) {
-                    const audit = lh[a];
-                    if (!audit) continue;
-                    const score = typeof audit.score === "number" ? audit.score : 1;
-                    const ms = audit.details?.overallSavingsMs ?? audit.numericValue ?? 0;
-                    if (score < 0.9 && (ms > 0 || code === "PERF_UNMINIFIED" || code === "PERF_TEXT_COMPRESSION")) {
-                        savings = Math.max(savings, Math.round(ms));
-                        title = title || (audit.title ?? "");
-                    }
-                }
-                if (title) { opportunities.push({ code, title, savingsMs: savings }); seen.add(code); }
-            }
-
-            const out = { hasData: true, source, vitals, opportunities };
-            await this.cache.set(this.vitalsKey(workspaceId), out, this.VITALS_TTL_S);
-            return out;
-        } catch (e) {
-            this.logger.warn(`PSI vitals failed: ${e instanceof Error ? e.message : e}`);
-            return { hasData: false, reason: "psi-error" };
-        } finally {
-            clearTimeout(timer);
+        const refreshing = this.psiRunning.has(workspaceId);
+        const results = rows.map((r) => r.live as unknown as PsiResult).filter(Boolean);
+        const path = (u: string) => { try { return new URL(u).pathname || "/"; } catch { return u; } };
+        const pages = results.map((r) => ({ url: r.url, path: path(r.url), strategy: r.strategy, performance: r.performance, vitals: r.vitals, fetchedAt: r.fetchedAt, error: r.error ? psiReason(r.error, r.needsKey) : undefined }));
+        const ok = results.filter((r) => !r.error);
+        const home = ok.find((r) => path(r.url) === "/" && r.strategy === "mobile") ?? ok[0];
+        if (!home) {
+            const err = results.find((r) => r.error);
+            const needsKey = results.some((r) => r.needsKey);
+            const reason = err?.error ?? "pending";
+            return { hasData: false, reason, message: psiReason(reason, needsKey), needsKey, refreshing, pages };
         }
+        return {
+            hasData: true,
+            source: home.vitals.some((v) => v.source === "field" && v.status !== "none") ? "field" : "lab",
+            tested: { url: home.url, strategy: home.strategy },
+            fetchedAt: home.fetchedAt,
+            performance: home.performance,
+            vitals: home.vitals,
+            opportunities: home.opportunities,
+            pages,
+            refreshing,
+        };
     }
 
     // ─── BYO-key SEO connectors (PageSpeed, keyword data) ───────────────────
@@ -1112,8 +1195,15 @@ export class SeoService {
         const kw = find("keyword_data");
         const aeo = find("aeo_analytics");
         const bl = find("backlinks");
+        // PageSpeed works without a key until Google's shared quota runs out; say so
+        // when a stored run was refused for that reason.
+        const psi = await this.prisma.pageAudit.findMany({ where: { workspaceId, task: "psi" }, select: { live: true, lastCheckedAt: true } });
+        const needsKey = !ps && psi.some((r) => (r.live as { needsKey?: boolean } | null)?.needsKey);
+        const lastRun = psi.length ? new Date(Math.max(...psi.map((r) => r.lastCheckedAt.getTime()))).toISOString() : null;
         return {
-            pagespeed: { connected: !!ps },
+            // The public site the crawler and PageSpeed run against (null = not set).
+            site: await this.siteUrlFor(workspaceId),
+            pagespeed: { connected: !!ps, needsKey, lastRun },
             keyword: { connected: !!kw, config: (kw?.config ?? null) as any },
             aeo: { connected: !!aeo, config: (aeo?.config ?? null) as any },
             backlinks: { connected: !!bl, config: (bl?.config ?? null) as any },
@@ -1159,6 +1249,8 @@ export class SeoService {
         const saved = existing
             ? await this.prisma.integration.update({ where: { id: existing.id }, data })
             : await this.prisma.integration.create({ data: { workspaceId, ...data } });
+        // A new PageSpeed key: re-run now rather than waiting for the daily refresh.
+        if (provider === "pagespeed") void this.vitals(workspaceId, true).catch(() => undefined);
         return { ok: true, id: saved.id };
     }
 
