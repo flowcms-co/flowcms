@@ -24,6 +24,8 @@ const System = () => {
     const [timezone, setTimezone] = useState("UTC");
     const [timezoneInvalid, setTimezoneInvalid] = useState<string | null>(null);
     const [crawlRps, setCrawlRps] = useState("1");
+    const [crawlMaxRps, setCrawlMaxRps] = useState("10");
+    const [recheckDays, setRecheckDays] = useState("14");
     const [authorMode, setAuthorMode] = useState<Workspace["authorMode"]>("creator");
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -39,6 +41,8 @@ const System = () => {
                 setTimezone(w.timezone ?? "UTC");
                 setTimezoneInvalid(w.timezoneInvalid ?? null);
                 setCrawlRps(String(w.seoCrawlRps ?? 1));
+                setCrawlMaxRps(String(w.seoCrawlMaxRps ?? 10));
+                setRecheckDays(String(w.seoRecheckDays ?? 14));
                 setAuthorMode(w.authorMode ?? "creator");
             })
             .catch(() => {});
@@ -51,7 +55,7 @@ const System = () => {
         setSaving(true);
         setMsg(null);
         try {
-            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), siteUrl: siteUrl.trim(), timezone, seoCrawlRps: Math.min(10, Math.max(0.1, Number(crawlRps) || 1)), authorMode }) });
+            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), siteUrl: siteUrl.trim(), timezone, seoCrawlRps: Math.min(10, Math.max(0.1, Number(crawlRps) || 1)), seoCrawlMaxRps: Math.min(10, Math.max(0.1, Number(crawlMaxRps) || 10)), seoRecheckDays: Math.min(365, Math.max(1, Math.round(Number(recheckDays)) || 14)), authorMode }) });
             clearWorkspaceCache();
             setTimezoneInvalid(null);
             setMsg({ ok: true, text: "Saved" });
@@ -105,8 +109,14 @@ const System = () => {
                     <Field label="Time zone">
                         <TimeZoneSelect value={timezone} onChange={setTimezone} />
                     </Field>
-                    <Field label="SEO crawl rate (requests per second)">
+                    <Field label="SEO crawl rate: start (requests per second)">
                         <input type="number" min={0.1} max={10} step={0.1} value={crawlRps} onChange={(e) => setCrawlRps(e.target.value)} className="flow-input" />
+                    </Field>
+                    <Field label="SEO crawl rate: maximum (requests per second)">
+                        <input type="number" min={0.1} max={10} step={0.1} value={crawlMaxRps} onChange={(e) => setCrawlMaxRps(e.target.value)} className="flow-input" />
+                    </Field>
+                    <Field label="Re-check every page within (days)">
+                        <input type="number" min={1} max={365} step={1} value={recheckDays} onChange={(e) => setRecheckDays(e.target.value)} className="flow-input" />
                     </Field>
                 </div>
                 {timezoneInvalid && (
@@ -119,8 +129,11 @@ const System = () => {
                     without Search Console. The crawler identifies itself as{" "}
                     <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">FlowCMS-SEO-Auditor</code>;
                     allow that user agent if your site blocks bots. The time zone (an IANA name) sets what &ldquo;today&rdquo; and
-                    &ldquo;this week&rdquo; mean on the dashboards. The crawl rate is the most requests per second the SEO audit and
-                    crawler send to your site (1 by default); if the site answers &ldquo;too many requests&rdquo; they wait and resume.
+                    &ldquo;this week&rdquo; mean on the dashboards. The SEO audit and crawler start at the first crawl rate and
+                    speed up gradually towards the maximum while your site responds normally. They halve the rate and wait whenever
+                    the site answers &ldquo;too many requests&rdquo;, and stay under any rate limit it advertises. Set the maximum equal
+                    to the start to hold a fixed rate. In the background, the stalest pages are re-checked a few at a time so every
+                    page is verified within the number of days above.
                 </p>
                 <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Content author">

@@ -3,7 +3,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { entryPath, isPageType } from "../content/route-path";
 import { fieldsOf } from "../content/entry-validation";
 import { placeholdersIn, resolvePlaceholders } from "../content/slug-pattern";
-import { clampRps } from "./polite";
+import { DEFAULT_RATE, clampRps, type Rate } from "./polite";
 
 export type SitePage = {
     id: string;
@@ -13,9 +13,28 @@ export type SitePage = {
     /** Site-relative path on the public site, from the type's page type and URL pattern. */
     path: string;
     typeId: string;
+    /** The content type's page type ("blog", "service"…) and JSON-LD type, if set. */
+    pageType: string | null;
+    typeJsonLd: string | null;
+    /** The type keeps its pages out of search on purpose, so noindex is not a warning. */
+    noindexIntended: boolean;
     publishedAt: Date | null;
+    /** When anything this page is built from last changed: the entry, an entry it
+     *  references, its content type (schema, URL pattern), or a component it uses. */
+    changedAt: Date;
     data: Record<string, unknown>;
 };
+
+const ID = /^c[a-z0-9]{20,}$/;
+/** Entry ids referenced from an entry's top-level fields (single or multiple). */
+const refIdsOf = (data: Record<string, unknown>): string[] =>
+    Object.values(data).flatMap((v) => (Array.isArray(v) ? v : [v]).filter((x): x is string => typeof x === "string" && ID.test(x)));
+/** apiIds of the reusable components a page uses: its type's component fields and
+ *  the sections placed in its dynamic zones. */
+const componentsOf = (schema: unknown, data: Record<string, unknown>): string[] => [
+    ...(((schema as { fields?: { componentApiId?: string }[] } | null)?.fields ?? []).map((f) => f.componentApiId).filter((x): x is string => !!x)),
+    ...Object.values(data).flatMap((v) => (Array.isArray(v) ? v : []).map((x) => (x as { __component?: unknown } | null)?.__component).filter((x): x is string => typeof x === "string")),
+];
 
 /** Which pages a capped check looks at, deterministically: most Search Console
  *  impressions first when that data exists, otherwise most recently published
@@ -64,8 +83,20 @@ export class SitePagesService {
 
     /** Most requests per second the audit and crawler may send to the site. */
     async crawlRps(workspaceId: string): Promise<number> {
-        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { seoCrawlRps: true } });
-        return clampRps(ws?.seoCrawlRps);
+        return (await this.crawlRate(workspaceId)).start;
+    }
+
+    /** The rate the audit and crawler start at, and the most they may adapt up to. */
+    async crawlRate(workspaceId: string): Promise<Rate> {
+        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { seoCrawlRps: true, seoCrawlMaxRps: true } });
+        const start = clampRps(ws?.seoCrawlRps);
+        return { start, max: Math.max(start, clampRps(ws?.seoCrawlMaxRps, DEFAULT_RATE.max)) };
+    }
+
+    /** Every page is re-verified against the live site within this many days. */
+    async recheckDays(workspaceId: string): Promise<number> {
+        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { seoRecheckDays: true } });
+        return Math.min(365, Math.max(1, ws?.seoRecheckDays ?? 14));
     }
 
     /** Content types that have published entries but are not marked as pages, so
@@ -89,7 +120,7 @@ export class SitePagesService {
     async pageTypes(workspaceId: string) {
         const types = await this.prisma.contentType.findMany({
             where: { workspaceId, kind: { not: "COMPONENT" } },
-            select: { id: true, name: true, apiId: true, pluralApiId: true, kind: true, schema: true },
+            select: { id: true, name: true, apiId: true, pluralApiId: true, kind: true, schema: true, updatedAt: true },
         });
         return types.filter(isPageType);
     }
@@ -103,32 +134,39 @@ export class SitePagesService {
         const typeById = new Map(types.map((t) => [t.id, t]));
         const entries = await this.prisma.contentEntry.findMany({
             where: { workspaceId, status: "PUBLISHED", contentTypeId: { in: [...typeById.keys()] }, ...(ids ? { id: { in: ids } } : {}) },
-            select: { id: true, slug: true, locale: true, title: true, contentTypeId: true, publishedAt: true, data: true },
+            select: { id: true, slug: true, locale: true, title: true, contentTypeId: true, publishedAt: true, updatedAt: true, data: true },
             orderBy: { id: "asc" },
         });
 
-        // {ref.slug} / {ref.title} in URL patterns: fetch every referenced entry once.
+        // Every entry these pages reference, fetched once: their slug/title fill
+        // {ref.slug} in URL patterns, and their updatedAt tells when a parent changed.
         const keysByType = new Map(types.map((t) => [t.id, placeholdersIn(String((t.schema as { routePattern?: unknown } | null)?.routePattern ?? ""))]));
         const refIds = new Set<string>();
         for (const e of entries) {
-            const keys = keysByType.get(e.contentTypeId) ?? [];
-            for (const k of keys) {
+            const data = (e.data ?? {}) as Record<string, unknown>;
+            for (const id of refIdsOf(data)) refIds.add(id);
+            // The fields a URL pattern names are references whatever their ids look like.
+            for (const k of keysByType.get(e.contentTypeId) ?? []) {
                 const [name, prop] = k.split(".");
-                if (!prop) continue;
-                const v = (e.data as Record<string, unknown> | null)?.[name];
+                const v = prop ? data[name] : undefined;
                 const id = Array.isArray(v) ? v[0] : v;
                 if (typeof id === "string" && id) refIds.add(id);
             }
         }
-        const refs = refIds.size
-            ? await this.prisma.contentEntry.findMany({ where: { workspaceId, id: { in: [...refIds] } }, select: { id: true, slug: true, title: true } })
-            : [];
-        const refById = new Map(refs.map((r) => [r.id, { slug: r.slug, title: r.title ?? "Untitled" }]));
+        const refs: { id: string; slug: string | null; title: string | null; updatedAt: Date }[] = [];
+        const refList = [...refIds];
+        for (let i = 0; i < refList.length; i += 5000) {
+            refs.push(...(await this.prisma.contentEntry.findMany({ where: { workspaceId, id: { in: refList.slice(i, i + 5000) } }, select: { id: true, slug: true, title: true, updatedAt: true } })));
+        }
+        const refById = new Map(refs.map((r) => [r.id, { slug: r.slug, title: r.title ?? "Untitled", updatedAt: r.updatedAt }]));
+        const components = await this.prisma.contentType.findMany({ where: { workspaceId, kind: "COMPONENT" }, select: { apiId: true, updatedAt: true } });
+        const componentAt = new Map(components.map((c) => [c.apiId, c.updatedAt]));
 
         const out: SitePage[] = [];
         for (const e of entries) {
             const t = typeById.get(e.contentTypeId)!;
             const data = (e.data ?? {}) as Record<string, unknown>;
+            const ts = (t.schema ?? {}) as { pageType?: unknown; jsonLd?: unknown; noindexIntended?: unknown };
             const keys = keysByType.get(e.contentTypeId) ?? [];
             const values = keys.length ? await resolvePlaceholders(fieldsOf(t.schema), data, keys, async (id) => refById.get(id) ?? null) : undefined;
             out.push({
@@ -138,7 +176,18 @@ export class SitePagesService {
                 title: e.title ?? (e.slug || "Untitled"),
                 path: entryPath(t, e.slug, { locale: e.locale, values }),
                 typeId: t.id,
+                pageType: typeof ts.pageType === "string" ? ts.pageType : null,
+                typeJsonLd: typeof ts.jsonLd === "string" ? ts.jsonLd : null,
+                noindexIntended: ts.noindexIntended === true,
                 publishedAt: e.publishedAt,
+                changedAt: new Date(
+                    Math.max(
+                        e.updatedAt?.getTime() ?? 0,
+                        t.updatedAt?.getTime() ?? 0,
+                        ...refIdsOf(data).map((id) => refById.get(id)?.updatedAt?.getTime() ?? 0),
+                        ...componentsOf(t.schema, data).map((c) => componentAt.get(c)?.getTime() ?? 0),
+                    ),
+                ),
                 data,
             });
         }

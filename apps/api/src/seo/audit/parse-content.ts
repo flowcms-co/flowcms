@@ -10,6 +10,7 @@
  */
 import type { LiveFacts, PageInput } from "./audit-engine";
 import {
+    buildJsonLd,
     entryToCanonicalContent,
     str,
     stripTags,
@@ -80,6 +81,10 @@ export function entryToPageInput(entry: EntryLike, ctx: ParseContext = {}): Page
             ...content,
             metaTitle: live.title,
             metaDescription: live.description,
+            // Inferred from a sample that could not tell how these are built: unknown,
+            // so neither a length nor a "missing" finding is raised.
+            titleTemplated: !!live.titleUnknown,
+            descriptionInherited: !!live.descriptionUnknown,
             jsonLd: live.ldTypes.map((t) => ({ "@type": t })),
             tech: { canonical: live.canonical || null, noindex: live.noindex },
         };
@@ -107,7 +112,9 @@ export function entryToPageInput(entry: EntryLike, ctx: ParseContext = {}): Page
         metaDescription: hasToken(description) ? "" : description,
         titleTemplated: hasToken(title),
         descriptionInherited: hasToken(description) || (!description && !!ctx.parentHasDescription),
-        jsonLd: jsonLdType ? [{ "@type": jsonLdType }] : [],
+        // What the delivery API would serve: the entry's own type plus the JSON-LD
+        // derived from its sections (FAQ, reviews, how-to).
+        jsonLd: [...(jsonLdType ? [{ "@type": jsonLdType }] : []), ...buildJsonLd(c.structuredDataSpecs)],
         // Canonical: flag when the entry has none set (null), so the fix can add a
         // self-canonical. (An explicit canonical is set in the SEO panel.)
         tech: { canonical: d.canonical ? str(d.canonical) : null, noindex: /noindex/.test(robots) },

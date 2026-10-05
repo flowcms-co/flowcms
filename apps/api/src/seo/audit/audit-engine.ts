@@ -57,6 +57,14 @@ export interface LiveFacts {
     canonical: string;
     noindex: boolean;
     ldTypes: string[];
+    /** Validators from the last 200 response, for conditional requests. */
+    etag?: string;
+    lastModified?: string;
+    /** Not fetched: filled in from a sample of the page's type (N of M pages). */
+    inferred?: { sample: number; total: number };
+    /** The sample could not tell how the title / description is built. */
+    titleUnknown?: boolean;
+    descriptionUnknown?: boolean;
 }
 
 /** One GSC/GA row (pre-fetched free data) for the analysis task. */

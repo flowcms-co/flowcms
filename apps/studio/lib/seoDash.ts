@@ -78,3 +78,72 @@ export const needsPageFlag = (t: { routePattern?: string | null; isPage?: boolea
  *  otherwise nothing, so the type keeps following the default (and adding a URL
  *  pattern to a reference type turns it on). */
 export const storedPageFlag = (t: { isPage?: boolean; isPageSet?: boolean }): boolean | undefined => (t.isPageSet ? t.isPage : undefined);
+
+// ─── Audit runs, freshness and what was not verified ────────────────────────
+
+export type RunState = { done: number; total: number; startedAt: string; mode?: string; paused?: boolean };
+export type AuditPlan = { mode: string; total: number; toFetch: number; reuse: number; sampled: number; rps: number; maxRps: number; estimatedSeconds: number; live: boolean };
+export type Freshness = { live: boolean; oldestFetchedAt: string | null; neverFetched: number; recheckDays: number; sampledTypes: { name: string; verified: number; total: number }[] };
+
+const n = (v: number) => v.toLocaleString("en-US");
+const plural = (v: number, one: string, many = `${one}s`) => `${n(v)} ${v === 1 ? one : many}`;
+
+/** "about 25 minutes", "about 3 hours", "under a minute". */
+export function duration(seconds: number): string {
+    if (seconds < 60) return "under a minute";
+    const m = Math.round(seconds / 60);
+    if (m < 90) return `about ${plural(m, "minute")}`;
+    const h = Math.round(seconds / 3600);
+    return h < 48 ? `about ${plural(h, "hour")}` : `about ${plural(Math.round(h / 24), "day")}`;
+}
+
+/** What a run will do, shown before it starts. */
+export function planSummary(p: AuditPlan): string {
+    if (!p.live) return `${plural(p.total, "page")} will be audited from their content. Set the site URL in Settings to check the live pages too.`;
+    if (p.toFetch === 0) return `Nothing has changed since the last check, so no pages will be fetched from your site. ${plural(p.total, "page")} will be re-checked from what was last fetched.`;
+    const sampled = p.sampled ? ` ${plural(p.sampled, "page")} of large page types will be filled in from a sample, and fetched if the sample disagrees.` : "";
+    return `${plural(p.toFetch, "page")} of ${n(p.total)} will be fetched from your site, ${duration(p.estimatedSeconds)} at the current ${p.rps} per second (it speeds up to ${p.maxRps} per second if the site allows, and slows down if it objects).${sampled} You can pause or cancel at any time.`;
+}
+
+/** The line shown while a run is in progress. */
+export const runBanner = (r: RunState | null | undefined): string | null =>
+    r ? `${r.paused ? "Audit paused" : "Audit in progress"}, ${n(r.done)} of ${n(r.total)} pages fetched. Results appear as pages are checked; pages not reached yet are left out.` : null;
+
+/** "today", "3 days ago". */
+export function daysAgo(iso: string, now = Date.now()): string {
+    const d = Math.floor((now - new Date(iso).getTime()) / 86_400_000);
+    return d <= 0 ? "today" : `${plural(d, "day")} ago`;
+}
+
+/** Per-page freshness label: every page says when it was last fetched, and an
+ *  inferred result says so. */
+export function checkedLabel(p: { fetchedAt?: string | null; inferred?: boolean }, now = Date.now()): string | null {
+    if (p.inferred) return "Inferred from a sample, not fetched";
+    return p.fetchedAt ? `Last fetched ${daysAgo(p.fetchedAt, now)}` : null;
+}
+
+/** Everything the audit did not verify or deliberately left out, in plain lines.
+ *  Shown on the Optimizer so a partial picture is never read as a clean one. */
+export function auditNotes(
+    d: {
+        counts: { notChecked?: number; noindexed?: number; inferred?: number };
+        coverage?: { duplicates: Coverage; links: Coverage };
+        nonPageTypes?: { name: string; published: number; hasPattern: boolean }[];
+        freshness?: Freshness;
+    } | null,
+    now = Date.now(),
+): string[] {
+    if (!d) return [];
+    const { notChecked = 0, noindexed = 0, inferred = 0 } = d.counts;
+    const f = d.freshness;
+    return [
+        f?.live && f.oldestFetchedAt ? `Oldest live check: ${daysAgo(f.oldestFetchedAt, now)}. Every page is re-checked in the background within ${plural(f.recheckDays, "day")}.` : null,
+        notChecked > 0 ? `${plural(notChecked, "page")} not checked: the site answered "too many requests" or a server error. Not counted as clean; they will be retried.` : null,
+        inferred > 0 ? `${plural(inferred, "page")} not fetched yet: their results are inferred from a sample of the same page type and are not counted as clean.` : null,
+        ...(f?.sampledTypes ?? []).map((t) => `${t.name}: verified on ${n(t.verified)} of ${n(t.total)} pages. The rest are inferred from that sample until the background check reaches them.`),
+        noindexed > 0 ? `${plural(noindexed, "page")} hidden from search (noindex). Not counted as issues, and left out of the title, description, readability, schema, duplicate and cannibalization checks.` : null,
+        coverageNote("Duplicate content", d.coverage?.duplicates),
+        coverageNote("Internal links", d.coverage?.links),
+        ...(d.nonPageTypes ?? []).map((t) => `${t.name}: ${plural(t.published, "published entry is", "published entries are")} not audited because the type is not marked as pages${t.hasPattern ? " (it has a URL pattern, so this may be a mistake)" : ""}.`),
+    ].filter((x): x is string => !!x);
+}

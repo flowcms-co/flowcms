@@ -8,7 +8,7 @@ import { SeoAuditService } from "./seo-audit.service";
 import { SeoAiExecutorService } from "./seo-ai-executor.service";
 import { SeoDripService } from "./seo-drip.service";
 import { SeoJobHandlers } from "./seo-job.handlers";
-import { SeoAuditController } from "./seo-audit.controller";
+import { SeoAuditController, SeoSignalController } from "./seo-audit.controller";
 
 /**
  * SEO Automation Engine — deterministic audit ledger (Phase 2) + the L2 AI
@@ -18,7 +18,7 @@ import { SeoAuditController } from "./seo-audit.controller";
  */
 @Module({
     imports: [AiModule, LicenseModule, SeoModule, AssetsModule, ContentModule],
-    controllers: [SeoAuditController],
+    controllers: [SeoAuditController, SeoSignalController],
     providers: [SeoAuditService, SeoAiExecutorService, SeoDripService, SeoJobHandlers],
     exports: [SeoAuditService, SeoAiExecutorService],
 })

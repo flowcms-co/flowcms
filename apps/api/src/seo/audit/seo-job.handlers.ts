@@ -7,14 +7,18 @@ import { SeoService } from "../seo.service";
 import { SeoAuditService } from "./seo-audit.service";
 import { entryToCanonicalContent } from "../../content/canonical-content";
 import { SitePagesService, absoluteUrl } from "../site-pages.service";
+import type { RunMode } from "./audit-plan";
 
 type BatchPayload = { fix: string; key: string; pages: { id: string; url: string | null }[] };
 
 /** The audit job's one-line result: pages checked, skipped (unchanged) and failed. */
-export function auditSummary(r: { scanned: number; checked: number; unchanged: number; notChecked: number; failed: number }): string {
+export function auditSummary(r: { scanned: number; checked: number; unchanged: number; notChecked: number; failed: number; fetched?: number; inferred?: number; cancelled?: boolean }): string {
     const parts = [`Checked ${r.checked} of ${r.scanned} page${r.scanned === 1 ? "" : "s"}`, `${r.unchanged} unchanged`];
+    if (r.fetched !== undefined) parts.push(`${r.fetched} fetched from the site`);
+    if (r.inferred) parts.push(`${r.inferred} inferred from a sample`);
     if (r.notChecked) parts.push(`${r.notChecked} not checked (rate limited, will retry)`);
     if (r.failed) parts.push(`${r.failed} failed`);
+    if (r.cancelled) parts.push("cancelled before finishing");
     return parts.join(", ");
 }
 
@@ -62,10 +66,12 @@ export class SeoJobHandlers implements OnModuleInit {
      *  site takes longer than a request should). */
     private async auditPages(job: JobRow, helpers: JobHelpers) {
         let total = 0;
+        const mode = (job.payload as { mode?: RunMode } | null)?.mode ?? "changed";
         const r = await this.audit.auditWorkspace(job.workspaceId, async ({ done, total: n, notChecked }) => {
-            if (!total) await helpers.setTotal((total = n));
+            // The total grows if a sampled page type has to be checked in full.
+            if (total !== n) await helpers.setTotal((total = n));
             if (done % 5 === 0 || done === n) await helpers.progress(done - notChecked, notChecked, notChecked ? "Rate limited by the site, will retry" : undefined);
-        });
+        }, mode);
         return { summary: auditSummary(r), result: r };
     }
 

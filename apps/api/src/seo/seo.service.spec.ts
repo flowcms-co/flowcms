@@ -12,7 +12,7 @@ function make(psiRows: any[] = []) {
         integration: { findFirst: async () => null },
     };
     const cache = { get: async (k: string) => store.get(k) ?? null, set: async (k: string, v: any) => void store.set(k, v) };
-    const sitePages = { siteUrl: async () => "https://x.com", crawlRps: async () => 1, pages: async () => [{ id: "e1", typeId: "t", path: "/gone" }] };
+    const sitePages = { siteUrl: async () => "https://x.com", crawlRps: async () => 1, crawlRate: async () => ({ start: 1, max: 1 }), pages: async () => [{ id: "e1", typeId: "t", path: "/gone" }] };
     const seo = new SeoService(prisma as any, null as any, null as any, null as any, cache as any, sitePages as any);
     return { seo, store };
 }

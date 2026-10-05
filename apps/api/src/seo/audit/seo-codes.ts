@@ -49,6 +49,7 @@ export const SEO_CODES: Record<string, SeoCode> = {
 
     // ---- schema_audit ----
     SCHEMA_MISSING: { code: "SCHEMA_MISSING", task: "schema_audit", severity: 2, label: "No structured data", explanation: "The page has no JSON-LD schema, so it can't earn rich results.", fixHint: "Add appropriate schema (Article, Product, FAQ, etc.).", graphKey: "schema", ai: "fix" },
+    SCHEMA_ARTICLE_MISSING: { code: "SCHEMA_ARTICLE_MISSING", task: "schema_audit", severity: 2, label: "No Article schema", explanation: "This article page has structured data, but no Article, BlogPosting or NewsArticle block, so it can't earn article rich results.", fixHint: "Add Article (or BlogPosting) schema.", graphKey: "schema", ai: "fix" },
     SCHEMA_INVALID: { code: "SCHEMA_INVALID", task: "schema_audit", severity: 2, label: "Invalid schema field", explanation: "A required schema field is missing or malformed.", fixHint: "Repair the flagged field to pass validation.", graphKey: "schema", ai: "fix" },
 
     // ---- core_web_vitals ----

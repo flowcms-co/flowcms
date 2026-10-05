@@ -9,10 +9,10 @@ import EmptyState from "@/components/ui/EmptyState";
 import LiveBadge from "../seo/LiveBadge";
 import { api } from "@/lib/api";
 import { useConnections } from "@/lib/useConnections";
-import { issueCounts, ratingOf, scoreCta } from "@/lib/seoDash";
+import { issueCounts, ratingOf, scoreCta, type RunState } from "@/lib/seoDash";
 
 type ScoreResp = { hasData: boolean; score: number | null };
-type IssuesResp = { counts: { total: number; pages: number }; groups: { severity: "high" | "med" | "low"; count: number }[] };
+type IssuesResp = { counts: { total: number; pages: number }; run?: RunState | null; groups: { severity: "high" | "med" | "low"; count: number }[] };
 
 const Arrow = ({ className }: { className?: string }) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -37,6 +37,7 @@ const SeoCard = () => {
     const [loaded, setLoaded] = useState(false);
     const [failed, setFailed] = useState(false);
     const [countsFailed, setCountsFailed] = useState(false);
+    const [run, setRun] = useState<RunState | null>(null);
 
     useEffect(() => {
         api<ScoreResp>("/seo/score")
@@ -44,7 +45,7 @@ const SeoCard = () => {
             .catch(() => setFailed(true))
             .finally(() => setLoaded(true));
         api<IssuesResp>("/seo/scan/issues")
-            .then((d) => setCounts(issueCounts(d.groups ?? [])))
+            .then((d) => { setCounts(issueCounts(d.groups ?? [])); setRun(d.run ?? null); })
             .catch(() => setCountsFailed(true));
         api<{ site?: string | null }>("/seo/connectors").then((d) => setSite(d.site ?? null)).catch(() => {});
     }, []);
@@ -113,7 +114,7 @@ const SeoCard = () => {
             </div>
 
             <p className="mt-2.5 text-caption-2 leading-relaxed text-grey">
-                {countsFailed ? "Couldn't load the issue counts. " : ""}Score: Search Console, live crawl and PageSpeed. Counts: the page audit, as in the AI Optimizer.
+                {countsFailed ? "Couldn't load the issue counts. " : ""}{run ? `${run.paused ? "Audit paused" : "Audit in progress"}, ${run.done.toLocaleString("en-US")} of ${run.total.toLocaleString("en-US")}: counts cover the pages checked so far. ` : ""}Score: Search Console, live crawl and PageSpeed. Counts: the page audit, as in the AI Optimizer.
             </p>
             <button
                 type="button"

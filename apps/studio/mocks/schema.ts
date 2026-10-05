@@ -329,6 +329,9 @@ export type ContentTypeSchema = {
     isPage?: boolean;
     /** The page flag was set by hand; until then it follows the default. */
     isPageSet?: boolean;
+    /** Pages of this type are kept out of search on purpose (the frontend sets
+     *  noindex), so the SEO audit does not warn about it. */
+    noindexIntended?: boolean;
     fields: SchemaField[];
 };
 

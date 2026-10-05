@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Public } from "../../auth/decorators";
+import { ApiTokenGuard } from "../../content/api-token.guard";
 import { IsArray, IsOptional, IsString } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../../auth/decorators";
@@ -56,8 +58,23 @@ export class SeoAuditController {
     /** The same audit as a background job with progress: with a site URL every
      *  page's live HTML is fetched, which outlasts a request on a large site. */
     @Post("jobs/run")
-    runJob(@CurrentUser() user: AuthUser) {
-        return this.jobs.enqueue(user.workspaceId, user.id, "seo.auditPages", "Audit pages", {});
+    runJob(@CurrentUser() user: AuthUser, @Body() dto: { mode?: string }) {
+        const mode = dto?.mode === "full" ? "full" : "changed";
+        return this.jobs.enqueue(user.workspaceId, user.id, "seo.auditPages", mode === "full" ? "Re-check every page" : "Audit pages", { mode });
+    }
+
+    /** Before starting: how many pages a run will fetch and the estimated time. */
+    @Get("plan")
+    plan(@CurrentUser() user: AuthUser, @Query("mode") mode?: string) {
+        return this.audit.plan(user.workspaceId, mode === "full" ? "full" : "changed");
+    }
+
+    /** Pause, resume or cancel the audit run in progress. */
+    @Post("run/:action")
+    @RequirePermissions(PERMISSIONS.SEO_MANAGE)
+    control(@CurrentUser() user: AuthUser, @Param("action") action: string) {
+        if (action !== "pause" && action !== "resume" && action !== "cancel") throw new BadRequestException("Use pause, resume or cancel.");
+        return this.audit.control(user.workspaceId, action);
     }
 
     /** The page images missing alt text: the set the audit flags and the fixer fills. */
@@ -115,5 +132,37 @@ export class SeoAuditController {
         const n = (dto.pages ?? []).filter((p) => p.id).length;
         const label = `Fix ${n} page${n === 1 ? "" : "s"}${dto.title ? ` · ${dto.title}` : ""}`;
         return this.jobs.enqueue(user.workspaceId, user.id, "seo.batchFix", label, { fix: dto.fix, key: dto.key, pages: dto.pages }, n);
+    }
+}
+
+/**
+ * Change signals from the site, authenticated with a workspace API token (the same
+ * Bearer token the delivery API uses), so a deploy hook or the frontend can call it:
+ *   POST /public/seo/signal  { "urls": ["https://site.com/a", "/b"] }   these pages changed
+ *   POST /public/seo/signal  { "deployed": true }                        the site was deployed
+ * Changed URLs are fetched on the next run. A deploy starts a sample re-check of
+ * each page type (a template may have changed), not a full crawl.
+ */
+@Controller("public/seo/signal")
+@Public()
+@UseGuards(ApiTokenGuard)
+export class SeoSignalController {
+    constructor(
+        private readonly audit: SeoAuditService,
+        private readonly jobs: JobsService,
+    ) {}
+
+    @Post()
+    async signal(@Req() req: { apiToken?: { workspaceId: string; createdById?: string | null } }, @Body() dto: { urls?: unknown; deployed?: unknown }) {
+        const ws = req.apiToken!.workspaceId;
+        const urls = Array.isArray(dto?.urls) ? dto.urls.filter((u): u is string => typeof u === "string").slice(0, 5000) : [];
+        const marked = urls.length ? await this.audit.markChanged(ws, urls) : 0;
+        const deployed = dto?.deployed === true;
+        // One run at a time: a signal during a run is picked up by the next one.
+        const busy = !!(await this.audit.runState(ws));
+        const userId = req.apiToken!.createdById;
+        const start = (deployed || marked > 0) && !busy && !!userId;
+        if (start) await this.jobs.enqueue(ws, userId!, "seo.auditPages", deployed ? "Re-check after site deploy" : "Audit changed pages", { mode: deployed ? "sample" : "changed" });
+        return { ok: true, marked, started: start };
     }
 }

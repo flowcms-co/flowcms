@@ -1,6 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
+import { CacheService } from "../cache/cache.service";
 import { CreateContentTypeDto, UpdateContentTypeDto } from "./dto";
 import { isHomeType, isPageType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
@@ -10,7 +11,17 @@ import type { SchemaField } from "./entry-validation";
 
 @Injectable()
 export class ContentTypesService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        @Optional() private readonly cache?: CacheService,
+    ) {}
+
+    /** A type switched to "not pages": its entries leave the SEO audit now, not at
+     *  the end of the next run. */
+    private async dropAuditRows(workspaceId: string, typeId: string) {
+        await this.prisma.$executeRaw`DELETE FROM "PageAudit" WHERE "workspaceId" = ${workspaceId} AND "task" = 'page' AND "entryId" IN (SELECT "id" FROM "ContentEntry" WHERE "contentTypeId" = ${typeId})`;
+        await this.cache?.del(`seo:issues:${workspaceId}`);
+    }
 
     private readonly logger = new Logger(ContentTypesService.name);
 
@@ -78,6 +89,9 @@ export class ContentTypesService {
             // True once someone set the flag by hand. Until then it follows the default,
             // so adding a URL pattern to a reference type turns it on.
             isPageSet: typeof (s as { isPage?: unknown }).isPage === "boolean",
+            // Pages of this type are kept out of search on purpose; the SEO audit then
+            // does not warn about their noindex.
+            noindexIntended: (s as { noindexIntended?: unknown }).noindexIntended === true,
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at
@@ -227,6 +241,8 @@ export class ContentTypesService {
             }
         }
         if (dto.draftAndPublish !== undefined) data.draftAndPublish = dto.draftAndPublish;
+        const stopsBeingPages = dto.schema !== undefined && isPageType(existing) && !isPageType({ ...existing, schema: data.schema });
+        if (stopsBeingPages) await this.dropAuditRows(workspaceId, id);
 
         // Allow renaming the machine identifier only before any content exists —
         // changing it afterwards would break the delivery-API URLs of live entries.

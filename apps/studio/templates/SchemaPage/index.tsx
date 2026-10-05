@@ -226,6 +226,7 @@ const SchemaPage = () => {
                                   freeFormBody: active.freeFormBody || undefined,
                                   // Stored explicitly so the choice survives a later page-type change.
                                   isPage: storedPageFlag(active),
+                                  noindexIntended: active.noindexIntended || undefined,
                               }
                             : { jsonLd: active.jsonLd }),
                         fields,
@@ -471,6 +472,20 @@ const SchemaPage = () => {
                                         </span>
                                     </span>
                                     <Switch checked={active.isPage !== false} onChange={(v) => patchActive({ isPage: v, isPageSet: true })} aria-label="Entries are pages on the site" />
+                                </div>
+                            )}
+
+                            {tab === "types" && active.isPage !== false && (
+                                <div className="mb-5 flex items-start justify-between gap-4">
+                                    <span className="flex flex-col gap-0.5">
+                                        <span className="text-caption-1 text-grey">Noindex is intended</span>
+                                        <span className="text-caption-2 leading-relaxed text-grey">
+                                            Turn on if your site keeps these pages out of search on purpose. The SEO audit then never warns about
+                                            their noindex. Left off, it warns only when a noindexed page is in the sitemap, gets search impressions
+                                            or is linked from the navigation.
+                                        </span>
+                                    </span>
+                                    <Switch checked={!!active.noindexIntended} onChange={(v) => patchActive({ noindexIntended: v })} aria-label="Noindex is intended" />
                                 </div>
                             )}
 

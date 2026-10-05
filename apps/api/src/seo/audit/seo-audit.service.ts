@@ -17,7 +17,10 @@ import {
 import { lookupCode } from "./seo-codes";
 import { entryToPageInput, type ParseContext } from "./parse-content";
 import { SitePagesService, absoluteUrl, rankPages, type SitePage } from "../site-pages.service";
-import { isTransient } from "../polite";
+import { isTransient, type Rate } from "../polite";
+import { SAMPLE_SIZE, estimateSeconds, fetchOrder, inferLive, planRun, templateOf, type Action, type PlanRow, type RunMode, type Sampled } from "./audit-plan";
+import { resolveTokens, str } from "./parse-content";
+import { RULES_VERSION, expectsArticle, hasArticle, noindexFindings, rankSignal, toPaths, withRules } from "./indexing";
 import { CacheService } from "../../cache/cache.service";
 import { ContentEntriesService } from "../../content/content-entries.service";
 import { altBackfillPatch, altLookupFrom, type AltLookup } from "../../content/alt-backfill";
@@ -37,6 +40,7 @@ const RETRY_ROUNDS = 3;
 
 /** Why a row holds no verdict: the live page answered 429/5xx or not at all. */
 export type NotChecked = { notChecked: "rate limited" | "server error" | "no response"; status: number };
+type RunState = { done: number; total: number; startedAt: string; mode?: RunMode; paused?: boolean };
 const notCheckedOf = (status: number): NotChecked => ({ status, notChecked: status === 429 ? "rate limited" : status === 0 ? "no response" : "server error" });
 
 @Injectable()
@@ -51,6 +55,34 @@ export class SeoAuditService {
     ) {}
 
     private issuesKey(workspaceId: string) { return `seo:issues:${workspaceId}`; }
+    private runKey(workspaceId: string) { return `seo:audit-run:${workspaceId}`; }
+
+    /** The audit run in progress for this workspace, if any. */
+    runState(workspaceId: string) {
+        return this.cache.get<RunState>(this.runKey(workspaceId));
+    }
+
+    private ctlKey(workspaceId: string) { return `seo:audit-ctl:${workspaceId}`; }
+    /** Ask the run in progress to pause, resume or stop. It obeys between pages. */
+    async control(workspaceId: string, action: "pause" | "resume" | "cancel") {
+        if (action === "resume") await this.cache.del(this.ctlKey(workspaceId));
+        else await this.cache.set(this.ctlKey(workspaceId), action, 2 * 3600);
+        const run = await this.runState(workspaceId);
+        if (run) await this.cache.set(this.runKey(workspaceId), { ...run, paused: action === "pause" }, 2 * 3600);
+        return { ok: true, run: await this.runState(workspaceId) };
+    }
+    /** Between pages: wait while paused; true when the run was cancelled. */
+    private async stopRequested(workspaceId: string): Promise<boolean> {
+        for (;;) {
+            const ctl = await this.cache.get<string>(this.ctlKey(workspaceId));
+            if (ctl !== "pause") return ctl === "cancel";
+            await new Promise((r) => setTimeout(r, 2000));
+        }
+    }
+
+    /** Rows written by the current rule set (or holding no verdict yet). Rows from
+     *  an older version are never shown: they describe checks that no longer exist. */
+    private readonly currentRows = { OR: [{ contentHash: { startsWith: `${RULES_VERSION}:` } }, { contentHash: "" }] };
 
     /** Asset-library alt text by image URL, for the workspace. */
     async altLookup(workspaceId: string): Promise<AltLookup> {
@@ -100,10 +132,12 @@ export class SeoAuditService {
 
     /** Run L1 deterministic detectors on one page, upserting the ledger. The page's
      *  URL is its real site path; when the workspace has a site URL, the title,
-     *  description, canonical and JSON-LD are read from the live page. Skips the
-     *  write when nothing changed. An entry that is not a published page of a page
-     *  type is not audited (and leaves the ledger). */
-    async auditEntry(workspaceId: string, entryId: string, pre?: { page?: SitePage; site?: string | null; altFor?: AltLookup; rps?: number }) {
+     *  description, canonical and JSON-LD are read from the live page (a conditional
+     *  request: a 304 keeps the stored facts). `pre.live` supplies the page facts
+     *  instead of fetching: the stored ones when nothing the page is built from
+     *  changed, or ones inferred from a sample of its type. An entry that is not a
+     *  published page of a page type is not audited (and leaves the ledger). */
+    async auditEntry(workspaceId: string, entryId: string, pre?: { page?: SitePage; site?: string | null; altFor?: AltLookup; rate?: Rate; live?: LiveFacts | null }) {
         const page = pre?.page ?? (await this.sitePages.pages(workspaceId, [entryId]))[0];
         if (!page) {
             const exists = await this.prisma.contentEntry.count({ where: { id: entryId, workspaceId } });
@@ -113,32 +147,45 @@ export class SeoAuditService {
         }
         const site = pre ? (pre.site ?? null) : await this.sitePages.siteUrl(workspaceId);
         const altFor = pre?.altFor ?? (await this.altLookup(workspaceId));
-        const rps = pre?.rps ?? (site ? await this.sitePages.crawlRps(workspaceId) : undefined);
-        const live: LiveFacts | null = site ? await this.seo.livePage(absoluteUrl(site, page.path), rps) : null;
-        if (live && isTransient(live.status)) {
-            // The site said "not now" (429, 5xx, no response). That is not a fact about
-            // the page: keep whatever was found before, record no finding, and mark the
-            // row so it is retried and never counted as checked or clean.
-            const mark = notCheckedOf(live.status) as unknown as Prisma.InputJsonValue;
-            await this.prisma.pageAudit.upsert({
-                where: { workspaceId_target_task: { workspaceId, target: entryId, task: PAGE } },
-                create: { workspaceId, target: entryId, entryId, task: PAGE, url: page.path, contentHash: "", live: mark },
-                update: { contentHash: "", live: mark },
-            });
-            await this.cache.del(this.issuesKey(workspaceId));
-            return { skipped: false, notChecked: true as const, status: live.status, findings: [] as Finding[] };
+        const where = { workspaceId_target_task: { workspaceId, target: entryId, task: PAGE } };
+        const existing = await this.prisma.pageAudit.findUnique({ where });
+        const stored = (existing?.live ?? null) as (LiveFacts & Partial<NotChecked>) | null;
+
+        let live: LiveFacts | null = pre?.live ?? null;
+        let fetchedAt: Date | undefined;
+        if (site && pre?.live === undefined) {
+            const rate = pre?.rate ?? (await this.sitePages.crawlRate(workspaceId));
+            const got = await this.seo.livePage(absoluteUrl(site, page.path), rate, stored?.status === 200 && !stored.inferred ? { etag: stored.etag, lastModified: stored.lastModified } : undefined);
+            if (isTransient(got.status)) {
+                // The site said "not now" (429, 5xx, no response). That is not a fact about
+                // the page: record no finding. A page with an earlier verdict keeps it
+                // (it still shows when it was last fetched); a page with none is marked
+                // "not checked", so it is never counted as checked or clean.
+                if (!existing || !stored || stored.notChecked) {
+                    const mark = notCheckedOf(got.status) as unknown as Prisma.InputJsonValue;
+                    await this.prisma.pageAudit.upsert({ where, create: { workspaceId, target: entryId, entryId, task: PAGE, url: page.path, contentHash: "", live: mark }, update: { contentHash: "", live: mark } });
+                    await this.cache.del(this.issuesKey(workspaceId));
+                }
+                return { skipped: false, notChecked: true as const, status: got.status, findings: [] as Finding[] };
+            }
+            // 304: unchanged since the stored copy, so its facts stand.
+            live = got.status === 304 && stored?.status === 200 ? stored : got;
+            fetchedAt = new Date();
         }
         // Entry fields only matter as a fallback, so only look up parents then.
         const parents = live?.status === 200 ? {} : await this.parentContext(workspaceId, page.data);
 
         const input = entryToPageInput({ id: page.id, slug: page.slug, title: page.title, data: page.data }, { path: page.path, altFor, hasSite: !!site, live, ...parents });
-        const hash = contentHash(input);
+        const hash = withRules(contentHash(input));
+        const liveJson = live ? (live as unknown as Prisma.InputJsonValue) : Prisma.DbNull;
+        // An inferred row has not been fetched, whatever was fetched before the template changed.
+        const stamp = fetchedAt ? { fetchedAt } : live?.inferred ? { fetchedAt: null } : {};
 
-        const existing = await this.prisma.pageAudit.findUnique({
-            where: { workspaceId_target_task: { workspaceId, target: entryId, task: PAGE } },
-        });
         if (existing && existing.contentHash === hash) {
-            return { skipped: true, findings: existing.l1Findings as unknown as Finding[] };
+            // Nothing changed: keep the findings, record that it was checked (and
+            // fetched) now. A run in progress shows only rows it has reached.
+            await this.prisma.pageAudit.update({ where: { id: existing.id }, data: { lastCheckedAt: new Date(), live: liveJson, ...stamp } });
+            return { skipped: true, fetched: !!fetchedAt, findings: existing.l1Findings as unknown as Finding[] };
         }
 
         const findings = auditPage(input);
@@ -147,58 +194,220 @@ export class SeoAuditService {
         const data = {
             contentHash: hash,
             url: page.path,
-            live: live ? (live as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+            live: liveJson,
             l1Findings: findings as unknown as Prisma.InputJsonValue,
             severity,
             escalated,
             lastCheckedAt: new Date(),
+            ...stamp,
         };
-        await this.prisma.pageAudit.upsert({
-            where: { workspaceId_target_task: { workspaceId, target: entryId, task: PAGE } },
-            create: { workspaceId, target: entryId, entryId, task: PAGE, ...data },
-            update: data,
-        });
+        await this.prisma.pageAudit.upsert({ where, create: { workspaceId, target: entryId, entryId, task: PAGE, ...data }, update: data });
         await this.cache.del(this.issuesKey(workspaceId));
-        return { skipped: false, findings, severity, escalated };
+        return { skipped: false, fetched: !!fetchedAt, findings, severity, escalated };
     }
 
-    /** Audit every published page (the manual "Run audit"): entries of page types
-     *  only, all of them, in a stable order. Ledger rows for entries that are no
-     *  longer pages are removed. Live pages are requested at the workspace's crawl
-     *  rate (1 per second by default). Pages the site refuses with 429/5xx are not
-     *  given findings: they are retried once the site's Retry-After (or a back-off)
-     *  has passed, and any still refused are left marked "not checked" for the next
-     *  run. `onProgress` reports as it goes (background job). */
-    async auditWorkspace(workspaceId: string, onProgress?: (p: { done: number; total: number; notChecked: number }) => Promise<void> | void) {
-        const [pages, site, altFor, rps] = await Promise.all([this.sitePages.pages(workspaceId), this.sitePages.siteUrl(workspaceId), this.altLookup(workspaceId), this.sitePages.crawlRps(workspaceId)]);
+    /** What a run would do, without doing it: which pages it fetches, which it
+     *  re-checks from stored facts, and which it fills in from a sample. */
+    private async planFor(workspaceId: string, mode: RunMode) {
+        const [pages, site, rows] = await Promise.all([
+            this.sitePages.pages(workspaceId),
+            this.sitePages.siteUrl(workspaceId),
+            this.prisma.pageAudit.findMany({ where: { workspaceId, task: PAGE }, select: { target: true, fetchedAt: true, live: true } }),
+        ]);
+        const rowById = new Map<string, PlanRow & { live: (LiveFacts & Partial<NotChecked>) | null }>(
+            rows.map((r) => {
+                const live = (r.live ?? null) as (LiveFacts & Partial<NotChecked>) | null;
+                return [r.target, { fetchedAt: r.fetchedAt, noindex: !!live?.noindex, notChecked: !!live?.notChecked, inferred: !!live?.inferred, live }];
+            }),
+        );
+        // The site's own change signal. One or a few requests, only when there is something to compare with.
+        const lastmod = site && mode === "changed" && rows.some((r) => r.fetchedAt) ? await this.seo.sitemapLastmod(site).catch(() => new Map<string, Date>()) : undefined;
+        const actions = planRun(pages, rowById, { mode, lastmod, hasSite: !!site });
+        return { pages, site, rowById, actions };
+    }
+
+    /** Before a run: how many pages it will fetch and roughly how long that takes
+     *  at the current rate (it speeds up if the site allows, slows if it objects). */
+    async plan(workspaceId: string, mode: RunMode = "changed") {
+        const { pages, site, actions } = await this.planFor(workspaceId, mode);
+        const count = (a: Action) => [...actions.values()].filter((x) => x === a).length;
+        const rate = await this.sitePages.crawlRate(workspaceId);
+        const rps = site ? this.seo.currentRate(site, rate) : rate.start;
+        const toFetch = count("fetch");
+        return { mode, total: pages.length, toFetch, reuse: count("reuse"), sampled: count("infer"), rps, maxRps: rate.max, estimatedSeconds: estimateSeconds(toFetch, rps), live: !!site };
+    }
+
+    /**
+     * Audit the workspace's pages (the "Run audit" job).
+     *
+     * `changed` (the default) fetches only pages whose inputs changed since their
+     * last fetch: the entry, an entry it references, its content type or a
+     * component it uses, or a newer sitemap lastmod. Every other page is re-checked
+     * from its stored page facts with no request. `full` fetches every page.
+     * `sample` (a site deploy) treats every page as changed.
+     *
+     * A page type with more than 200 pages to fetch is checked by a rotating sample
+     * of 50. If the sample agrees on the template (JSON-LD types, canonical, robots),
+     * the other pages are filled in from it and labelled as inferred; if it does
+     * not, every page of that type is fetched.
+     *
+     * Pages are fetched in order of what can rank: indexable pages by search
+     * impressions, then other indexable pages, then noindexed pages. Requests go
+     * through the adaptive rate gate; pages the site refuses with 429/5xx get no
+     * findings, are retried once the site allows, and any still refused are left
+     * for the next run. The run can be paused or cancelled between pages.
+     */
+    async auditWorkspace(workspaceId: string, onProgress?: (p: { done: number; total: number; notChecked: number }) => Promise<void> | void, mode: RunMode = "changed") {
+        const { pages, site, rowById, actions } = await this.planFor(workspaceId, mode);
+        const [altFor, rate, impressions] = await Promise.all([this.altLookup(workspaceId), this.sitePages.crawlRate(workspaceId), this.seo.impressionsByPath(workspaceId).catch(() => new Map<string, number>())]);
         await this.prisma.pageAudit.deleteMany({ where: { workspaceId, task: PAGE, target: { notIn: pages.map((p) => p.id) } } });
-        let changed = 0;
-        let unchanged = 0;
-        let escalated = 0;
-        let failed = 0;
+        const of = (a: Action) => pages.filter((p) => actions.get(p.id) === a);
+        let toFetch = fetchOrder(of("fetch"), rowById, impressions);
+        const toInfer = of("infer");
+
+        const startedAt = new Date().toISOString();
+        let total = toFetch.length;
         let done = 0;
-        let queue = pages;
-        for (let round = 0; queue.length && round <= RETRY_ROUNDS; round++) {
-            const refused: SitePage[] = [];
-            // Two in flight at most; the rate gate spaces them. Entry-only audits
-            // (no site URL) have nothing to wait on.
-            await mapLimit(queue, site ? 2 : 1, async (page) => {
-                const r = await this.auditEntry(workspaceId, page.id, { page, site, altFor, rps }).catch(() => null);
-                if (!r) failed++;
-                else if ("notChecked" in r && r.notChecked) { refused.push(page); return; }
-                else if (r.skipped) unchanged++;
-                else {
-                    changed++;
-                    if ("escalated" in r && r.escalated) escalated++;
-                }
-                await onProgress?.({ done: ++done, total: pages.length, notChecked: refused.length });
-            });
-            queue = refused;
+        let lastSaved = -1;
+        const saveRun = async (force = false) => {
+            // Visible to every request (and instance): "Audit in progress, N of M".
+            if (!force && done - lastSaved < 5 && done !== total) return;
+            lastSaved = done;
+            const paused = (await this.cache.get<string>(this.ctlKey(workspaceId))) === "pause";
+            await this.cache.set(this.runKey(workspaceId), { done, total, startedAt, mode, paused } satisfies RunState, 2 * 3600);
+        };
+        await this.cache.del(this.ctlKey(workspaceId));
+        await saveRun(true);
+
+        const c = { changed: 0, unchanged: 0, escalated: 0, failed: 0, fetched: 0, reused: 0, inferred: 0 };
+        const tally = (r: Awaited<ReturnType<SeoAuditService["auditEntry"]>> | null) => {
+            if (!r) c.failed++;
+            else if (r.skipped) c.unchanged++;
+            else {
+                c.changed++;
+                if ("escalated" in r && r.escalated) c.escalated++;
+            }
+        };
+
+        // 1. Pages with nothing new to fetch: re-run the checks on stored facts. No
+        //    requests, so these are current within seconds.
+        // ponytail: one read and one write per page; batch them if runs over ~100k pages drag.
+        for (const page of of("reuse")) {
+            const live = site ? rowById.get(page.id)?.live ?? null : null;
+            tally(await this.auditEntry(workspaceId, page.id, { page, site, altFor, rate, live }).catch(() => null));
+            c.reused++;
         }
-        const notChecked = queue.length;
-        await onProgress?.({ done: done + notChecked, total: pages.length, notChecked });
+
+        // 2. Fetch, most important pages first, retrying what the site refused.
+        let cancelled = false;
+        const fetchAll = async (list: SitePage[]) => {
+            let queue = list;
+            for (let round = 0; queue.length && round <= RETRY_ROUNDS && !cancelled; round++) {
+                const refused: SitePage[] = [];
+                // The gate sets the pace; a few in flight lets a fast site be used.
+                await mapLimit(queue, 6, async (page) => {
+                    if (cancelled || (cancelled = await this.stopRequested(workspaceId))) return;
+                    const r = await this.auditEntry(workspaceId, page.id, { page, site, altFor, rate }).catch(() => null);
+                    if (r && "notChecked" in r && r.notChecked) { refused.push(page); return; }
+                    tally(r);
+                    if (r) c.fetched++;
+                    done++;
+                    await saveRun();
+                    await onProgress?.({ done, total, notChecked: refused.length });
+                });
+                queue = refused;
+            }
+            return cancelled ? 0 : queue.length;
+        };
+        let notChecked = await fetchAll(toFetch);
+
+        // 3. Sampled types: fill the rest in from the sample when it agrees; fetch
+        //    them all when it does not.
+        const escalatedTypes: string[] = [];
+        const byType = new Map<string, SitePage[]>();
+        for (const p of toInfer) byType.set(p.typeId, [...(byType.get(p.typeId) ?? []), p]);
+        const entryMeta = (p: SitePage) => ({ entryTitle: resolveTokens(str(p.data.metaTitle) || p.title, p.data), entryDescription: str(p.data.metaDescription) || str(p.data.summary) });
+        for (const [typeId, rest] of byType) {
+            if (cancelled) break;
+            const sampleIds = toFetch.filter((p) => p.typeId === typeId).map((p) => p.id);
+            const sampleRows = await this.prisma.pageAudit.findMany({ where: { workspaceId, task: PAGE, target: { in: sampleIds } }, select: { target: true, live: true, fetchedAt: true } });
+            const pageById = new Map(toFetch.map((p) => [p.id, p]));
+            const sample: Sampled[] = sampleRows
+                .filter((r) => r.fetchedAt && r.fetchedAt.toISOString() >= startedAt)
+                .map((r) => ({ live: r.live as unknown as LiveFacts, ...entryMeta(pageById.get(r.target)!) }));
+            const template = sample.length >= Math.min(SAMPLE_SIZE, sampleIds.length) / 2 ? templateOf(sample) : null;
+            if (!template) {
+                // The sample disagrees (or mostly failed): it proves nothing about the
+                // pages not fetched, so check every page of this type.
+                escalatedTypes.push(typeId);
+                total += rest.length;
+                notChecked += await fetchAll(fetchOrder(rest, rowById, impressions));
+                continue;
+            }
+            for (const page of rest) {
+                const live = inferLive(template, { ...entryMeta(page), url: absoluteUrl(site!, page.path) }, { size: sample.length, total: sample.length + rest.length });
+                tally(await this.auditEntry(workspaceId, page.id, { page, site, altFor, rate, live }).catch(() => null));
+                c.inferred++;
+            }
+        }
+
+        await onProgress?.({ done: done + notChecked, total, notChecked });
+        await this.cache.del(this.runKey(workspaceId));
+        await this.cache.del(this.ctlKey(workspaceId));
         await this.cache.del(this.issuesKey(workspaceId));
-        return { scanned: pages.length, checked: changed + unchanged, changed, unchanged, notChecked, failed, escalated, live: !!site, rps: site ? rps : null };
+        toFetch = [];
+        return { scanned: pages.length, checked: c.changed + c.unchanged, ...c, notChecked, cancelled, escalatedTypes, mode, live: !!site, rps: site ? this.seo.currentRate(site, rate) : null };
+    }
+
+    /** The site says these URLs changed (or that it was deployed): mark the pages
+     *  so the next run fetches them. Returns how many pages matched. */
+    async markChanged(workspaceId: string, urls: string[]): Promise<number> {
+        const paths = toPaths(urls);
+        if (!paths.length) return 0;
+        const r = await this.prisma.pageAudit.updateMany({ where: { workspaceId, task: PAGE, url: { in: [...paths, ...paths.map((p) => `${p}/`)] } }, data: { fetchedAt: null } });
+        await this.cache.del(this.issuesKey(workspaceId));
+        return r.count;
+    }
+
+    /** Rolling background check: re-fetch the stalest pages, a few per tick, so every
+     *  page is re-verified within the workspace's window with no one pressing a
+     *  button. Pages never fetched (inferred from a sample) go first. */
+    async recheckStalest(workspaceId: string, budget: number): Promise<number> {
+        const site = await this.sitePages.siteUrl(workspaceId);
+        if (!site || (await this.runState(workspaceId))) return 0;
+        const cutoff = new Date(Date.now() - (await this.sitePages.recheckDays(workspaceId)) * 86_400_000);
+        const rows = await this.prisma.pageAudit.findMany({
+            where: { workspaceId, task: PAGE, OR: [{ fetchedAt: null }, { fetchedAt: { lt: cutoff } }] },
+            orderBy: { fetchedAt: { sort: "asc", nulls: "first" } },
+            select: { target: true },
+            take: budget,
+        });
+        if (!rows.length) return 0;
+        const [pages, altFor, rate] = await Promise.all([this.sitePages.pages(workspaceId, rows.map((r) => r.target)), this.altLookup(workspaceId), this.sitePages.crawlRate(workspaceId)]);
+        let n = 0;
+        for (const page of pages) {
+            const r = await this.auditEntry(workspaceId, page.id, { page, site, altFor, rate }).catch(() => null);
+            if (r && !("notChecked" in r && r.notChecked)) n++;
+        }
+        return n;
+    }
+
+    /** Rows written by an older rule set that already hold fetched page facts: run
+     *  the current checks on those facts, no request. Keeps the Optimizer populated
+     *  after an upgrade instead of empty until someone runs an audit. */
+    async refreshOldRules(batch = 200): Promise<number> {
+        const rows = await this.prisma.pageAudit.findMany({ where: { task: PAGE, fetchedAt: { not: null }, NOT: this.currentRows }, select: { workspaceId: true, target: true, live: true }, take: batch });
+        const byWs = new Map<string, typeof rows>();
+        for (const r of rows) byWs.set(r.workspaceId, [...(byWs.get(r.workspaceId) ?? []), r]);
+        for (const [ws, list] of byWs) {
+            const [pages, site, altFor] = await Promise.all([this.sitePages.pages(ws, list.map((r) => r.target)), this.sitePages.siteUrl(ws), this.altLookup(ws)]);
+            const liveById = new Map(list.map((r) => [r.target, r.live as unknown as LiveFacts]));
+            const found = new Set(pages.map((p) => p.id));
+            for (const page of pages) await this.auditEntry(ws, page.id, { page, site, altFor, live: site ? liveById.get(page.id) ?? null : null }).catch(() => null);
+            // Entries that are no longer pages have nothing to refresh.
+            await this.prisma.pageAudit.deleteMany({ where: { workspaceId: ws, task: PAGE, target: { in: list.map((r) => r.target).filter((id) => !found.has(id)) } } });
+        }
+        return rows.length;
     }
 
     /** Rendered findings per page for the UI (codes -> readable): every audited
@@ -206,7 +415,7 @@ export class SeoAuditService {
      *  page through it; counts are always taken over the whole set. */
     async list(workspaceId: string, page?: { limit: number; offset: number }) {
         const rows = await this.prisma.pageAudit.findMany({
-            where: { workspaceId, task: PAGE },
+            where: { workspaceId, task: PAGE, ...this.currentRows },
             orderBy: [{ severity: "desc" }, { target: "asc" }],
             ...(page ? { take: page.limit, skip: page.offset } : {}),
         });
@@ -229,6 +438,10 @@ export class SeoAuditService {
                 lastCheckedAt: r.lastCheckedAt,
                 live: (r.live ?? null) as LiveFacts | null,
                 notChecked: !!(r.live as NotChecked | null)?.notChecked,
+                // When the live page was last requested, and whether its facts were
+                // filled in from a sample of its type instead.
+                fetchedAt: r.fetchedAt,
+                inferred: ((r.live ?? null) as LiveFacts | null)?.inferred ?? null,
                 findings: rendered,
             };
         });
@@ -256,21 +469,48 @@ export class SeoAuditService {
             this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { jsonLdOrg: true, ignoredFindings: true } }),
         ]);
 
+        // --- published pages, at their real paths, and what marks a page as one that
+        // should be found in search (sitemap, navigation, search impressions) ---
+        const published = await this.sitePages.pages(workspaceId);
+        const pageById = new Map(published.map((p) => [p.id, p]));
+        const siteUrl = await this.sitePages.siteUrl(workspaceId);
+        const impressions = await this.seo.impressionsByPath(workspaceId).catch(() => new Map<string, number>());
+        const signals = { sitemap: new Set<string>(crawl.sitemapPaths ?? []), nav: new Set<string>(crawl.navPaths ?? []), impressions };
+
+        // While an audit runs, only rows it has already re-checked are shown; the
+        // rest are from the previous audit and would read as current.
+        const run = await this.runState(workspaceId);
+        const fresh = run ? rows.filter((r) => r.lastCheckedAt.toISOString() >= run.startedAt) : rows;
+
         // Findings the user permanently dismissed: "CODE" (whole issue) or "CODE:entryId" (one page).
         const ignored = new Set(ws?.ignoredFindings ?? []);
-        const pageRows: PageRow[] = rows.map((r) => ({
-            entryId: r.entryId,
-            url: r.url,
-            title: r.title,
-            notChecked: r.notChecked,
-            // Schema is computed per type (Article/FAQ/Organization/Service) below, so drop
-            // the page-scope L1 schema finding to avoid double-counting; also drop ignored findings.
-            // Schema (per-type) + internal linking (opportunity-driven) are computed below, so drop
-            // the page-scope L1 versions to avoid double-counting; also drop ignored findings.
-            findings: (r.notChecked ? [] : r.findings).filter((f) =>
-                f.code !== "SCHEMA_MISSING" && f.code !== "SCHEMA_INVALID" && f.code !== "INTERNAL_LINKS_FEW" &&
-                !ignored.has(f.code) && !ignored.has(`${f.code}:${r.entryId}`)),
-        }));
+        // Pages the site tells search engines to skip. A noindexed page cannot rank,
+        // so it is left out of the ranking checks (title, description, readability,
+        // schema, cannibalization, duplicates) and counted separately. Its noindex is
+        // only raised when the site contradicts it and the type does not intend it.
+        const noindexed = new Set<string>();
+        const pageRows: PageRow[] = fresh.map((r) => {
+            let findings = r.notChecked ? [] : r.findings;
+            if (r.entryId && findings.some((f) => f.code === "TECH_NOINDEX")) {
+                noindexed.add(r.entryId);
+                const intended = pageById.get(r.entryId)?.noindexIntended;
+                findings = noindexFindings(findings, intended ? null : rankSignal(r.url, signals));
+            }
+            return {
+                entryId: r.entryId,
+                url: r.url,
+                title: r.title,
+                notChecked: r.notChecked,
+                inferred: !!r.inferred,
+                fetchedAt: r.fetchedAt,
+                // Internal linking is opportunity-driven and computed below, so drop the
+                // page-scope version to avoid double-counting; also drop ignored findings.
+                // "No structured data" stays: it means the page has no JSON-LD at all.
+                findings: findings.filter((f) => f.code !== "INTERNAL_LINKS_FEW" && !ignored.has(f.code) && !ignored.has(`${f.code}:${r.entryId}`)),
+            };
+        });
+        const indexable = published.filter((p) => !noindexed.has(p.id));
+        const noindexedPaths = new Set(published.filter((p) => noindexed.has(p.id)).map((p) => p.path));
 
         const site: SiteFinding[] = [];
         const push = (s: SiteFinding | null) => {
@@ -296,12 +536,10 @@ export class SeoAuditService {
             if (!f.sitemap?.present) push(this.siteFinding("AIREADY_SITEMAP_MISSING"));
         }
 
-        // --- published pages (schema, cannibalization, duplicate detection): all of
-        // them, at their real paths; not a 300-entry sample of every type ---
-        const published = await this.sitePages.pages(workspaceId);
-        const siteUrl = await this.sitePages.siteUrl(workspaceId);
+        // --- indexable pages (schema, cannibalization, duplicate detection): all of
+        // them; not a 300-entry sample of every type ---
         const liveById = new Map(rows.map((r) => [r.entryId, r.live]));
-        const entryMeta = published.map((e) => {
+        const entryMeta = indexable.map((e) => {
             const d = e.data;
             const title = e.title;
             const fk = typeof d.focusKeyword === "string" ? d.focusKeyword.trim().toLowerCase() : "";
@@ -312,8 +550,9 @@ export class SeoAuditService {
         });
 
         // --- schema opportunities by type (Article / FAQ / Organization / Service) ---
-        // Per page, recommend the schema types it should have but is missing, so the
-        // Optimizer's Schema tab covers more than just Article. Deterministic.
+        // Per page, recommend the schema types it should have but is missing. Article
+        // is expected only on article pages (the content type says so), and a page
+        // with no JSON-LD at all is already reported as "No structured data".
         const orgEntity = ws?.jsonLdOrg;
         const hasGlobalOrg = !!orgEntity && typeof orgEntity === "object" && Object.keys(orgEntity as object).length > 0;
         const schemaTypesOf = (d: Record<string, unknown>): Set<string> => {
@@ -334,7 +573,7 @@ export class SeoAuditService {
         };
         const textById = new Map(entryMeta.map((e) => [e.id, e.text.toLowerCase()]));
         const schemaPages: Record<"article" | "faq" | "org" | "service", IssuePage[]> = { article: [], faq: [], org: [], service: [] };
-        for (const e of published) {
+        for (const e of indexable) {
             const d = e.data;
             const slug = (e.slug ?? "").toLowerCase();
             const url = e.path;
@@ -350,7 +589,7 @@ export class SeoAuditService {
             const isOrgPage = isHome || /^(about|contact|team|company|careers)/.test(slug);
             const isService = /(service|pricing|solution|capabilit|what-we-do|offering|package)/.test(hay);
             const looksFaq = /\bfaq\b|frequently asked/.test(hay) || (text.match(/\?/g) || []).length >= 3;
-            if (!(have.has("article") || have.has("blogposting") || have.has("newsarticle")))
+            if (expectsArticle({ pageType: e.pageType, jsonLd: e.typeJsonLd }) && have.size > 0 && !hasArticle(have))
                 schemaPages.article.push({ id: e.id, url, title, schemaType: "Article", priority: /\/blog\//.test(url) ? "high" : "med" });
             if (looksFaq && !have.has("faqpage"))
                 schemaPages.faq.push({ id: e.id, url, title, schemaType: "FAQ", priority: "med" });
@@ -359,7 +598,7 @@ export class SeoAuditService {
             if (isService && !have.has("service"))
                 schemaPages.service.push({ id: e.id, url, title, schemaType: "Service", priority: "med" });
         }
-        if (schemaPages.article.length) push(this.siteFinding("SCHEMA_MISSING", { count: schemaPages.article.length, pages: schemaPages.article }));
+        if (schemaPages.article.length) push(this.siteFinding("SCHEMA_ARTICLE_MISSING", { count: schemaPages.article.length, pages: schemaPages.article }));
         if (schemaPages.faq.length) push(this.siteFinding("SCHEMA_FAQ_MISSING", { count: schemaPages.faq.length, pages: schemaPages.faq }));
         if (schemaPages.org.length) push(this.siteFinding("SCHEMA_ORG_MISSING", { count: schemaPages.org.length, pages: schemaPages.org }));
         if (schemaPages.service.length) push(this.siteFinding("SCHEMA_SERVICE_MISSING", { count: schemaPages.service.length, pages: schemaPages.service }));
@@ -375,7 +614,11 @@ export class SeoAuditService {
             pages.forEach((p, i) => cannPages.push({ id: p.id, url: p.url, title: p.title, group: keyword, detail: i === 0 ? `Suggested primary · ${rec}` : "Competing page" }));
         };
         if (cannib.hasData && cannib.groups?.length) {
-            for (const g of cannib.groups) addConflict(g.keyword, g.pages.map((p) => ({ id: null, url: p.path, title: p.path })));
+            for (const g of cannib.groups) {
+                // Pages that cannot rank cannot compete for a query.
+                const ranking = g.pages.filter((p) => !noindexedPaths.has(p.path.replace(/(.)\/+$/, "$1")));
+                if (ranking.length >= 2) addConflict(g.keyword, ranking.map((p) => ({ id: null, url: p.path, title: p.path })));
+            }
         }
         const seenKw = new Set<string>();
         const byKw = new Map<string, typeof entryMeta>();
@@ -461,12 +704,11 @@ export class SeoAuditService {
         // large sites need it. The pages compared are the most-seen ones (Search
         // Console impressions), else the newest, and the result carries how many of
         // the total were covered so a partial check never reads as "no duplicates".
-        const impressions = await this.seo.impressionsByPath(workspaceId).catch(() => new Map<string, number>());
         const by: Coverage["by"] = impressions.size ? "impressions" : "recency";
         const metaById0 = new Map(entryMeta.map((e) => [e.id, e]));
-        const dupSet = rankPages(published, impressions).slice(0, DUPLICATES_CAP).map((p) => metaById0.get(p.id)!);
+        const dupSet = rankPages(indexable, impressions).slice(0, DUPLICATES_CAP).map((p) => metaById0.get(p.id)!);
         const coverage = {
-            duplicates: { checked: dupSet.length, total: published.length, capped: dupSet.length < published.length, by },
+            duplicates: { checked: dupSet.length, total: indexable.length, capped: dupSet.length < indexable.length, by },
             links: { checked: links.pages ?? 0, total: (links as { total?: number }).total ?? links.pages ?? 0, capped: (links.pages ?? 0) < ((links as { total?: number }).total ?? 0), by },
         };
         const dups = detectDuplicatePages(dupSet.map((e) => ({ id: e.id, title: e.title, url: e.url ?? undefined, text: e.text })));
@@ -486,6 +728,31 @@ export class SeoAuditService {
             if (c) { g.checked = c.checked; g.total = c.total; }
         }
         result.nonPageTypes = await this.sitePages.nonPageTypes(workspaceId);
+        // Informational, outside the issue total and the score.
+        result.counts.noindexed = noindexed.size;
+        result.run = run;
+        // How fresh the picture is: the oldest live check, pages never fetched, and
+        // how each sampled type was verified.
+        const typeName = new Map((await this.sitePages.pageTypes(workspaceId)).map((t) => [t.id, t.name]));
+        const perType = new Map<string, { verified: number; total: number }>();
+        for (const r of fresh) {
+            const typeId = r.entryId ? pageById.get(r.entryId)?.typeId : undefined;
+            if (!typeId) continue;
+            const t = perType.get(typeId) ?? { verified: 0, total: 0 };
+            t.total++;
+            if (r.fetchedAt) t.verified++;
+            perType.set(typeId, t);
+        }
+        const fetchedTimes = fresh.map((r) => r.fetchedAt?.getTime()).filter((t): t is number => !!t);
+        result.freshness = {
+            live: !!siteUrl,
+            oldestFetchedAt: fetchedTimes.length ? new Date(Math.min(...fetchedTimes)).toISOString() : null,
+            neverFetched: siteUrl ? fresh.filter((r) => !r.fetchedAt && !r.notChecked).length : 0,
+            recheckDays: await this.sitePages.recheckDays(workspaceId),
+            sampledTypes: [...perType.entries()].filter(([, t]) => siteUrl && t.verified < t.total).map(([id, t]) => ({ name: typeName.get(id) ?? "Pages", ...t })),
+        };
+        // "No structured data": suggest the type the page's content type calls for.
+        for (const g of result.groups) if (g.key === "SCHEMA_MISSING") for (const pg of g.pages) pg.schemaType = (pg.id ? pageById.get(pg.id)?.typeJsonLd : null) ?? "WebPage";
 
         // Metadata current/recommended is derived from LIVE entry data at render time
         // (the L1 finding ledger is cached by contentHash, so values added to the meta

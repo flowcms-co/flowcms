@@ -23,6 +23,8 @@ class UpdateWorkspaceDto {
     @IsOptional() @IsString() previewUrl?: string;
     @IsOptional() @IsString() siteUrl?: string;
     @IsOptional() @IsNumber() @Min(0.1) @Max(10) seoCrawlRps?: number;
+    @IsOptional() @IsNumber() @Min(0.1) @Max(10) seoCrawlMaxRps?: number;
+    @IsOptional() @IsInt() @Min(1) @Max(365) seoRecheckDays?: number;
     /** IANA time zone the dashboards measure "today" and weeks in, e.g. "Asia/Kolkata". */
     @IsOptional() @IsString() timezone?: string;
     /** Fallback weekly content goal per writer (when no personal goal is set). */
@@ -50,7 +52,7 @@ const STARTERS: Record<string, StarterType[]> = {
     blank: [],
 };
 
-const shape = (w: { id: string; name: string; slug: string; locales: unknown; defaultLocale: string; onboardedAt: Date | null; jsonLdOrg?: unknown; previewUrl?: string | null; siteUrl?: string | null; seoCrawlRps?: number; timezone?: string; authorMode?: string; defaultWeeklyGoal?: number; brandName?: string | null; brandLogoUrl?: string | null; brandAccent?: string | null }) => ({
+const shape = (w: { id: string; name: string; slug: string; locales: unknown; defaultLocale: string; onboardedAt: Date | null; jsonLdOrg?: unknown; previewUrl?: string | null; siteUrl?: string | null; seoCrawlRps?: number; seoCrawlMaxRps?: number; seoRecheckDays?: number; timezone?: string; authorMode?: string; defaultWeeklyGoal?: number; brandName?: string | null; brandLogoUrl?: string | null; brandAccent?: string | null }) => ({
     id: w.id,
     name: w.name,
     slug: w.slug,
@@ -66,6 +68,8 @@ const shape = (w: { id: string; name: string; slug: string; locales: unknown; de
     timezone: safeTimeZone(w.timezone),
     timezoneInvalid: w.timezone && safeTimeZone(w.timezone) !== w.timezone ? w.timezone : null,
     seoCrawlRps: w.seoCrawlRps ?? 1,
+    seoCrawlMaxRps: w.seoCrawlMaxRps ?? 10,
+    seoRecheckDays: w.seoRecheckDays ?? 14,
     authorMode: w.authorMode ?? "creator",
     defaultWeeklyGoal: w.defaultWeeklyGoal ?? 3,
     // White-label branding (applied client-side only when licensed for white_label).
@@ -104,6 +108,8 @@ export class WorkspaceController {
             data.siteUrl = site;
         }
         if (dto.seoCrawlRps !== undefined) data.seoCrawlRps = dto.seoCrawlRps;
+        if (dto.seoCrawlMaxRps !== undefined) data.seoCrawlMaxRps = dto.seoCrawlMaxRps;
+        if (dto.seoRecheckDays !== undefined) data.seoRecheckDays = dto.seoRecheckDays;
         if (dto.timezone !== undefined) {
             if (!isTimeZone(dto.timezone)) throw new BadRequestException(`"${dto.timezone}" is not a time zone. Pick one from the list, for example Europe/London.`);
             data.timezone = dto.timezone;

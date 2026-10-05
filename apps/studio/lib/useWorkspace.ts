@@ -20,6 +20,10 @@ export type Workspace = {
     timezoneInvalid?: string | null;
     /** Most requests per second the SEO audit and crawler send to the site. */
     seoCrawlRps?: number;
+    /** The most they may adapt up to while the site stays healthy. */
+    seoCrawlMaxRps?: number;
+    /** Every page is re-verified against the live site within this many days. */
+    seoRecheckDays?: number;
     /** Who an entry's author is: its creator, or whoever last edited the content. */
     authorMode: "creator" | "lastEditor";
     /** White-label (applied only when licensed for `white_label`). */

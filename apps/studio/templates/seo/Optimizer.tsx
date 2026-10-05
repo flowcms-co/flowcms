@@ -14,7 +14,8 @@ import { api } from "@/lib/api";
 import { useSeoFixMode } from "@/lib/seoPrefs";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { useJobs } from "@/components/providers/JobsProvider";
-import { coverageNote, type Coverage } from "@/lib/seoDash";
+import { auditNotes as buildAuditNotes, checkedLabel, planSummary, runBanner, type AuditPlan, type Coverage, type Freshness, type RunState } from "@/lib/seoDash";
+import { confirm } from "@/components/providers/ConfirmProvider";
 import { useRevealBatch } from "@/lib/useReveal";
 import FileGenModal from "@/templates/seo/FileGenModal";
 import InternalLinksModal from "@/templates/seo/InternalLinksModal";
@@ -34,6 +35,7 @@ type IssuePage = {
     priority?: Band; overlap?: number; matchTitle?: string;
     current?: string; currentLen?: number; recommended?: string; recommendedLen?: number;
     schemaType?: string; suggested?: number; sources?: string[]; reason?: string;
+    fetchedAt?: string | null; inferred?: boolean;
 };
 type IssueGroup = {
     key: string;
@@ -53,7 +55,9 @@ type IssueGroup = {
 type CategoryMeta = { key: string; label: string; count: number };
 type IssuesResult = {
     score: number | null;
-    counts: { total: number; pages: number; aiFixable: number; clean: number; notChecked?: number };
+    counts: { total: number; pages: number; aiFixable: number; clean: number; notChecked?: number; noindexed?: number; inferred?: number };
+    run?: RunState | null;
+    freshness?: Freshness;
     coverage?: { duplicates: Coverage; links: Coverage };
     nonPageTypes?: { id: string; name: string; published: number; hasPattern: boolean }[];
     categories: CategoryMeta[];
@@ -213,13 +217,35 @@ const Optimizer = () => {
         void api<AutoConfig>("/ee/seo-automation").then(setAuto).catch(() => {});
     }, [autoUnlocked]);
 
-    const runAudit = async () => {
-        setRunning(true);
+    // While a run is in progress (started here, by a teammate or by a site deploy
+    // signal), refresh so results appear as pages are checked.
+    const runActive = !!data?.run;
+    useEffect(() => {
+        if (!runActive) return;
+        const t = setInterval(() => void load(), 10_000);
+        return () => clearInterval(t);
+    }, [runActive]);
+
+    // Pause, resume or cancel the run in progress, then show its new state.
+    const controlRun = async (action: "pause" | "resume" | "cancel") => {
+        await api(`/seo/scan/run/${action}`, { method: "POST" }).catch(() => setError("Couldn't update the audit run."));
+        void load();
+    };
+
+    // "Run audit" fetches only pages whose content changed; "Re-check every page"
+    // fetches them all. Either way, say first how many requests and how long.
+    const runAudit = async (mode: "changed" | "full" = "changed") => {
         setError("");
+        const plan = await api<AuditPlan>(`/seo/scan/plan?mode=${mode}`).catch(() => null);
+        if (plan && (plan.toFetch > 0 || mode === "full")) {
+            const ok = await confirm({ title: mode === "full" ? "Re-check every page?" : "Run the audit?", message: planSummary(plan), confirmLabel: mode === "full" ? "Re-check every page" : "Run audit" });
+            if (!ok) return;
+        }
+        setRunning(true);
         try {
             // A background job: with a site URL every page's live HTML is fetched,
             // which takes longer than a request should on a large site.
-            const job = await enqueue("/seo/scan/jobs/run", {}, "Audit pages");
+            const job = await enqueue("/seo/scan/jobs/run", { mode }, mode === "full" ? "Re-check every page" : "Audit pages");
             if (!job?.id) throw new Error("not queued");
             setAuditJob(job.id);
         } catch {
@@ -258,13 +284,8 @@ const Optimizer = () => {
     const issuesTotal = data?.counts.total ?? 0;
     const aiFixableCount = data?.counts.aiFixable ?? 0;
     const cleanPages = data?.counts.clean ?? 0;
-    const notChecked = data?.counts.notChecked ?? 0;
-    const auditNotes = [
-        notChecked > 0 ? `${notChecked.toLocaleString("en-US")} page${notChecked === 1 ? " was" : "s were"} not checked: the site answered "too many requests" or a server error. They are not counted as clean and will be retried.` : null,
-        coverageNote("Duplicate content", data?.coverage?.duplicates),
-        coverageNote("Internal links", data?.coverage?.links),
-        ...(data?.nonPageTypes ?? []).map((t) => `${t.name}: ${t.published.toLocaleString("en-US")} published entr${t.published === 1 ? "y is" : "ies are"} not audited because the type is not marked as pages${t.hasPattern ? " (it has a URL pattern, so this may be a mistake)" : ""}.`),
-    ].filter((n): n is string => !!n);
+    const auditNotes = buildAuditNotes(data);
+    const banner = runBanner(data?.run);
     const lastRunLabel = relTime(lastRunAt ?? auto?.lastFullScanAt ?? auto?.lastIncrementalScanAt ?? null);
 
     // Count of deterministic "safe" fixes pending (drives the auto-apply button label).
@@ -396,12 +417,23 @@ const Optimizer = () => {
                     <h2 className="font-poppins text-h5 font-semibold text-black dark:text-white">Audit overview</h2>
                     <div className="flex shrink-0 items-center gap-3">
                         {lastRunLabel && <span className="hidden text-caption-2 text-grey sm:block">Last run: {lastRunLabel}</span>}
-                        <button type="button" onClick={() => void runAudit()} disabled={running} data-tour="opt-run" className="btn-primary btn-md gap-2 disabled:opacity-60">
+                        {data?.run ? (
+                            <>
+                                <button type="button" onClick={() => void controlRun(data.run?.paused ? "resume" : "pause")} className="btn-secondary btn-md">{data.run.paused ? "Resume" : "Pause"}</button>
+                                <button type="button" onClick={() => void controlRun("cancel")} className="btn-secondary btn-md">Cancel</button>
+                            </>
+                        ) : (
+                            <button type="button" onClick={() => void runAudit("full")} disabled={running} className="btn-secondary btn-md disabled:opacity-60" title="Fetch every page from the live site again. Slow on a large site.">
+                                Re-check every page
+                            </button>
+                        )}
+                        <button type="button" onClick={() => void runAudit()} disabled={running || !!data?.run} data-tour="opt-run" className="btn-primary btn-md gap-2 disabled:opacity-60" title="Fetches only pages whose content changed since their last check.">
                             <Icon name="search" className="h-4 w-4 fill-white" />
-                            {running ? "Scanning…" : "Run audit"}
+                            {running || data?.run ? "Auditing…" : "Run audit"}
                         </button>
                     </div>
                 </div>
+                {banner && <p role="status" className="mb-3 rounded-xl border border-primary/30 bg-primary/[0.06] px-4 py-2.5 text-caption-1 text-black dark:text-white">{banner}</p>}
                 <div data-tour="opt-stats" className="grid grid-cols-2 gap-4 xl:grid-cols-4">
                     <Card reveal={false} className="!p-5">
                         <StatCol icon="document" tint="bg-primary/12" fill="fill-primary" value={pagesAudited} label="Pages audited" delta={deltas?.pages} deltaCls="text-success" />
@@ -421,7 +453,7 @@ const Optimizer = () => {
             {/* ---------- what this audit did not cover, said plainly ---------- */}
             {auditNotes.length > 0 && (
                 <Card reveal={false} className="!p-5">
-                    <h3 className="mb-2 font-poppins text-title font-semibold text-black dark:text-white">Not covered by this audit</h3>
+                    <h3 className="mb-2 font-poppins text-title font-semibold text-black dark:text-white">What this audit covers</h3>
                     <ul className="flex list-disc flex-col gap-1.5 pl-5 text-caption-1 leading-relaxed text-grey">
                         {auditNotes.map((n) => <li key={n}>{n}</li>)}
                     </ul>
@@ -758,6 +790,7 @@ const SubIssueRow = ({ g, onManual, onAi, onIgnore, onCluster, manualLabel, aiSe
                                     {p.url && (
                                         <span className="mt-0.5 flex items-center gap-1 text-caption-2 text-grey">
                                             <Icon name="compass" className="h-3 w-3 fill-grey" /> <span className="truncate">{p.url}</span>
+                                            {checkedLabel(p) && <span className="shrink-0">· {checkedLabel(p)}</span>}
                                         </span>
                                     )}
                                 </div>

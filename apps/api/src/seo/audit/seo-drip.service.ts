@@ -10,6 +10,7 @@ const BATCH = Number(process.env.SEO_DRIP_BATCH) || 10; // small batch per tick 
 // How many recent published entries to consider per tick. Entries of non-page types
 // (cities, tags) are filtered out afterwards, so look well past one batch.
 const CANDIDATES = BATCH * 30;
+const MAX_RECHECK_PER_TICK = 30; // ceiling on background re-fetches per workspace per tick
 
 /**
  * Deterministic L1 drip (Phase 3). A throttled background ticker that re-audits
@@ -43,6 +44,27 @@ export class SeoDripService implements OnModuleInit, OnModuleDestroy {
         if (this.timer) clearInterval(this.timer);
     }
 
+    /** Upkeep that needs no button: bring rows written by older rules up to date
+     *  from their stored page facts (no requests), then spend a small, steady budget
+     *  re-fetching each workspace's stalest pages, so every page is re-verified
+     *  within its workspace's window (14 days by default). The budget is what that
+     *  window needs: 1,400 pages over 14 days is one request every ~14 minutes;
+     *  100,000 pages is about 5 a minute. */
+    private async maintain() {
+        await this.audit.refreshOldRules();
+        const counts = await this.prisma.pageAudit.groupBy({ by: ["workspaceId"], where: { task: PAGE }, _count: { _all: true } });
+        for (const c of counts) {
+            const ws = await this.prisma.workspace.findUnique({ where: { id: c.workspaceId }, select: { seoRecheckDays: true } });
+            const perTick = c._count._all / (Math.max(1, ws?.seoRecheckDays ?? 14) * 86_400_000 / TICK_MS);
+            // Fractional budgets accumulate, so a small site still gets its one page every few ticks.
+            const owed = (this.owed.get(c.workspaceId) ?? 0) + perTick;
+            const budget = Math.min(MAX_RECHECK_PER_TICK, Math.floor(owed));
+            this.owed.set(c.workspaceId, owed - budget);
+            if (budget > 0) await this.audit.recheckStalest(c.workspaceId, budget);
+        }
+    }
+    private readonly owed = new Map<string, number>();
+
     /** Audit up to BATCH stale published pages this tick (idle when none). */
     async tick() {
         if (this.running) return; // never overlap ticks
@@ -51,6 +73,7 @@ export class SeoDripService implements OnModuleInit, OnModuleDestroy {
             // Already idempotent (contentHash change-detection), but the lease
             // avoids two instances re-auditing the same batch and wasting CPU.
             if (!(await this.redis.tryAcquire("sched:seo-drip", TICK_MS - 5_000))) return;
+            await this.maintain().catch((err) => this.logger.warn(`drip maintenance failed: ${err instanceof Error ? err.message : err}`));
             const candidates = (
                 await this.prisma.contentEntry.findMany({
                     where: { status: "PUBLISHED" },

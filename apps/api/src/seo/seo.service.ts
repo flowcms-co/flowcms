@@ -9,10 +9,11 @@ import { CacheService } from "../cache/cache.service";
 import { ContentEntriesService } from "../content/content-entries.service";
 import { entryToCanonicalContent } from "../content/canonical-content";
 import { SitePagesService, absoluteUrl } from "./site-pages.service";
-import { crawlSeeds, mapLimit, parsePsi, pctChange, periods, psiReason, psiUrl, singleFlight, sitemapLocs, speedScore, weightedCtr, weightedPosition, type PsiResult } from "./seo-math";
+import { sitemapLastmods, crawlSeeds, mapLimit, parsePsi, pctChange, periods, psiReason, psiUrl, singleFlight, sitemapLocs, speedScore, weightedCtr, weightedPosition, type PsiResult } from "./seo-math";
 import type { LiveFacts } from "./audit/audit-engine";
 import { rankPages } from "./site-pages.service";
-import { HostGate, DEFAULT_RPS, politeRequest, retryAfterMs } from "./polite";
+import { HostGate, DEFAULT_RATE, politeRequest, rateLimitOf, retryAfterMs, type Rate, type RateLimit } from "./polite";
+import { navHrefs, rankSignal, toPaths } from "./audit/indexing";
 
 /** The crawler identifies itself with this user agent. Sites with bot or geo rules
  *  need to allow it (documented in docs/SEO-CRAWLER.md). */
@@ -48,6 +49,7 @@ const round = (n: number, d = 1) => {
  *  object type (not bare `any`) so callers' Promise.all tuples stay intact, while
  *  member access stays permissive (matching the pre-cache-refactor behaviour). */
 type SeoCacheResult = Record<string, any>;
+type FetchedHtml = { url: string; ok: boolean; status: number; html: string; retryAfter?: number; rateLimit?: RateLimit; etag?: string; lastModified?: string };
 
 @Injectable()
 export class SeoService {
@@ -806,32 +808,61 @@ export class SeoService {
 
     /** Read one live page for the entry audit: HTTP status plus the tags the
      *  frontend renders (title, description, canonical, robots, JSON-LD types). */
-    async livePage(url: string, rps = DEFAULT_RPS): Promise<LiveFacts> {
-        const f = await this.fetchHtml(url, rps);
-        if (!f.ok || !f.html) return { status: f.ok ? 204 : f.status, title: "", description: "", canonical: "", noindex: false, ldTypes: [] };
+    async livePage(url: string, rate: Rate = DEFAULT_RATE, validators?: { etag?: string; lastModified?: string }): Promise<LiveFacts> {
+        const f = await this.fetchHtml(url, rate, validators);
+        const blank = { title: "", description: "", canonical: "", noindex: false, ldTypes: [] };
+        // 304: the page has not changed since the stored copy; the caller keeps its facts.
+        if (f.status === 304) return { status: 304, ...blank };
+        if (!f.ok || !f.html) return { status: f.ok ? 204 : f.status, ...blank };
         const p = this.parsePage(url, f.html);
-        return { status: 200, title: p.title, description: p.description, canonical: p.canonicalHref, noindex: !p.indexable, ldTypes: p.ldTypes };
+        return { status: 200, title: p.title, description: p.description, canonical: p.canonicalHref, noindex: !p.indexable, ldTypes: p.ldTypes, etag: f.etag, lastModified: f.lastModified };
     }
 
-    private fetchHtml(url: string, rps = DEFAULT_RPS): Promise<{ url: string; ok: boolean; status: number; html: string; retryAfter?: number }> {
+    /** The rate currently used for a site's host (it adapts as the site responds). */
+    currentRate(site: string, rate: Rate): number {
+        try { return this.gate.rateOf(new URL(site).host, rate); } catch { return rate.start; }
+    }
+
+    /** <lastmod> by site path from the sitemap (and up to 3 child sitemaps): the
+     *  site's own signal that a page changed. Empty when it publishes none. */
+    async sitemapLastmod(site: string): Promise<Map<string, Date>> {
+        const root = await this.fetchText(`${site.replace(/\/+$/, "")}/sitemap.xml`);
+        let xmls = [root.text];
+        if (/<sitemapindex/i.test(root.text)) xmls = (await Promise.all(sitemapLocs(root.text).slice(0, 3).map((u) => this.fetchText(u)))).map((c) => c.text);
+        const out = new Map<string, Date>();
+        for (const { loc, lastmod } of xmls.flatMap(sitemapLastmods)) for (const path of toPaths([loc])) out.set(path, lastmod);
+        return out;
+    }
+
+    private fetchHtml(url: string, rate: Rate = DEFAULT_RATE, validators?: { etag?: string; lastModified?: string }): Promise<FetchedHtml> {
         let host = url;
         try { host = new URL(url).host; } catch { /* fetched and reported as unreachable below */ }
-        return politeRequest(this.gate, host, 1000 / rps, () => this.fetchHtmlNow(url));
+        return politeRequest(this.gate, host, rate, () => this.fetchHtmlNow(url, validators));
     }
 
-    private async fetchHtmlNow(url: string): Promise<{ url: string; ok: boolean; status: number; html: string; retryAfter?: number }> {
+    private async fetchHtmlNow(url: string, validators?: { etag?: string; lastModified?: string }): Promise<FetchedHtml> {
         try {
+            // Conditional request: a 304 costs the site almost nothing and us no parsing.
+            const conditional: Record<string, string> = {};
+            if (validators?.etag) conditional["If-None-Match"] = validators.etag;
+            if (validators?.lastModified) conditional["If-Modified-Since"] = validators.lastModified;
             // SSRF-guarded crawl of the user's own site; follow canonical/https
             // redirects (each hop re-validated against private ranges). 8s timeout.
             const res = await safeFetch(
                 url,
-                { headers: { "User-Agent": CRAWLER_UA } },
+                { headers: { "User-Agent": CRAWLER_UA, ...conditional } },
                 { timeoutMs: 8000, maxRedirects: 3 },
             );
             const ct = res.headers.get("content-type") ?? "";
             const html = ct.includes("html") ? (await res.text()).slice(0, 600_000) : "";
             // Only a 200 is a page: a 403/404/5xx body is an error page, not content.
-            return { url, ok: res.status === 200, status: res.status, html, retryAfter: retryAfterMs(res.headers.get("retry-after"), Date.now()) };
+            return {
+                url, ok: res.status === 200, status: res.status, html,
+                retryAfter: retryAfterMs(res.headers.get("retry-after"), Date.now()),
+                rateLimit: rateLimitOf((n) => res.headers.get(n), Date.now()),
+                etag: res.headers.get("etag") ?? undefined,
+                lastModified: res.headers.get("last-modified") ?? undefined,
+            };
         } catch {
             return { url, ok: false, status: 0, html: "" };
         }
@@ -967,11 +998,22 @@ export class SeoService {
         const urls = crawlSeeds(site, [gscTop, perType, locs, mapped.map((p) => absoluteUrl(site, p.path))], this.CRAWL_MAX);
 
         // Two in flight at most; the gate spaces them to the workspace's crawl rate.
-        const rps = await this.sitePages.crawlRps(workspaceId);
-        const fetched = await mapLimit(urls, 2, (u) => this.fetchHtml(u, rps));
+        const rate = await this.sitePages.crawlRate(workspaceId);
+        const fetched = await mapLimit(urls, 4, (u) => this.fetchHtml(u, rate));
         // Non-200 responses are reported, never audited: a 403 or 404 page would
         // otherwise show up as "missing canonical, missing H1".
-        const pages = fetched.filter((f) => f.ok && f.html).map((f) => this.parsePage(f.url, f.html));
+        // Where the site itself says a page should be found: its sitemap, its
+        // navigation (links in the homepage's <nav>/<header>) and search impressions.
+        // A noindex only counts against the score when one of these contradicts it
+        // and the page's content type does not mark noindex as intended.
+        const sitemapPaths = toPaths(locs).slice(0, 20_000);
+        const navPaths = [...new Set(toPaths(navHrefs(fetched[0]?.html ?? "")))];
+        const signals = { sitemap: new Set(sitemapPaths), nav: new Set(navPaths), impressions: await this.impressionsByPath(workspaceId) };
+        const intended = new Set(mapped.filter((p) => p.noindexIntended).map((p) => p.path));
+        const pages = fetched
+            .filter((f) => f.ok && f.html)
+            .map((f) => this.parsePage(f.url, f.html))
+            .map((p) => ({ ...p, noindexUnexpected: !p.indexable && !intended.has(p.path.replace(/(.)\/+$/, "$1")) && !!rankSignal(p.path, signals) }));
         const blocked = fetched.filter((f) => !f.ok).map((f) => ({ url: f.url, status: f.status }));
         const crawledAt = new Date().toISOString();
 
@@ -985,7 +1027,7 @@ export class SeoService {
         // Per-check failure aggregation → AuditIssue list.
         type Check = { id: string; title: string; severity: "critical" | "warning" | "notice"; fixable: boolean; fails: (p: any) => boolean; cat: string };
         const checks: Check[] = [
-            { id: "noindex", title: "Pages blocked from indexing (noindex)", severity: "critical", fixable: false, cat: "crawl", fails: (p) => !p.indexable },
+            { id: "noindex", title: "Noindex on pages that look like they should rank", severity: "critical", fixable: false, cat: "crawl", fails: (p) => p.noindexUnexpected },
             { id: "canonical", title: "Missing canonical tag", severity: "warning", fixable: true, cat: "crawl", fails: (p) => !p.canonical },
             { id: "title-missing", title: "Missing page title", severity: "critical", fixable: true, cat: "onpage", fails: (p) => p.titleLen === 0 },
             { id: "title-len", title: "Title length outside 30–60 chars", severity: "warning", fixable: true, cat: "onpage", fails: (p) => p.titleLen > 0 && (p.titleLen < 30 || p.titleLen > 60) },
@@ -1044,11 +1086,13 @@ export class SeoService {
         }));
 
         const indexablePages = pages.filter((p) => p.indexable).length;
+        const noindexUnexpected = pages.filter((p) => p.noindexUnexpected).length;
+        const hiddenOnPurpose = pages.length - indexablePages - noindexUnexpected;
         const withSchema = pages.filter((p) => p.ldTypes.length > 0).length;
         const mobileOk = pages.filter((p) => p.viewport).length;
         const schemaTypes = [...new Set(pages.flatMap((p) => p.ldTypes))];
         const siteChecks = [
-            { id: "indexing", label: "Indexing", icon: "search", value: `${indexablePages} of ${pages.length} pages`, score: Math.round((indexablePages / pages.length) * 100) },
+            { id: "indexing", label: "Indexing", icon: "search", value: `${indexablePages} of ${pages.length} pages${hiddenOnPurpose ? `, ${hiddenOnPurpose} hidden on purpose` : ""}`, score: Math.round(((pages.length - noindexUnexpected) / pages.length) * 100) },
             { id: "mobile", label: "Mobile usability", icon: "chart", value: mobileOk === pages.length ? "No issues found" : `${pages.length - mobileOk} pages affected`, score: Math.round((mobileOk / pages.length) * 100) },
             { id: "schema", label: "Structured data", icon: "document", value: `${schemaTypes.length} types deployed`, score: Math.round((withSchema / pages.length) * 100) },
         ];
@@ -1059,7 +1103,7 @@ export class SeoService {
         const thin = pages.filter((p) => p.words < 300).length;
         const tone = (ok: boolean) => (ok ? "good" : "warning");
         const coverage = [
-            { id: "indexable", count: indexablePages, type: "Indexable pages", status: indexablePages === pages.length ? "good" : "error" },
+            { id: "indexable", count: indexablePages, type: "Indexable pages", status: noindexUnexpected === 0 ? "good" : "error" },
             { id: "canonical", count: withCanonical, type: "With canonical tag", status: tone(withCanonical === pages.length) },
             { id: "schema", count: withSchema, type: "With structured data", status: tone(withSchema > 0) },
             { id: "noschema", count: pages.length - withSchema, type: "Missing schema", status: tone(pages.length - withSchema === 0) },
@@ -1074,6 +1118,8 @@ export class SeoService {
             crawled: pages.length,
             attempted: urls.length,
             blocked, // URLs that did not return 200, with their status ("blocked: 403")
+            sitemapPaths,
+            navPaths,
             userAgent: CRAWLER_UA,
             overall,
             quickFixes,

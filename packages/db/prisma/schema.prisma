@@ -46,7 +46,9 @@ model Workspace {
   timezone      String   @default("UTC") // IANA zone that "today", weeks and streaks on the dashboards are measured in
   previewUrl    String? // frontend live-preview URL template, e.g. https://site.com/preview?slug={slug} ({slug}/{id}/{type}/{locale})
   siteUrl       String? // public site origin (https://example.com): used by the SEO crawl, PageSpeed and "View live" links
-  seoCrawlRps   Float    @default(1) // most requests per second the SEO audit and crawler send to the site
+  seoCrawlRps   Float    @default(1) // requests per second the SEO audit and crawler start at
+  seoCrawlMaxRps Float   @default(10) // the most they may reach while the site stays healthy
+  seoRecheckDays Int     @default(14) // every page is re-verified against the live site within this many days
   // White-label (Enterprise `white_label`): a workspace's own studio branding.
   // Stored on the core model (nullable) but only APPLIED when licensed; writes are
   // gated by the ee/white-label controller.
@@ -732,6 +734,7 @@ model PageAudit {
   severity    Int    @default(0) // max severity across findings (0 = clean)
   escalated   Boolean @default(false) // has an AI-addressable finding pending an L2 pass
   lastCheckedAt DateTime @default(now()) // last L1 run
+  fetchedAt     DateTime? // when the live page was last requested (null = never, or inferred from a sample)
   lastAiPassAt  DateTime? // last L2 run
   hashAtAiPass  String? // contentHash at the last L2 run (re-run AI only when changed)
   createdAt   DateTime @default(now())
@@ -740,6 +743,7 @@ model PageAudit {
   @@unique([workspaceId, target, task])
   @@index([workspaceId, task])
   @@index([workspaceId, lastCheckedAt])
+  @@index([workspaceId, task, fetchedAt])
   @@index([workspaceId, escalated])
 }
 

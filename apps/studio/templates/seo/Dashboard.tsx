@@ -18,7 +18,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { resolveBrand } from "@/lib/brands";
 import { emptyReason, type AnalyticsStatus } from "@/lib/trafficMath";
-import { dataSources, pillarText, ratingOf, scoreCta, speedExplainer, type ConnectorsStatus, type ScorePillar } from "@/lib/seoDash";
+import { dataSources, pillarText, ratingOf, runBanner, scoreCta, speedExplainer, type ConnectorsStatus, type RunState, type ScorePillar } from "@/lib/seoDash";
 
 /** Compact number: 1,240,000 → 1.24M · 124,800 → 124.8K · 512 → 512. */
 const fmtNum = (n: number) =>
@@ -33,7 +33,8 @@ type Summary = {
 type ScoreResp = { hasData: boolean; score: number | null; pillars: ScorePillar[] };
 type IssuesResp = {
     score: number | null;
-    counts: { total: number; pages: number; aiFixable: number; clean: number };
+    counts: { total: number; pages: number; aiFixable: number; clean: number; noindexed?: number };
+    run?: RunState | null;
     categories: { key: string; label: string; count: number }[];
 };
 type AeoEngine = { id: string; name: string; citedQueries: number; totalQueries: number; share: number };
@@ -365,6 +366,7 @@ const SeoDashboard = () => {
                         </div>
                         <Link href="/seo/optimizer" className="text-caption-1 text-primary hover:opacity-70">View all issues →</Link>
                     </div>
+                    {runBanner(issues?.run) && <p role="status" className="mb-4 rounded-xl border border-primary/30 bg-primary/[0.06] px-3 py-2 text-caption-2 text-black dark:text-white">{runBanner(issues?.run)}</p>}
                     {!issuesLive ? (
                         issuesLoaded && (
                             <div className="py-10">
@@ -385,7 +387,7 @@ const SeoDashboard = () => {
                                     <span className="inline-flex w-fit items-center gap-1.5 rounded-md bg-success/10 px-2 py-0.5 text-caption-2 font-bold text-success">
                                         <CountUp value={issuesFixable} /> AI-fixable
                                     </span>
-                                    <span className="mt-1 text-caption-2 text-grey">Total issues</span>
+                                    <span className="mt-1 text-caption-2 text-grey">Total issues{issues?.counts.noindexed ? ` · ${issues.counts.noindexed.toLocaleString("en-US")} pages hidden from search, not counted` : ""}</span>
                                 </div>
                             </div>
                             <div className="flex flex-col">

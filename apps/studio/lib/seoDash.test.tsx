@@ -67,3 +67,46 @@ describe("capped checks and the page flag", () => {
         expect(storedPageFlag({ isPage: false, isPageSet: true })).toBe(false);
     });
 });
+
+describe("audit runs and freshness", () => {
+    const NOW2 = Date.parse("2026-10-06T12:00:00Z");
+
+    it("says before a run how many pages it fetches and how long that takes", async () => {
+        const { planSummary, duration } = await import("./seoDash");
+        const plan = { mode: "changed", total: 1414, toFetch: 1414, reuse: 0, sampled: 0, rps: 1, maxRps: 10, estimatedSeconds: 1414, live: true };
+        expect(planSummary(plan)).toContain("1,414 pages of 1,414 will be fetched from your site, about 24 minutes at the current 1 per second");
+        expect(planSummary({ ...plan, toFetch: 0, reuse: 1414, estimatedSeconds: 0 })).toContain("no pages will be fetched");
+        expect(planSummary({ ...plan, toFetch: 50, sampled: 950, estimatedSeconds: 50 })).toContain("950 pages of large page types will be filled in from a sample");
+        expect([duration(30), duration(10_000), duration(100_000 * 1)]).toEqual(["under a minute", "about 3 hours", "about 28 hours"]);
+    });
+
+    it("shows progress while a run is going, and nothing otherwise", async () => {
+        const { runBanner } = await import("./seoDash");
+        expect(runBanner({ done: 120, total: 1414, startedAt: "" })).toContain("Audit in progress, 120 of 1,414 pages fetched");
+        expect(runBanner({ done: 120, total: 1414, startedAt: "", paused: true })).toContain("Audit paused");
+        expect(runBanner(null)).toBeNull();
+    });
+
+    it("labels every page with when it was fetched, and inferred results as inferred", async () => {
+        const { checkedLabel } = await import("./seoDash");
+        expect(checkedLabel({ fetchedAt: "2026-10-03T12:00:00Z" }, NOW2)).toBe("Last fetched 3 days ago");
+        expect(checkedLabel({ fetchedAt: null, inferred: true }, NOW2)).toBe("Inferred from a sample, not fetched");
+        expect(checkedLabel({}, NOW2)).toBeNull();
+    });
+
+    it("lists what was not verified, and counts noindexed pages as information", async () => {
+        const { auditNotes } = await import("./seoDash");
+        const notes = auditNotes(
+            {
+                counts: { notChecked: 2, noindexed: 1327, inferred: 210 },
+                freshness: { live: true, oldestFetchedAt: "2026-09-26T12:00:00Z", neverFetched: 210, recheckDays: 14, sampledTypes: [{ name: "City pages", verified: 50, total: 260 }] },
+            },
+            NOW2,
+        );
+        expect(notes[0]).toBe("Oldest live check: 10 days ago. Every page is re-checked in the background within 14 days.");
+        expect(notes).toContain("1,327 pages hidden from search (noindex). Not counted as issues, and left out of the title, description, readability, schema, duplicate and cannibalization checks.");
+        expect(notes.some((x) => x.startsWith("City pages: verified on 50 of 260 pages."))).toBe(true);
+        expect(notes.some((x) => x.startsWith("210 pages not fetched yet"))).toBe(true);
+        expect(auditNotes({ counts: {} })).toEqual([]);
+    });
+});

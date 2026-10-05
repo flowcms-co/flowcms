@@ -155,6 +155,14 @@ export function psiReason(reason: string | undefined, needsKey?: boolean): strin
 export const sitemapLocs = (xml: string): string[] =>
     [...xml.matchAll(/<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)\s*(?:\]\]>)?\s*<\/loc>/gi)].map((m) => m[1].replace(/&amp;/g, "&"));
 
+/** <loc> with its <lastmod>, for URLs whose sitemap entry carries one. */
+export const sitemapLastmods = (xml: string): { loc: string; lastmod: Date }[] =>
+    [...xml.matchAll(/<url>([\s\S]*?)<\/url>/gi)].flatMap((m) => {
+        const loc = sitemapLocs(m[1])[0];
+        const at = Date.parse(/<lastmod>\s*([^<\s]+)\s*<\/lastmod>/i.exec(m[1])?.[1] ?? "");
+        return loc && !Number.isNaN(at) ? [{ loc, lastmod: new Date(at) }] : [];
+    });
+
 /** Which URLs to crawl: the homepage, then the highest-value known pages from each
  *  source in turn (Search Console, one page per content type, the sitemap, every
  *  mapped page), same host only, de-duplicated, capped. */

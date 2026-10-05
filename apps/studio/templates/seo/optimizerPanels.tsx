@@ -8,7 +8,7 @@
  * enqueue runs the existing background batch-fix jobs). No new behaviour.
  */
 import { useMemo, useState } from "react";
-import { coverageNote } from "@/lib/seoDash";
+import { checkedLabel, coverageNote } from "@/lib/seoDash";
 import Icon from "@/components/ui/Icon";
 import Select from "@/components/ui/Select";
 
@@ -18,6 +18,8 @@ export type FixKind = "meta" | "schema" | "faq" | "org" | "file" | "links" | "al
 export type IssuePage = {
     id: string | null; url: string | null; title: string | null; detail?: string; group?: string;
     priority?: Band; overlap?: number; matchTitle?: string;
+    /** When the live page was last fetched; `inferred` when its result comes from a sample. */
+    fetchedAt?: string | null; inferred?: boolean;
     current?: string; currentLen?: number; recommended?: string; recommendedLen?: number;
     schemaType?: string; suggested?: number; sources?: string[]; reason?: string;
 };
@@ -188,7 +190,7 @@ export function InternalLinkingPanel({ groups, onLinks, onIgnore }: PanelProps) 
                                                 <DocTile />
                                                 <div className="min-w-0">
                                                     <p className="truncate text-body-sm font-semibold text-black dark:text-white">{p.title ?? p.url ?? "Untitled"}</p>
-                                                    {p.url && <p className="truncate text-caption-2 text-grey">{p.url}</p>}
+                                                    {p.url && <p className="truncate text-caption-2 text-grey">{p.url}{checkedLabel(p) ? ` · ${checkedLabel(p)}` : ""}</p>}
                                                 </div>
                                             </div>
                                             <p className="text-caption-2 text-grey"><span className={`mr-1 inline-block h-2 w-2 rounded-full align-middle ${PRIO[b].dot}`} />{p.reason ?? "Opportunity to build topical authority."}</p>
@@ -265,7 +267,7 @@ export function MetadataPanel({ groups, onManual, onAi, onIgnore }: PanelProps) 
                                 <div className="hidden grid-cols-[minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(0,1.5fr)_6.5rem] gap-3 py-2 text-caption-2 font-semibold text-grey md:grid"><span>Page</span><span>Current (too long)</span><span>Recommended (160 characters or less)</span><span className="text-right">Action</span></div>
                                 {g.pages.slice(0, 8).map((p, i) => (
                                     <div key={p.id ?? p.url ?? i} className="grid grid-cols-1 gap-3 border-t border-grey-light/40 py-3 dark:border-grey-light/10 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(0,1.5fr)_6.5rem] md:items-stretch">
-                                        <div className="flex min-w-0 items-center gap-3"><DocTile /><div className="min-w-0"><p className="truncate text-body-sm font-semibold text-black dark:text-white">{p.title ?? "Untitled"}</p>{p.url && <p className="truncate text-caption-2 text-grey">{p.url}</p>}</div></div>
+                                        <div className="flex min-w-0 items-center gap-3"><DocTile /><div className="min-w-0"><p className="truncate text-body-sm font-semibold text-black dark:text-white">{p.title ?? "Untitled"}</p>{p.url && <p className="truncate text-caption-2 text-grey">{p.url}{checkedLabel(p) ? ` · ${checkedLabel(p)}` : ""}</p>}</div></div>
                                         <div className="min-w-0 rounded-xl bg-error/5 p-2.5 ring-1 ring-error/15"><p className="text-caption-2 font-semibold text-error">{p.currentLen ?? p.current?.length} characters</p><p className="mt-0.5 line-clamp-2 text-caption-2 text-grey">{p.current}</p></div>
                                         <div className="min-w-0 rounded-xl bg-success/8 p-2.5 ring-1 ring-success/20"><p className="text-caption-2 font-semibold text-[#0a7a5f] dark:text-success">{p.recommendedLen ?? p.recommended?.length} characters</p><p className="mt-0.5 line-clamp-2 text-caption-2 text-grey">{p.recommended}</p></div>
                                         <div className="flex min-w-0 flex-col items-start justify-center gap-1 md:items-end">
@@ -420,7 +422,7 @@ const Stat = ({ icon, tint, fill, value, label }: { icon: string; tint: string; 
 );
 
 // ─── 4. Schema ───────────────────────────────────────────────────────────────
-const SCHEMA_TYPE: Record<string, string> = { SCHEMA_MISSING: "Article", SCHEMA_FAQ_MISSING: "FAQ", SCHEMA_ORG_MISSING: "Organization", SCHEMA_SERVICE_MISSING: "Service", SCHEMA_INVALID: "Article" };
+const SCHEMA_TYPE: Record<string, string> = { SCHEMA_MISSING: "WebPage", SCHEMA_ARTICLE_MISSING: "Article", SCHEMA_FAQ_MISSING: "FAQ", SCHEMA_ORG_MISSING: "Organization", SCHEMA_SERVICE_MISSING: "Service", SCHEMA_INVALID: "Article" };
 const SCHEMA_BENEFITS: Record<string, string[]> = {
     Article: ["Enables rich article results", "Better content understanding"],
     FAQ: ["Eligible for FAQ rich results", "Better answer engine visibility"],
@@ -458,8 +460,8 @@ export function SchemaPanel({ groups, onManual, onAi, onIgnore }: PanelProps) {
                             <div className="flex min-w-0 items-start gap-3">
                                 <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${tile.bg}`}><Icon name={tile.icon} className={`h-5 w-5 ${tile.fill}`} /></span>
                                 <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2"><span className="text-body-sm font-semibold text-black dark:text-white">{type} Schema</span><span className="rounded-md bg-secondary/12 px-1.5 text-caption-2 font-semibold text-secondary">{g.count} page{g.count === 1 ? "" : "s"} missing</span></div>
-                                    <p className="mt-0.5 text-caption-2 text-grey">{type === "Article" ? "Ideal for blog posts and content pages." : g.explanation}</p>
+                                    <div className="flex flex-wrap items-center gap-2"><span className="text-body-sm font-semibold text-black dark:text-white">{g.key === "SCHEMA_MISSING" || g.key === "SCHEMA_INVALID" ? g.title : `${type} Schema`}</span><span className="rounded-md bg-secondary/12 px-1.5 text-caption-2 font-semibold text-secondary">{g.count} page{g.count === 1 ? "" : "s"} missing</span></div>
+                                    <p className="mt-0.5 text-caption-2 text-grey">{g.explanation}</p>
                                 </div>
                             </div>
                             <ul className="hidden min-w-0 flex-col gap-1 lg:flex">{(SCHEMA_BENEFITS[type] ?? []).map((b) => <Check key={b}>{b}</Check>)}</ul>

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/components/providers/AuthProvider";
@@ -39,11 +39,23 @@ const JobsContext = createContext<Ctx>({ jobs: [], enqueue: async () => null, di
  */
 export function JobsProvider({ children }: { children: ReactNode }) {
     const [jobs, setJobs] = useState<Job[]>([]);
+    // Jobs the user closed. Nothing may bring one back: not the poll, not a realtime
+    // event. Kept for the page's lifetime; a reload seeds only running jobs anyway.
+    const dismissed = useRef(new Set<string>());
 
-    const upsert = useCallback((patch: Partial<Job> & { id: string }) => {
+    // A job already on screen is updated in place, so one that finishes while shown
+    // keeps its final state until dismissed. A job not on screen is added only while
+    // it is queued or running (or `force`, for one the user just started): GET /jobs
+    // returns the last 20 jobs of any status, and old finished ones belong in the
+    // notifications bell, not the toaster.
+    const upsert = useCallback((patch: Partial<Job> & { id: string }, force = false) => {
+        if (dismissed.current.has(patch.id)) return;
         setJobs((prev) => {
             const i = prev.findIndex((j) => j.id === patch.id);
-            if (i === -1) return [{ total: 0, completed: 0, failed: 0, progress: 0, label: "", type: "", status: "RUNNING", ...patch } as Job, ...prev];
+            if (i === -1) {
+                if (!force && patch.status && !ACTIVE.has(patch.status)) return prev;
+                return [{ total: 0, completed: 0, failed: 0, progress: 0, label: "", type: "", status: "RUNNING", ...patch } as Job, ...prev];
+            }
             const next = prev.slice();
             next[i] = { ...next[i], ...patch };
             return next;
@@ -77,11 +89,14 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
     const enqueue = useCallback(async (endpoint: string, body?: unknown, label?: string) => {
         const job = await api<Job>(endpoint, { method: "POST", body: JSON.stringify(body ?? {}) });
-        if (job?.id) upsert({ ...job, label: label ?? job.label, status: job.status ?? "QUEUED" });
+        if (job?.id) upsert({ ...job, label: label ?? job.label, status: job.status ?? "QUEUED" }, true);
         return job ?? null;
     }, [upsert]);
 
-    const dismiss = useCallback((id: string) => setJobs((prev) => prev.filter((j) => j.id !== id)), []);
+    const dismiss = useCallback((id: string) => {
+        dismissed.current.add(id);
+        setJobs((prev) => prev.filter((j) => j.id !== id));
+    }, []);
 
     return <JobsContext.Provider value={{ jobs, enqueue, dismiss }}>{children}</JobsContext.Provider>;
 }

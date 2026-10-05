@@ -53,6 +53,10 @@ export interface IssuePage {
     sources?: string[];
     /** A short "why it matters" line. */
     reason?: string;
+    /** When the live page was last requested; `inferred` when it was not and the
+     *  result comes from a sample of the page's type. */
+    fetchedAt?: string | null;
+    inferred?: boolean;
 }
 
 export interface IssueGroup {
@@ -95,7 +99,13 @@ export interface IssuesResult {
     score: number | null;
     /** `pages` and `clean` count checked pages only; `notChecked` are pages whose live
      *  URL answered 429/5xx (rate limited) and are waiting for a retry. */
-    counts: { total: number; pages: number; aiFixable: number; clean: number; notChecked: number };
+    /** `clean` counts only pages verified against the live site (or audited from
+     *  entry fields when there is no site URL). `inferred` are pages whose facts came
+     *  from a sample of their type: never presented as clean. */
+    counts: { total: number; pages: number; aiFixable: number; clean: number; notChecked: number; noindexed?: number; inferred: number };
+    freshness?: { live: boolean; oldestFetchedAt: string | null; neverFetched: number; recheckDays: number; sampledTypes: { name: string; verified: number; total: number }[] };
+    /** Set while an audit run is in progress: rows not yet re-checked are left out. */
+    run?: { done: number; total: number; startedAt: string; mode?: string; paused?: boolean } | null;
     /** Coverage of the checks that do not look at every page. */
     coverage?: { duplicates: Coverage; links: Coverage };
     /** Types with published entries that are not marked as pages (not audited). */
@@ -161,7 +171,7 @@ export function categoryOf(code: string, task: string): IssueCategory {
 const CODE_EFFORT: Record<string, Effort> = {
     META_TITLE_MISSING: "easy", META_TITLE_LONG: "easy", META_TITLE_SHORT: "easy", META_DESC_MISSING: "easy", META_DESC_LONG: "easy", META_TITLE_NO_KEYWORD: "easy",
     IMG_ALT_MISSING: "easy",
-    SCHEMA_MISSING: "med", SCHEMA_INVALID: "med", SCHEMA_FAQ_MISSING: "med", SCHEMA_ORG_MISSING: "easy", SCHEMA_SERVICE_MISSING: "med",
+    SCHEMA_MISSING: "med", SCHEMA_ARTICLE_MISSING: "med", SCHEMA_INVALID: "med", SCHEMA_FAQ_MISSING: "med", SCHEMA_ORG_MISSING: "easy", SCHEMA_SERVICE_MISSING: "med",
     CWV_LCP_POOR: "hard", CWV_LCP_WARN: "hard", CWV_CLS_POOR: "hard", CWV_INP_POOR: "hard",
     H1_MISSING: "easy", H1_MULTIPLE: "easy", HEADING_SKIP: "easy", THIN_CONTENT: "hard", INTERNAL_LINKS_FEW: "easy", READABILITY_HARD: "med", DUPLICATE_CONTENT: "med",
     GSC_CTR_DROP: "med", GSC_POSITION_DROP: "med", GSC_STRIKING_DISTANCE: "med",
@@ -184,7 +194,7 @@ export function fixKindOf(code: string, ai: RenderedFinding["ai"]): { kind: FixK
             return { kind: "meta" };
         case "IMG_ALT_MISSING":
             return { kind: "alt" };
-        case "SCHEMA_MISSING": case "SCHEMA_INVALID": case "SCHEMA_SERVICE_MISSING":
+        case "SCHEMA_MISSING": case "SCHEMA_ARTICLE_MISSING": case "SCHEMA_INVALID": case "SCHEMA_SERVICE_MISSING":
             return { kind: "schema" };
         case "SCHEMA_FAQ_MISSING":
             return { kind: "faq" };
@@ -235,6 +245,9 @@ export interface PageRow {
     findings: RenderedFinding[];
     /** The live page could not be checked (rate limited / server error). */
     notChecked?: boolean;
+    /** Not fetched: its page facts were inferred from a sample of its type. */
+    inferred?: boolean;
+    fetchedAt?: Date | null;
 }
 
 function toGroup(code: string, sample: RenderedFinding, scope: "page" | "site", pages: IssuePage[], count: number): IssueGroup {
@@ -277,8 +290,7 @@ function enrichPage(code: string, f: RenderedFinding, url: string | null): Parti
         out.priority = c === 0 ? "high" : c === 1 ? "med" : "low";
     }
     if (code === "SCHEMA_MISSING") {
-        out.schemaType = "Article";
-        // Blog/article pages have the strongest rich-result upside.
+        // Which type to add depends on the page's content type; the caller fills it in.
         out.priority = url && /\/blog\//.test(url) ? "high" : "med";
     }
     return out;
@@ -290,13 +302,17 @@ export function buildIssues(pageRows: PageRow[], site: SiteFinding[], score: num
     const byCode = new Map<string, { sample: RenderedFinding; pages: IssuePage[] }>();
     let clean = 0;
     let notChecked = 0;
+    let inferred = 0;
     for (const row of pageRows) {
         // A page we could not read is neither clean nor at fault: it is unknown.
         if (row.notChecked) { notChecked++; continue; }
-        if (!row.findings.length) clean++;
+        // A row that names no page is not something anyone can act on.
+        if (!row.url && !row.title) continue;
+        if (row.inferred) inferred++;
+        else if (!row.findings.length) clean++;
         for (const f of row.findings) {
             const g = byCode.get(f.code) ?? { sample: f, pages: [] };
-            g.pages.push({ id: row.entryId, url: row.url, title: row.title, detail: f.fixHint, ...enrichPage(f.code, f, row.url) });
+            g.pages.push({ id: row.entryId, url: row.url, title: row.title, detail: f.fixHint, fetchedAt: row.fetchedAt?.toISOString() ?? null, inferred: row.inferred || undefined, ...enrichPage(f.code, f, row.url) });
             byCode.set(f.code, g);
         }
     }
@@ -337,7 +353,7 @@ export function buildIssues(pageRows: PageRow[], site: SiteFinding[], score: num
 
     return {
         score,
-        counts: { total: totalInstances, pages: pageRows.length - notChecked, aiFixable, clean, notChecked },
+        counts: { total: totalInstances, pages: pageRows.length - notChecked, aiFixable, clean, notChecked, inferred },
         categories,
         groups,
         quickWins,
