@@ -23,10 +23,50 @@ export type QueryOpts = {
     offset?: number;
     sort?: string; // "field:asc" | "field:desc"
     locale?: string;
-    fields?: string[]; // project these data keys (+ always id/slug/meta)
+    /** Project these data keys (+ always id/slug/meta). `ref.field` projects a
+     *  referenced entry: `guides.title,guides.slug` delivers only those of each guide. */
+    fields?: string[];
+    /** Which Reference fields to expand: undefined or "*" = all (the default),
+     *  "none" = none (each reference is delivered as { id, slug }), or a
+     *  comma-separated list of field names to expand only those. */
+    populate?: string;
     filters?: Record<string, string>; // equality on data keys (or top-level slug)
     preview?: boolean; // include non-published (preview tokens only)
 };
+
+/** How one request wants entries and their references delivered. */
+export type Projection = {
+    /** Top-level data keys to keep; undefined = all. */
+    top?: string[];
+    /** Per Reference field name: the keys to keep on each referenced entry. */
+    ref: Map<string, string[]>;
+    /** Whether a Reference field is expanded into its entries (else { id, slug }). */
+    populated: (field: string) => boolean;
+};
+
+/** Read `fields` and `populate` into a Projection. With neither, everything is
+ *  delivered in full, as before. */
+export function projectionOf(opts: Pick<QueryOpts, "fields" | "populate">): Projection {
+    const ref = new Map<string, string[]>();
+    const top: string[] = [];
+    for (const f of opts.fields ?? []) {
+        const [name, ...rest] = f.split(".");
+        if (!top.includes(name)) top.push(name);
+        if (rest.length) ref.set(name, [...(ref.get(name) ?? []), rest.join(".")]);
+    }
+    const p = (opts.populate ?? "").trim();
+    const only = p && p !== "*" && p !== "none" ? new Set(p.split(",").map((x) => x.trim()).filter(Boolean)) : null;
+    return { top: top.length ? top : undefined, ref, populated: (field) => (p === "none" ? false : only ? only.has(field) : true) };
+}
+
+/** A referenced entry as its Reference field asked for it: just { id, slug } when
+ *  the field is not populated, the named keys when it is projected, else in full. */
+export function projectRef(shaped: Record<string, unknown>, field: string, proj: Projection): Record<string, unknown> {
+    const base = { id: shaped.id, slug: shaped.slug, ...(shaped.__type !== undefined ? { __type: shaped.__type } : {}) };
+    if (!proj.populated(field)) return base;
+    const keys = proj.ref.get(field);
+    return keys ? { ...base, ...Object.fromEntries(keys.filter((k) => k in shaped).map((k) => [k, shaped[k]])) } : shaped;
+}
 
 /** Columns that can be sorted on (JSON data fields can't be ordered in SQL portably). */
 const SORTABLE = new Set(["publishedAt", "createdAt", "updatedAt", "slug", "id"]);
@@ -136,8 +176,16 @@ export class PublicQueryService {
     /** Fetch + shape entries by id, keyed by id, each tagged with its content type
      *  (`__type`) so polymorphic relation targets can be told apart. Shaped shallowly:
      *  their own relations are NOT expanded, so a relation cycle can't recurse. */
-    private async shapedByIds(workspaceId: string, ids: string[], preview?: boolean): Promise<Map<string, Record<string, unknown>>> {
+    private async shapedByIds(workspaceId: string, ids: string[], preview?: boolean, light = false): Promise<Map<string, Record<string, unknown>>> {
         if (!ids.length) return new Map();
+        if (light) {
+            // References that are not populated: their id, slug and type, no content read.
+            const rows = await this.prisma.contentEntry.findMany({
+                where: { workspaceId, id: { in: ids }, ...(preview ? {} : { status: "PUBLISHED" }) },
+                select: { id: true, slug: true, contentType: { select: { apiId: true } } },
+            });
+            return new Map(rows.map((e) => [e.id, { id: e.id, slug: e.slug, __type: e.contentType.apiId }] as const));
+        }
         const rows = await this.prisma.contentEntry.findMany({
             where: { workspaceId, id: { in: ids }, ...(preview ? {} : { status: "PUBLISHED" }) },
             include: { contentType: { select: { apiId: true, schema: true } } },
@@ -168,36 +216,40 @@ export class PublicQueryService {
         data: Record<string, unknown>,
         components: Map<string, SchemaField[]>,
         mode: "collect" | "replace",
-        ids: Set<string>,
+        ids: Map<string, Set<string>>,
         byId: Map<string, Record<string, unknown>>,
+        proj?: Projection,
     ): void {
+        const pick = (field: string, e: Record<string, unknown> | undefined) => (e && proj ? projectRef(e, field, proj) : e);
         for (const f of fields) {
             if (f.type === "Reference" && !f.mappedByField && (f.referencedTypeId || f.referencedTypeIds?.length)) {
                 if (!(f.name in data)) continue;
                 if (mode === "collect") {
-                    for (const id of refIds(data[f.name])) ids.add(id);
+                    const set = ids.get(f.name) ?? new Set<string>();
+                    for (const id of refIds(data[f.name])) set.add(id);
+                    ids.set(f.name, set);
                 } else if (f.multiple) {
                     data[f.name] = refIds(data[f.name])
-                        .map((id) => byId.get(id))
+                        .map((id) => pick(f.name, byId.get(id)))
                         .filter((e): e is Record<string, unknown> => !!e);
                 } else {
                     const id = typeof data[f.name] === "string" ? (data[f.name] as string) : null;
-                    data[f.name] = id ? (byId.get(id) ?? null) : null;
+                    data[f.name] = id ? (pick(f.name, byId.get(id)) ?? null) : null;
                 }
             } else if (f.type === "Component") {
                 const sub = f.componentApiId ? (components.get(f.componentApiId) ?? []) : (f.fields ?? []);
                 const v = data[f.name];
                 if (f.repeatable && Array.isArray(v)) {
-                    for (const it of v) if (it && typeof it === "object" && !Array.isArray(it)) this.walkForwardRefs(sub, it as Record<string, unknown>, components, mode, ids, byId);
+                    for (const it of v) if (it && typeof it === "object" && !Array.isArray(it)) this.walkForwardRefs(sub, it as Record<string, unknown>, components, mode, ids, byId, proj);
                 } else if (v && typeof v === "object" && !Array.isArray(v)) {
-                    this.walkForwardRefs(sub, v as Record<string, unknown>, components, mode, ids, byId);
+                    this.walkForwardRefs(sub, v as Record<string, unknown>, components, mode, ids, byId, proj);
                 }
             } else if (f.type === "DynamicZone" && Array.isArray(data[f.name])) {
                 for (const it of data[f.name] as unknown[]) {
                     if (!it || typeof it !== "object" || Array.isArray(it)) continue;
                     const comp = (it as Record<string, unknown>).__component;
                     const sub = typeof comp === "string" ? components.get(comp) : undefined;
-                    if (sub) this.walkForwardRefs(sub, it as Record<string, unknown>, components, mode, ids, byId);
+                    if (sub) this.walkForwardRefs(sub, it as Record<string, unknown>, components, mode, ids, byId, proj);
                 }
             }
         }
@@ -216,21 +268,29 @@ export class PublicQueryService {
      */
     private async populateRefs(ct: ContentType, items: Record<string, unknown>[], opts: QueryOpts): Promise<void> {
         if (!items.length) return;
+        const proj = projectionOf(opts);
         const schemaFields = fieldsOf(ct.schema);
         const refFields = schemaFields.filter((f) => f.type === "Reference");
         const hasNesting = schemaFields.some((f) => f.type === "Component" || f.type === "DynamicZone");
-        const reverse = (opts.fields?.length ? refFields.filter((f) => opts.fields!.includes(f.name)) : refFields).filter((f) => f.mappedByField && f.referencedTypeId);
+        const reverse = (proj.top ? refFields.filter((f) => proj.top!.includes(f.name)) : refFields).filter((f) => f.mappedByField && f.referencedTypeId);
         const hasForward = refFields.some((f) => !f.mappedByField && (f.referencedTypeId || f.referencedTypeIds?.length)) || hasNesting;
         if (!hasForward && !reverse.length) return;
 
         // ── Forward: ids stored in the entry data, at any depth ─────────────────────
         if (hasForward) {
             const components = hasNesting ? await this.componentFieldMap(ct.workspaceId) : new Map<string, SchemaField[]>();
-            const ids = new Set<string>();
+            const ids = new Map<string, Set<string>>();
             const empty = new Map<string, Record<string, unknown>>();
             for (const item of items) this.walkForwardRefs(schemaFields, item, components, "collect", ids, empty);
-            const byId = await this.shapedByIds(ct.workspaceId, [...ids], opts.preview);
-            for (const item of items) this.walkForwardRefs(schemaFields, item, components, "replace", new Set(), byId);
+            // Entries behind populated fields are read in full; the rest only need
+            // their id and slug, so their content is never loaded.
+            const full = new Set<string>();
+            const light = new Set<string>();
+            for (const [field, set] of ids) for (const id of set) (proj.populated(field) ? full : light).add(id);
+            const byId = await this.shapedByIds(ct.workspaceId, [...full], opts.preview);
+            const lightById = await this.shapedByIds(ct.workspaceId, [...light].filter((id) => !full.has(id)), opts.preview, true);
+            for (const [id, e] of lightById) byId.set(id, e);
+            for (const item of items) this.walkForwardRefs(schemaFields, item, components, "replace", new Map(), byId, proj);
         }
 
         // ── Reverse: derived from the join table (entries that link here) ───────────
@@ -247,11 +307,12 @@ export class PublicQueryService {
                     arr.push(r.fromId);
                     byTo.set(r.toId, arr);
                 }
-                const byId = await this.shapedByIds(ct.workspaceId, [...new Set(rels.map((r) => r.fromId))], opts.preview);
+                const byId = await this.shapedByIds(ct.workspaceId, [...new Set(rels.map((r) => r.fromId))], opts.preview, !proj.populated(f.name));
                 for (const item of items) {
                     const linked = (byTo.get(item.id as string) ?? [])
                         .map((id) => byId.get(id))
-                        .filter((e): e is Record<string, unknown> => !!e);
+                        .filter((e): e is Record<string, unknown> => !!e)
+                        .map((e) => projectRef(e, f.name, proj));
                     item[f.name] = f.multiple ? linked : (linked[0] ?? null);
                 }
             }
@@ -290,7 +351,7 @@ export class PublicQueryService {
             this.prisma.contentEntry.count({ where }),
         ]);
         const alt = rows.length ? await this.altCtx(ct.workspaceId) : undefined;
-        const data = rows.map((e) => this.shape(e, opts.fields, ct.schema, alt));
+        const data = rows.map((e) => this.shape(e, projectionOf(opts).top, ct.schema, alt));
         await this.populateRefs(ct, data, opts);
         return { data, meta: { total, limit: take, offset: skip } };
     }
@@ -300,7 +361,7 @@ export class PublicQueryService {
             where: { ...this.where(ct, { ...opts, filters: {} }), OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
         });
         if (!entry) throw new NotFoundException("Not found.");
-        const data = this.shape(entry, opts.fields, ct.schema, await this.altCtx(ct.workspaceId));
+        const data = this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId));
         await this.populateRefs(ct, [data], opts);
         return { data };
     }
@@ -310,7 +371,7 @@ export class PublicQueryService {
             where: this.where(ct, { ...opts, filters: {} }),
             orderBy: this.orderBy(opts.sort),
         });
-        const data = entry ? this.shape(entry, opts.fields, ct.schema, await this.altCtx(ct.workspaceId)) : null;
+        const data = entry ? this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId)) : null;
         if (data) await this.populateRefs(ct, [data], opts);
         return { data };
     }

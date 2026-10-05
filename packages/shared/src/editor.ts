@@ -63,6 +63,20 @@ export function enterChoice(labels: string[], active: number, query: string, cre
     return null;
 }
 
+/** The options to show for what is typed: those whose title or slug contains it.
+ *  The server already searches, so this only makes sure a slower, older response
+ *  can never leave unrelated entries in the list. */
+export function filterOptions<T extends { title?: string | null; slug?: string | null }>(options: T[], query: string): T[] {
+    const q = norm(query);
+    return q ? options.filter((o) => norm(o.title ?? "").includes(q) || norm(o.slug ?? "").includes(q)) : options;
+}
+
+/** What the picker says about its current selection. An empty field reads "None
+ *  selected", never "No <type> yet": that means the type itself has no entries. */
+export function selectionLabel(count: number): string {
+    return count === 0 ? "None selected" : `${count} selected`;
+}
+
 /** Data for an entry created from typed text: every required Text field (besides
  *  the title and slug, which are sent on their own) is filled with the text. Returns
  *  null when a required field can't be filled from text alone, so the caller opens

@@ -7,7 +7,7 @@ import { PublicQueryService, type QueryOpts } from "./public-query.service";
 
 type TokenReq = Request & { apiToken: { workspaceId: string; type: string } };
 
-/** Parse Strapi-style ?filters[key]=value plus ?fields=a,b into QueryOpts. */
+/** Parse Strapi-style ?filters[key]=value plus ?fields=a,b,ref.c and ?populate= into QueryOpts. */
 function parseOpts(req: TokenReq, query: Record<string, unknown>): QueryOpts {
     const preview = req.apiToken.type === "PREVIEW" || req.apiToken.type === "ADMIN";
     const filters: Record<string, string> = {};
@@ -29,6 +29,7 @@ function parseOpts(req: TokenReq, query: Record<string, unknown>): QueryOpts {
         sort: typeof query.sort === "string" ? query.sort : undefined,
         locale: typeof query.locale === "string" ? query.locale : undefined,
         fields: typeof query.fields === "string" ? query.fields.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+        populate: typeof query.populate === "string" ? query.populate : undefined,
         filters,
         preview,
     };
@@ -36,7 +37,8 @@ function parseOpts(req: TokenReq, query: Record<string, unknown>): QueryOpts {
 
 /**
  * Public read API for external sites — authenticated by a content API token.
- * Supports pagination, ?sort, ?fields, ?locale and ?filters[key]=value, plus
+ * Supports pagination, ?sort, ?fields (including `ref.field` to project referenced
+ * entries), ?populate (none | field,field), ?locale and ?filters[key]=value, plus
  * single-type content. PREVIEW/ADMIN tokens also see unpublished (draft) content.
  */
 @Controller("public")

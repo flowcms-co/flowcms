@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { ContentEntry, ContentStatus, Prisma, ReviewDecision } from "@flowcms/db";
-import { PERMISSIONS, slugify } from "@flowcms/shared";
+import { PERMISSIONS, sameContent, slugify } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { CacheService } from "../cache/cache.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -16,6 +16,7 @@ import { entryPath } from "./route-path";
 import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
 import { keepStoredShape } from "./component-shape";
 import { placeholdersIn, resolvePlaceholders, slugFromPattern } from "./slug-pattern";
+import { draftDiff } from "./draft-diff";
 import { eventForStatusChange, type ContentEvent } from "./content-events";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
@@ -453,6 +454,51 @@ export class ContentEntriesService {
 
     /** Did a save actually change the content? Autosave and re-saves of identical
      *  data must not make the saver the entry's last editor. */
+    /** The live version and the pending draft side by side, with what the draft
+     *  changes. `draftData` is null and `changes` empty when nothing is pending. */
+    async liveAndDraft(workspaceId: string, id: string) {
+        const e = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, select: { data: true, draftData: true, draftApproved: true, status: true } });
+        if (!e) throw new NotFoundException("Entry not found.");
+        const changes = e.draftData != null ? draftDiff(e.data, e.draftData) : [];
+        return {
+            hasDraft: e.draftData != null,
+            draftApproved: e.draftApproved,
+            liveData: e.data,
+            draftData: e.draftData ?? null,
+            changes,
+            // True when publishing the draft would change nothing a reader sees.
+            formattingOnly: changes.length > 0 && changes.every((c) => c.formattingOnly),
+        };
+    }
+
+    /** The entry as it stands, for a save that changed nothing. */
+    private async unchanged(workspaceId: string, id: string) {
+        const e = await this.prisma.contentEntry.findFirstOrThrow({ where: { id, workspaceId }, include: { contentType: { select: CT_SELECT } } });
+        const shaped = this.shape(e);
+        return e.draftData != null ? { ...shaped, data: e.draftData, title: String((e.draftData as { title?: unknown }).title ?? shaped.title) } : shaped;
+    }
+
+    /** Pending drafts that differ from the live version only by how a rich text
+     *  editor re-wrote the HTML (link target/rel it added, paragraphs inside list
+     *  items, an empty trailing paragraph, `&amp;` for `&`): nobody typed them, and
+     *  publishing one would ship `nofollow` on the page's internal links. */
+    async formattingOnlyDrafts(workspaceId: string) {
+        const rows = await this.prisma.contentEntry.findMany({
+            where: { workspaceId, status: "PUBLISHED", draftData: { not: Prisma.DbNull } },
+            select: { id: true, title: true, slug: true, data: true, draftData: true, contentType: { select: { name: true } } },
+            orderBy: { id: "asc" },
+        });
+        return rows.filter((r) => sameContent(r.data, r.draftData)).map((r) => ({ id: r.id, title: r.title || "Untitled", slug: r.slug, type: r.contentType.name }));
+    }
+
+    /** Discard those drafts. Each is re-checked first, so a draft someone has really
+     *  edited in the meantime is never thrown away. */
+    async discardFormattingOnlyDrafts(workspaceId: string) {
+        const drafts = await this.formattingOnlyDrafts(workspaceId);
+        for (const d of drafts) await this.discardDraft(workspaceId, d.id);
+        return { discarded: drafts.length };
+    }
+
     private changed(before: unknown, after: unknown): boolean {
         return JSON.stringify(before ?? {}) !== JSON.stringify(after ?? {});
     }
@@ -778,6 +824,11 @@ export class ContentEntriesService {
             const base = (existing.draftData ?? existing.data ?? {}) as Record<string, unknown>;
             let draft = { ...base, ...incoming };
             if (dto.title !== undefined) draft.title = dto.title;
+            // A save that changes nothing (an editor opened and closed, an autosave of
+            // untouched content) is not an edit: no draft, no new version, no
+            // `updatedAt` bump, and a pending approval stays as it is. Checked on what
+            // was sent, before save hooks and the meta title sync add their own values.
+            if (!this.changed(base, draft) && (dto.slug === undefined || dto.slug === existing.slug)) return this.unchanged(workspaceId, id);
             // Type-check, but don't enforce completeness on a draft (autosave-friendly).
             validateEntryData(fieldsOf(existing.contentType.schema), draft, {
                 enforceRequired: false,
@@ -816,6 +867,10 @@ export class ContentEntriesService {
         let merged = { ...((existing.data ?? {}) as Record<string, unknown>), ...incoming };
         if (dto.title !== undefined) merged.title = dto.title;
         const dataChanged = dto.data !== undefined || dto.title !== undefined;
+        // Same rule for entries edited in place: content sent back unchanged, with no
+        // slug, status or schedule change alongside, writes nothing.
+        const structural = (dto.slug !== undefined && dto.slug !== existing.slug) || (dto.status !== undefined && dto.status !== existing.status) || dto.scheduledAt !== undefined;
+        if (dataChanged && !structural && !this.changed(existing.data, merged)) return this.unchanged(workspaceId, id);
 
         const targetStatus = (dto.status ?? existing.status) as ContentStatus;
         const targetSlug = dto.slug !== undefined ? dto.slug : existing.slug;

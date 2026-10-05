@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { mediaUrl } from "@/lib/api";
 import { runAi, aiErrorMessage } from "@/lib/useAi";
 import { richTextExtensions, imageUploadProps } from "@/lib/tiptap";
+import { RichTextTracker } from "@/lib/richTextTracker";
 import { ColorMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
 import { EditorIcon } from "./EditorIcons";
 import MediaPicker from "@/components/ui/MediaPicker";
@@ -99,6 +100,9 @@ const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value
     // Keep the selection bubble open while its link popover is being edited (the
     // input steals focus from the editor, which would otherwise hide the bubble).
     const bubbleLinkOpen = useRef(false);
+    // Loading never reports a change, and after a real edit every block the user did
+    // not touch keeps its stored bytes.
+    const track = useMemo(() => { const t = new RichTextTracker(); t.load(value); return t; }, []); // eslint-disable-line react-hooks/exhaustive-deps -- seeded once with the mounted value
     const editor = useEditor({
         immediatelyRender: false,
         extensions: richTextExtensions(placeholder ?? "Write here…"),
@@ -108,13 +112,20 @@ const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value
             // Drag-and-drop / paste image files → upload to the asset library + insert.
             ...imageUploadProps(),
         },
-        onUpdate: ({ editor }) => onChange(editor.getHTML()),
+        onCreate: ({ editor }) => track.ready(editor.getHTML()),
+        onUpdate: ({ editor }) => {
+            // The editor tidying its own markup is not an edit.
+            if (track.changed(editor.getHTML())) onChange(track.current);
+        },
     });
 
-    // Sync external value changes (e.g. an AI rewrite) into the editor.
+    // Sync external value changes (e.g. an AI rewrite) into the editor. A value we
+    // sent up ourselves coming back down is not one.
     useEffect(() => {
-        if (editor && value !== editor.getHTML()) editor.commands.setContent(value || "", { emitUpdate: false });
-    }, [value, editor]);
+        if (!editor || value === track.current) return;
+        editor.commands.setContent(value || "", { emitUpdate: false });
+        track.load(value, editor.getHTML());
+    }, [value, editor, track]);
 
     if (!editor) return <div className="rounded-2xl border border-grey-light px-4 py-3 text-body-sm text-grey dark:border-grey-light/10">Loading editor…</div>;
 

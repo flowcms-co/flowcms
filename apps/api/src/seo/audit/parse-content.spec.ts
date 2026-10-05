@@ -43,3 +43,14 @@ describe("entryToPageInput", () => {
         expect(codes(entryToPageInput(entry))).toContain("META_DESC_MISSING");
     });
 });
+
+describe("internal links marked nofollow", () => {
+    it("are reported, and external nofollow links are not", () => {
+        const body = '<p><a target="_blank" rel="noopener noreferrer nofollow" href="/resources/cost">cost</a> and <a rel="nofollow" href="https://example.com/contact">contact</a> and <a rel="nofollow" href="https://other.com">other</a></p>';
+        const input = entryToPageInput({ id: "e", slug: "p", data: { title: "T", body } }, { siteHost: "https://example.com" });
+        expect(input.internalNofollow).toBe(2);
+        const f = auditPage(input).find((x) => x.code === "LINK_INTERNAL_NOFOLLOW")!;
+        expect(f.values).toEqual({ count: 2 });
+        expect(codes(entryToPageInput({ id: "e", slug: "p", data: { title: "T", body: '<p><a href="/a">a</a></p>' } }))).not.toContain("LINK_INTERNAL_NOFOLLOW");
+    });
+});

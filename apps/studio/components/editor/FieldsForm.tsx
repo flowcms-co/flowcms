@@ -21,7 +21,8 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import RichTextField from "./RichTextField";
 import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
 import { slugify, stripTags as stripHtml } from "@flowcms/shared/strings";
-import { enterChoice, offerCreate, quickCreateData, refPlaceholder, showSlugLine } from "@flowcms/shared/editor";
+import { enterChoice, filterOptions, offerCreate, quickCreateData, refPlaceholder, selectionLabel, showSlugLine } from "@flowcms/shared/editor";
+import { moveItem } from "@flowcms/shared/html";
 
 type Json = Record<string, unknown>;
 
@@ -154,6 +155,11 @@ type RefEntry = { id: string; title: string; slug: string | null; typeName: stri
 /** Shape of an entry row from GET /entries (only the bits the picker needs). */
 type ApiListEntry = { id: string; title: string; slug: string | null; status?: string; contentType?: { name?: string } };
 
+/** The small content-type label on picker options (polymorphic results, the create row). */
+const TypeBadge = ({ name }: { name: string }) => (
+    <span className="rounded bg-lavender-mist px-1 text-[0.625rem] font-medium uppercase tracking-wide text-grey dark:bg-dark-3">{name}</span>
+);
+
 /** Coerce a stored reference value into an id list (single refs store a string,
  *  multiple store an array). Drops anything that isn't a non-empty string. */
 const asIdArray = (v: unknown): string[] =>
@@ -184,7 +190,12 @@ const ReferenceField = ({
     const poly = typeIds.length > 1;
     const typeIdsKey = typeIds.join(",");
     const [entries, setEntries] = useState<RefEntry[]>([]);
+    // How many entries the target type(s) hold in all; null until the server has said.
+    // Only a known zero may be described as "no entries yet".
+    const [typeTotal, setTypeTotal] = useState<number | null>(null);
     const [query, setQuery] = useState("");
+    // The chip being dragged to a new position (multiple references keep their order).
+    const [dragId, setDragId] = useState<string | null>(null);
     const [open, setOpen] = useState(false);
     const selected = asIdArray(value);
     // Keyboard highlight: -1 = nothing highlighted (Enter then picks an exact match or
@@ -256,7 +267,11 @@ const ReferenceField = ({
         const q = query.trim();
         const t = setTimeout(() => {
             fetchEntryPage<ApiListEntry>({ typeId: typeIdsKey, q, sort: "title", dir: "asc", pageSize: 50 })
-                .then((r) => !cancelled && setEntries(r.items.map(toRef)))
+                .then((r) => {
+                    if (cancelled) return;
+                    setEntries(r.items.map(toRef));
+                    if (!q) setTypeTotal(r.total);
+                })
                 .catch(() => {});
             if (q && !typeIdsKey.includes(",")) {
                 const qs = new URLSearchParams({ typeId: typeIdsKey, text: q, locale: "en" });
@@ -297,7 +312,7 @@ const ReferenceField = ({
     // match (undefined until the server has answered for this text) goes on top.
     const exact = match?.q === query.trim() ? match.entry : undefined;
     const exactLinked = !!exact && selected.includes(exact.id);
-    const rest = entries.filter((e) => !selected.includes(e.id) && e.id !== exact?.id);
+    const rest = filterOptions(entries, query).filter((e) => !selected.includes(e.id) && e.id !== exact?.id);
     const available = exact && !exactLinked ? [exact, ...rest] : rest;
     const labels = available.map((e) => labelOf(e) || e.id);
     // Create only once the server confirmed there is no exact match anywhere in the type.
@@ -305,6 +320,7 @@ const ReferenceField = ({
     const rowCount = labels.length + (createOffered ? 1 : 0);
 
     const add = (id: string) => {
+        if (selected.includes(id)) return;
         onChange(multiple ? [...selected, id] : id);
         setQuery("");
         setActive(-1);
@@ -372,6 +388,9 @@ const ReferenceField = ({
         `flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-lavender-mist/60 dark:hover:bg-dark-3/60 ${active === i ? "bg-lavender-mist/60 dark:bg-dark-3/60" : ""}`;
     const menuId = `ref-menu-${field.id}`;
     const remove = (id: string) => onChange(multiple ? selected.filter((x) => x !== id) : null);
+    // Order is meaningful for a multiple reference: chips can be dragged, or moved
+    // with their arrow buttons (and the Left/Right keys on those buttons).
+    const move = (id: string, to: number) => onChange(moveItem(selected, selected.indexOf(id), to));
 
     // Single ref already chosen: show the chip; clearing it reopens the picker.
     const showPicker = multiple || selected.length === 0;
@@ -380,11 +399,22 @@ const ReferenceField = ({
         <div className="flex flex-col gap-2">
             {selected.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                    {selected.map((id) => (
+                    {selected.map((id, index) => (
                         <span
                             key={id}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-primary bg-primary/10 px-2.5 h-8 text-caption-2 text-primary dark:text-lilac"
+                            draggable={multiple && selected.length > 1}
+                            onDragStart={(ev) => { setDragId(id); ev.dataTransfer.effectAllowed = "move"; }}
+                            onDragOver={(ev) => { if (dragId && dragId !== id) ev.preventDefault(); }}
+                            onDrop={(ev) => { ev.preventDefault(); if (dragId) move(dragId, index); setDragId(null); }}
+                            onDragEnd={() => setDragId(null)}
+                            className={`inline-flex items-center gap-1.5 rounded-xl border border-primary bg-primary/10 px-2.5 h-8 text-caption-2 text-primary dark:text-lilac ${multiple && selected.length > 1 ? "cursor-grab" : ""} ${dragId === id ? "opacity-50" : ""}`}
                         >
+                            {multiple && selected.length > 1 && (
+                                <span className="flex items-center">
+                                    <button type="button" disabled={index === 0} onClick={() => move(id, index - 1)} aria-label={`Move ${titleFor(id)} earlier`} className="rounded px-0.5 text-current/70 transition-colors hover:text-primary disabled:opacity-30">‹</button>
+                                    <button type="button" disabled={index === selected.length - 1} onClick={() => move(id, index + 1)} aria-label={`Move ${titleFor(id)} later`} className="rounded px-0.5 text-current/70 transition-colors hover:text-primary disabled:opacity-30">›</button>
+                                </span>
+                            )}
                             {poly && entryFor(id)?.typeName && (
                                 <span className="rounded bg-primary/15 px-1 text-[0.625rem] font-medium uppercase tracking-wide">{entryFor(id)!.typeName}</span>
                             )}
@@ -412,6 +442,7 @@ const ReferenceField = ({
 
             {showPicker && (
                 <div>
+                    {multiple && selected.length === 0 && <p className="mb-1.5 text-caption-2 text-grey">{selectionLabel(0)}</p>}
                     <input
                         ref={inputRef}
                         className={INPUT}
@@ -425,7 +456,8 @@ const ReferenceField = ({
                         onKeyDown={onKeyDown}
                         onFocus={() => setOpen(true)}
                         onBlur={() => setTimeout(() => setOpen(false), 150)}
-                        placeholder={refPlaceholder(target ? [target.name] : [], !entries.length && !query)}
+                        placeholder={refPlaceholder(target ? [target.name] : [], typeTotal === 0 && !query)}
+                        aria-label={`${fieldLabel(field)}: ${selectionLabel(selected.length)}`}
                         readOnly={creating}
                         aria-busy={creating}
                         role="combobox"
@@ -447,14 +479,15 @@ const ReferenceField = ({
                                         <button
                                             type="button"
                                             tabIndex={-1}
-                                            onMouseDown={(ev) => ev.preventDefault()}
+                                            // Pick on press, not on release: the list can re-render or
+                                            // close (input blur) between the two and swallow the click.
+                                            // onClick still serves anything that sends a click alone.
+                                            onMouseDown={(ev) => { ev.preventDefault(); add(e.id); }}
                                             onClick={() => add(e.id)}
                                             className={rowClass(i)}
                                         >
                                             <span className="flex items-center gap-1.5 text-caption-1 text-dark-1 dark:text-white">
-                                                {poly && e.typeName && (
-                                                    <span className="rounded bg-lavender-mist px-1 text-[0.625rem] font-medium uppercase tracking-wide text-grey dark:bg-dark-3">{e.typeName}</span>
-                                                )}
+                                                {poly && e.typeName && <TypeBadge name={e.typeName} />}
                                                 {labelOf(e) || e.id}
                                             </span>
                                             {showSlugLine(labelOf(e), e.slug, labels) && <span className="text-caption-2 text-grey/70">/{e.slug}</span>}
@@ -472,7 +505,8 @@ const ReferenceField = ({
                                         >
                                             <span className="flex items-center gap-1.5 text-caption-1 text-primary dark:text-lilac">
                                                 <Icon className="h-3.5 w-3.5 fill-current" name="plus" />
-                                                Create {target.name.toLowerCase()} &ldquo;{query.trim()}&rdquo;
+                                                Create &ldquo;{query.trim()}&rdquo;
+                                                <TypeBadge name={target.name} />
                                             </span>
                                         </button>
                                     </li>

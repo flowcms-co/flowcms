@@ -18,6 +18,9 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import { useRevealBatch } from "@/lib/useReveal";
 import { cn } from "@/lib/cn";
 import type { SchemaField } from "@/mocks/schema";
+import { fixInternalLinks, internalNofollowLinks } from "@flowcms/shared/html";
+import { RichTextTracker } from "@/lib/richTextTracker";
+import { useWorkspace } from "@/lib/useWorkspace";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
 import { slugify } from "@flowcms/shared/strings";
@@ -168,6 +171,12 @@ const EditorPage = () => {
     // reload that the create flow's navigation (?id=<new id>) would otherwise trigger.
     const loadedIdRef = useRef<string | null>(null);
 
+    // Opening an entry must never save it: the editor tidying the stored HTML its
+    // own way (a trailing empty paragraph, paragraphs inside list items) is not a
+    // change, and after a real edit the untouched blocks keep their stored bytes.
+    const body = useMemo(() => new RichTextTracker(), []);
+    const bodyHtml = useCallback((e: Editor | null) => body.value(e?.getHTML()), [body]);
+
     /** Mark the doc dirty + tick the autosave debounce (called on every local edit). */
     const bump = useCallback(() => {
         setRev((r) => r + 1);
@@ -210,6 +219,7 @@ const EditorPage = () => {
                     setStatus(e.status);
                     setTypeId(e.contentType.id);
                     setInitialBody(typeof e.data?.body === "string" ? (e.data.body as string) : "");
+                    body.load(typeof e.data?.body === "string" ? (e.data.body as string) : "");
                     setEntryData((e.data ?? {}) as Record<string, unknown>);
                     setHasDraft(!!e.hasDraft);
                     setDraftApproved(!!e.draftApproved);
@@ -228,6 +238,7 @@ const EditorPage = () => {
                 setLocale("en");
                 setStatus("DRAFT");
                 setInitialBody("");
+                body.load("");
                 setEntryData({});
                 setHasDraft(false);
                 setDraftApproved(false);
@@ -241,12 +252,15 @@ const EditorPage = () => {
         return () => {
             cancelled = true;
         };
-    }, [idParam, typeParam]);
+    }, [idParam, typeParam, body]);
 
     const onEditorReady = useCallback((e: Editor) => {
         setEditor(e);
-        e.on("update", bump);
-    }, [bump]);
+        body.ready(e.getHTML());
+        e.on("update", () => {
+            if (body.changed(e.getHTML())) bump();
+        });
+    }, [bump, body]);
 
     // Deep-link: once the editor + its content are ready, scroll to and flash the
     // passage named by ?highlight= (from the Content Quality audit's fix links).
@@ -320,7 +334,7 @@ const EditorPage = () => {
         // Send the full field data (the backend merges it) plus the rich-text body
         // when the type has one, and the slug from its dedicated input.
         const data: Record<string, unknown> = { ...entryData };
-        if (hasBody) data.body = editor?.getHTML() ?? "";
+        if (hasBody) data.body = bodyHtml(editor);
         else if (isEmptyBody(data.body)) delete data.body;
         const payload = { title, slug: slug.trim() || null, data };
         if (entryId) {
@@ -345,7 +359,7 @@ const EditorPage = () => {
         loadedIdRef.current = created.id; // we hold this entry; skip the reload on the ?id= navigation
         router.replace(`/content/editor?id=${created.id}`);
         return created.id;
-    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router, slugCheck, slugPattern]);
+    }, [editor, entryId, title, slug, typeId, entryData, hasBody, router, slugCheck, slugPattern, bodyHtml]);
 
     /** Pull the approval summary so the primary button can show the right step. */
     const loadReview = useCallback(async () => {
@@ -594,6 +608,27 @@ const EditorPage = () => {
         }
     };
 
+    // Links to the site's own pages that carry rel="nofollow" (an older editor added
+    // it to every link): warn, and offer to remove it from all of them at once.
+    const siteUrl = useWorkspace()?.siteUrl;
+    const richStrings = (v: unknown): string[] => (typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(richStrings) : v && typeof v === "object" ? Object.values(v).flatMap(richStrings) : []);
+    // `rev` ticks on every edit, so this follows the body as it is typed.
+    const nofollowCount = useMemo(
+        () => [...richStrings(entryData), hasBody ? bodyHtml(editor) : ""].reduce((n, h) => n + internalNofollowLinks(h, siteUrl).length, 0),
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- rev stands in for the editor's content
+        [entryData, hasBody, editor, siteUrl, rev, ready],
+    );
+    const removeNofollow = () => {
+        const fix = (v: unknown): unknown => (typeof v === "string" ? fixInternalLinks(v, siteUrl) : Array.isArray(v) ? v.map(fix) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fix(x)])) : v);
+        setEntryData(fix(entryData) as Record<string, unknown>);
+        if (hasBody && editor) {
+            const fixed = fixInternalLinks(bodyHtml(editor), siteUrl);
+            editor.commands.setContent(fixed, { emitUpdate: false });
+            body.load(fixed, editor.getHTML());
+        }
+        bump();
+    };
+
     /** Open a live page preview in a new tab. Opens the tab synchronously (so the
      *  browser doesn't block it), saves the latest content, then points the tab at
      *  the preview route. If the save fails we still preview the last-saved version
@@ -616,11 +651,11 @@ const EditorPage = () => {
      *  throwaway draft for a brand-new, untouched entry. */
     const autosave = useCallback(async () => {
         if (saveState === "saving") return;
-        const body = editor?.getHTML() ?? "";
+        const html = bodyHtml(editor);
         if (!entryId) {
             const pristine =
                 (!title || title === "Untitled") &&
-                (!body || body === "<p></p>" || body === "") &&
+                (!html || html === "<p></p>") &&
                 !slug.trim() &&
                 Object.keys(entryData).length === 0;
             if (!typeId || pristine) return;
@@ -632,7 +667,7 @@ const EditorPage = () => {
         } catch {
             setSaveState("dirty");
         }
-    }, [saveState, editor, entryId, title, slug, typeId, entryData, persist]);
+    }, [saveState, editor, entryId, title, slug, typeId, entryData, persist, bodyHtml]);
 
     const autosaveRef = useRef(autosave);
     useEffect(() => {
@@ -655,15 +690,16 @@ const EditorPage = () => {
             setSlugEdited(!!(draft.slug && draft.slug.trim()));
         }
         if (draft.data) {
-            const { body, ...rest } = draft.data as Record<string, unknown>;
+            const { body: incoming, ...rest } = draft.data as Record<string, unknown>;
             setEntryData(rest);
             // Push a new body into TipTap silently (emitUpdate:false → no echo loop).
-            if (typeof body === "string" && editor && editor.getHTML() !== body) {
-                editor.commands.setContent(body, { emitUpdate: false });
+            if (typeof incoming === "string" && editor && bodyHtml(editor) !== incoming) {
+                editor.commands.setContent(incoming, { emitUpdate: false });
+                body.load(incoming, editor.getHTML());
             }
         }
         bumpRemote();
-    }, [editor, bumpRemote]);
+    }, [editor, bumpRemote, bodyHtml, body]);
 
     // Keep the message handler current without re-opening the channel on every edit.
     const onSync = useRef<(m: PreviewSyncMessage) => void>(() => {});
@@ -695,7 +731,7 @@ const EditorPage = () => {
             title,
             slug,
             status,
-            data: hasBody ? { ...entryData, body: editor?.getHTML() ?? initialBody ?? "" } : entryData,
+            data: hasBody ? { ...entryData, body: bodyHtml(editor) } : entryData,
         };
     });
 
@@ -952,6 +988,15 @@ const EditorPage = () => {
 
                             {/* Schema-driven fields (Text, Number, components…) — the
                                 dynamic-zone field is rendered as sections below. */}
+                            {nofollowCount > 0 && (
+                                <div role="alert" className="mb-4 flex items-start justify-between gap-4 rounded-xl border border-warning/40 bg-warning/[0.08] p-3.5">
+                                    <span className="text-caption-2 leading-relaxed text-black dark:text-white">
+                                        {nofollowCount} link{nofollowCount === 1 ? "" : "s"} to your own site {nofollowCount === 1 ? "is" : "are"} marked nofollow, which tells
+                                        search engines not to follow {nofollowCount === 1 ? "it" : "them"}. Links to your own pages should not be.
+                                    </span>
+                                    <button type="button" onClick={removeNofollow} className="btn-secondary btn-sm shrink-0">Remove nofollow</button>
+                                </div>
+                            )}
                             <FieldsForm
                                 fields={formFields}
                                 data={entryData}

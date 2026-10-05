@@ -49,13 +49,15 @@ export interface CanonicalContent {
     images: { src: string; alt?: string | null }[];
     /** Internal-link count across all rich text. */
     internalLinkCount: number;
+    /** Internal links that carry rel="nofollow" (hrefs). */
+    internalNofollow: string[];
     /** Structured-data hints from recognised components. */
     structuredDataSpecs: StructuredDataSpec[];
 }
 
 // ── pure HTML helpers (shared; re-exported via parse-content for back-compat) ──
 
-import { stripTags, pairedAltField } from "@flowcms/shared";
+import { stripTags, pairedAltField, internalNofollowLinks } from "@flowcms/shared";
 export { stripTags };
 
 /** Asset-library alt text for an image URL (Media.alt), when the caller has it. */
@@ -264,7 +266,7 @@ function collectValue(value: unknown, acc: Acc, depth: number) {
  *    content (a Hero's Title/Subtitle are real page text); url/single-token and
  *    image values are skipped from text (images are collected separately).
  */
-export function entryToCanonicalContent(entry: EntryLike, opts?: { altFor?: AltLookup }): CanonicalContent {
+export function entryToCanonicalContent(entry: EntryLike, opts?: { altFor?: AltLookup; siteHost?: string | null }): CanonicalContent {
     const d = (entry.data ?? {}) as Record<string, unknown>;
     const acc: Acc = { html: [], text: [], images: [], links: 0, specs: [], altFor: opts?.altFor };
 
@@ -310,6 +312,7 @@ export function entryToCanonicalContent(entry: EntryLike, opts?: { altFor?: AltL
         headings,
         images: acc.images,
         internalLinkCount: acc.links,
+        internalNofollow: acc.html.flatMap((h) => internalNofollowLinks(h, opts?.siteHost)),
         structuredDataSpecs: acc.specs,
     };
 }

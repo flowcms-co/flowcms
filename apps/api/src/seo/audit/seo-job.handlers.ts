@@ -8,6 +8,7 @@ import { SeoAuditService } from "./seo-audit.service";
 import { entryToCanonicalContent } from "../../content/canonical-content";
 import { SitePagesService, absoluteUrl } from "../site-pages.service";
 import type { RunMode } from "./audit-plan";
+import { fixInternalLinks } from "@flowcms/shared";
 
 type BatchPayload = { fix: string; key: string; pages: { id: string; url: string | null }[] };
 
@@ -156,6 +157,20 @@ export class SeoJobHandlers implements OnModuleInit {
             const canonical = this.canonicalFor(await this.sitePages.siteUrl(workspaceId), url);
             if (!canonical) throw new Error("Set the site URL in Settings to write canonicals");
             patch.canonical = canonical;
+        } else if (key === "LINK_INTERNAL_NOFOLLOW") {
+            // Deterministic: strip nofollow (and the new-tab target) from links to the
+            // site itself, in every rich text value on the entry. External links stay.
+            const site = await this.sitePages.siteUrl(workspaceId);
+            const fix = (v: unknown): unknown =>
+                typeof v === "string" ? fixInternalLinks(v, site)
+                : Array.isArray(v) ? v.map(fix)
+                : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fix(x)]))
+                : v;
+            for (const [k, v] of Object.entries(d)) {
+                const next = fix(v);
+                if (JSON.stringify(next) !== JSON.stringify(v)) patch[k] = next;
+            }
+            if (!Object.keys(patch).length) return;
         } else if (key === "TECH_NOINDEX") {
             patch.robots = String(d.robots ?? "").replace(/noindex/gi, "").replace(/\s+/g, " ").trim();
         } else if (fix === "meta") {

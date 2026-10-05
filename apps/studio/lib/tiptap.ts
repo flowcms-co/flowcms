@@ -24,7 +24,11 @@ import { uploadFile, mediaUrl } from "@/lib/api";
 
 /** Build the extension list for a rich-text editor with the given placeholder. */
 export const richTextExtensions = (placeholder: string): AnyExtension[] => [
-    StarterKit,
+    // Links carry only what the author sets. The Link extension's own defaults add
+    // target="_blank" and rel="noopener noreferrer nofollow" to every link, which
+    // would mark the site's internal links nofollow on the next save. "Open in new
+    // tab" and "nofollow" are per-link choices in the link menu, off by default.
+    StarterKit.configure({ link: { openOnClick: false, HTMLAttributes: { target: null, rel: null } } }),
     Placeholder.configure({ placeholder }),
     // Block-level images inserted from the asset library, a URL, or an upload (drag /
     // paste). No base64 — images live in the media library / on a CDN, keyed by URL.

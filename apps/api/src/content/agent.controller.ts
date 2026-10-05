@@ -86,10 +86,31 @@ export class AgentController {
         });
     }
 
+    /**
+     * One entry. `data` is the version an edit would build on: the pending draft when
+     * there is one (`hasDraft`), otherwise the live version. `liveData` is always what
+     * the public API serves, and `draftData` the pending draft (null when none), so
+     * the two can be compared without a second request.
+     *
+     * PATCH merges: the fields you send replace those fields in `data`, and every
+     * field you leave out is kept. The merge is one level deep, so a list or a
+     * nested object you send replaces the stored one whole. On a published entry the
+     * result is staged as the draft; the live version changes only on publish.
+     */
     @Get(":type/:id")
-    get(@Req() req: TokenReq, @Param("id") id: string) {
+    async get(@Req() req: TokenReq, @Param("id") id: string) {
         requireScope(req, PERMISSIONS.CONTENT_READ);
-        return this.entries.get(req.apiToken.workspaceId, id);
+        const [entry, v] = await Promise.all([this.entries.get(req.apiToken.workspaceId, id), this.entries.liveAndDraft(req.apiToken.workspaceId, id)]);
+        return { ...entry, liveData: v.liveData, draftData: v.draftData };
+    }
+
+    /** What the pending draft changes: each changed field path with its live and
+     *  draft value, and whether the difference is only editor formatting. */
+    @Get(":type/:id/draft-diff")
+    async draftDiff(@Req() req: TokenReq, @Param("id") id: string) {
+        requireScope(req, PERMISSIONS.CONTENT_READ);
+        const v = await this.entries.liveAndDraft(req.apiToken.workspaceId, id);
+        return { hasDraft: v.hasDraft, draftApproved: v.draftApproved, formattingOnly: v.formattingOnly, changes: v.changes };
     }
 
     @Post(":type")

@@ -186,7 +186,7 @@ export class SeoAuditService {
         // Entry fields only matter as a fallback, so only look up parents then.
         const parents = live?.status === 200 ? {} : await this.parentContext(workspaceId, page.data);
 
-        const input = entryToPageInput({ id: page.id, slug: page.slug, title: page.title, data: page.data }, { path: page.path, altFor, hasSite: !!site, live, ...parents });
+        const input = entryToPageInput({ id: page.id, slug: page.slug, title: page.title, data: page.data }, { path: page.path, altFor, hasSite: !!site, siteHost: site, live, ...parents });
         const hash = withRules(contentHash(input));
         const liveJson = live ? (live as unknown as Prisma.InputJsonValue) : Prisma.DbNull;
         // An inferred row has not been fetched, whatever was fetched before the template changed.

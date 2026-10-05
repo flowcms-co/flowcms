@@ -86,6 +86,20 @@ export class ContentEntriesController {
         return this.entries.list(user.workspaceId, { typeId, status, q, locale, authorId, limit: num(limit), offset: num(offset) }, user.role);
     }
 
+    /** Pending drafts that only differ from the live page by editor formatting. */
+    @Get("drafts/formatting-only")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    formattingOnlyDrafts(@CurrentUser() user: AuthUser) {
+        return this.entries.formattingOnlyDrafts(user.workspaceId);
+    }
+
+    /** Discard them (each is re-checked first). */
+    @Post("drafts/formatting-only/discard")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    discardFormattingOnlyDrafts(@CurrentUser() user: AuthUser) {
+        return this.entries.discardFormattingOnlyDrafts(user.workspaceId);
+    }
+
     // ── Bulk actions → background jobs (so the app is never locked). Declared
     //    before the `:id` routes so `/entries/bulk/*` isn't matched as `:id`. ──────
     @Post("bulk/publish")

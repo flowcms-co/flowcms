@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enterChoice, isEmptyBody, offerCreate, quickCreateData, refPlaceholder, showSlugLine, showsBodyEditor } from "./editor";
+import { enterChoice, filterOptions, isEmptyBody, offerCreate, quickCreateData, refPlaceholder, selectionLabel, showSlugLine, showsBodyEditor } from "./editor";
 
 describe("reference picker", () => {
     it("names a single target type in the placeholder and stays generic for polymorphic fields", () => {
@@ -33,6 +33,28 @@ describe("reference picker", () => {
         expect(enterChoice(["Go", "Rusty"], -1, "Rust", true)).toEqual({ kind: "create" });
         expect(enterChoice(["Go", "Rusty"], 2, "Rust", true)).toEqual({ kind: "create" });
         expect(enterChoice(["Go"], -1, "Rust", false)).toBeNull();
+    });
+
+    it("shows only options whose title or slug contains what is typed", () => {
+        const options = [
+            { id: "1", title: "Basement flood cleanup cost", slug: "basement-flood-cleanup-cost" },
+            { id: "2", title: "Burst pipe repair", slug: "burst-pipe-repair" },
+            { id: "3", title: "Frozen lines", slug: "frozen-pipe-thawing" },
+        ];
+        expect(filterOptions(options, "pipe").map((o) => o.id)).toEqual(["2", "3"]); // title, and slug
+        expect(filterOptions(options, "  PIPE ").map((o) => o.id)).toEqual(["2", "3"]);
+        expect(filterOptions(options, "")).toEqual(options);
+        expect(filterOptions(options, "roof")).toEqual([]);
+    });
+
+    it("labels an empty selection as none selected, not as an empty type", () => {
+        expect(selectionLabel(0)).toBe("None selected");
+        expect(selectionLabel(2)).toBe("2 selected");
+    });
+
+    it("Enter picks the highlighted option", () => {
+        expect(enterChoice(["Burst pipe repair", "Frozen pipe thawing"], 1, "pipe", false)).toEqual({ kind: "pick", index: 1 });
+        expect(enterChoice(["Burst pipe repair"], 0, "pipe", true)).toEqual({ kind: "pick", index: 0 });
     });
 
     it("fills required Text fields from the typed text", () => {

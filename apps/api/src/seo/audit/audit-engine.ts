@@ -35,6 +35,8 @@ export interface PageInput {
     headings?: { level: number; text: string }[];
     images?: { src: string; alt?: string | null }[];
     internalLinkCount?: number;
+    /** Internal links in the content that carry rel="nofollow". */
+    internalNofollow?: number;
     bodyText?: string;
     wordCount?: number;
     /** Parsed JSON-LD blocks (objects), or empty when none. */
@@ -172,6 +174,7 @@ export function detectOnPage(p: PageInput): Finding[] {
     const wc = p.wordCount ?? words(p.bodyText);
     if (wc > 0 && wc < 300) out.push(mk("THIN_CONTENT", { words: wc }));
     if (p.internalLinkCount !== undefined && p.internalLinkCount < 2) out.push(mk("INTERNAL_LINKS_FEW", { count: p.internalLinkCount }));
+    if (p.internalNofollow) out.push(mk("LINK_INTERNAL_NOFOLLOW", { count: p.internalNofollow }));
     if (p.bodyText && wc >= 40) {
         const ease = fleschReadingEase(p.bodyText);
         if (ease < 50) out.push(mk("READABILITY_HARD", { ease }));
@@ -369,6 +372,7 @@ export function contentHash(p: PageInput): string {
         h: p.headings ?? [],
         i: (p.images ?? []).map((x) => [x.src, x.alt ?? ""]),
         l: p.internalLinkCount ?? 0,
+        nf: p.internalNofollow ?? 0,
         b: p.bodyText ?? "",
         j: p.jsonLd ?? null,
         c: p.tech?.canonical ?? null,

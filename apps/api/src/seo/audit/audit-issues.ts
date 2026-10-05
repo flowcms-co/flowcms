@@ -145,6 +145,7 @@ const CODE_CATEGORY: Record<string, IssueCategory> = {
     CANNIBALIZATION: "cannibalization",
     INTERNAL_LINK_OPP: "links",
     INTERNAL_LINKS_FEW: "links",
+    LINK_INTERNAL_NOFOLLOW: "links",
     DUPLICATE_CONTENT: "content",
     THIN_CONTENT: "content",
     READABILITY_HARD: "content",
@@ -176,7 +177,7 @@ const CODE_EFFORT: Record<string, Effort> = {
     H1_MISSING: "easy", H1_MULTIPLE: "easy", HEADING_SKIP: "easy", THIN_CONTENT: "hard", INTERNAL_LINKS_FEW: "easy", READABILITY_HARD: "med", DUPLICATE_CONTENT: "med",
     GSC_CTR_DROP: "med", GSC_POSITION_DROP: "med", GSC_STRIKING_DISTANCE: "med",
     TECH_REDIRECT_CHAIN: "med", TECH_CANONICAL_MISSING: "easy", TECH_NOINDEX: "easy",
-    TECH_PAGE_UNREACHABLE: "med",
+    TECH_PAGE_UNREACHABLE: "med", LINK_INTERNAL_NOFOLLOW: "easy",
     AIREADY_LLMS_MISSING: "easy", AIREADY_ROBOTS_MISSING: "easy", AIREADY_ROBOTS_BLOCKS_AI: "easy", AIREADY_SITEMAP_MISSING: "easy", AIREADY_SITEMAP_NOT_IN_ROBOTS: "easy",
     CANNIBALIZATION: "hard", INTERNAL_LINK_OPP: "easy",
     PERF_RENDER_BLOCKING: "hard", PERF_IMAGE_OPT: "med", PERF_UNMINIFIED: "med", PERF_TEXT_COMPRESSION: "easy", PERF_TOTAL_WEIGHT: "hard",
@@ -216,6 +217,8 @@ export function fixKindOf(code: string, ai: RenderedFinding["ai"]): { kind: FixK
             return { kind: "connect" }; // open Settings → Integrations
         case "CANNIBALIZATION":
             return { kind: "cannibalization" };
+        case "LINK_INTERNAL_NOFOLLOW":
+            return { kind: "editor" }; // one deterministic fix per page (also offered as a batch)
         case "THIN_CONTENT": case "READABILITY_HARD": case "DUPLICATE_CONTENT": case "H1_MISSING": case "H1_MULTIPLE": case "HEADING_SKIP": case "TECH_NOINDEX": case "TECH_CANONICAL_MISSING":
             return { kind: "editor" }; // content / on-page edits happen in the block editor
         case "TECH_PAGE_UNREACHABLE": case "PSI_UNAVAILABLE":

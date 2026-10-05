@@ -32,6 +32,8 @@ export type ParseContext = {
     altFor?: AltLookup;
     /** The workspace has a site URL, so the live page is the source of truth. */
     hasSite?: boolean;
+    /** The site's host, so absolute links to it count as internal. */
+    siteHost?: string | null;
     /** What was read from the live page; null/absent when not fetched. */
     live?: LiveFacts | null;
     /** Titles of the entries this one references, by field name (lowercased), for
@@ -61,7 +63,7 @@ export function entryToPageInput(entry: EntryLike, ctx: ParseContext = {}): Page
     // as the level-1 heading and only treat in-content headings as H2+ structure.
     const pageTitle = str(d.title) || str(entry.title);
     // Canonical content across body + components + dynamic-zone sections.
-    const c = entryToCanonicalContent(entry, { altFor: ctx.altFor });
+    const c = entryToCanonicalContent(entry, { altFor: ctx.altFor, siteHost: ctx.siteHost });
     const content = {
         url: ctx.path ?? (entry.slug ? `/${entry.slug}` : undefined),
         focusKeyword: str(d.focusKeyword) || undefined,
@@ -71,6 +73,7 @@ export function entryToPageInput(entry: EntryLike, ctx: ParseContext = {}): Page
         ],
         images: c.images,
         internalLinkCount: c.internalLinkCount,
+        internalNofollow: c.internalNofollow.length,
         bodyText: c.plainText,
         wordCount: c.wordCount,
     };

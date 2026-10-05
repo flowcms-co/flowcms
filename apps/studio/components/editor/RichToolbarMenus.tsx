@@ -7,6 +7,8 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { isInternalHref } from "@flowcms/shared/html";
+import { useWorkspace } from "@/lib/useWorkspace";
 import type { Editor } from "@tiptap/react";
 import { cn } from "@/lib/cn";
 import { EMOJIS, TEXT_COLORS } from "@/lib/tiptap";
@@ -23,6 +25,15 @@ const hrefForVisit = (raw: string) => (/^[a-z][\w+.-]*:|^\/\//i.test(raw) ? raw 
  * `activeClass` let the host match its own button styling; `iconClass` keeps the
  * glyphs the same size as the surrounding toolbar.
  */
+/** The target and rel a link is stored with. A link to the site itself (relative, or
+ *  on the workspace's site URL) gets neither. An external link gets only what the
+ *  author chose: a new tab adds the usual "noopener noreferrer" with it. */
+export function linkAttrs(href: string, siteUrl: string | null | undefined, opts: { newTab: boolean; nofollow: boolean }): { target: string | null; rel: string | null } {
+    if (isInternalHref(href, siteUrl)) return { target: null, rel: null };
+    const rel = [opts.newTab ? "noopener noreferrer" : "", opts.nofollow ? "nofollow" : ""].filter(Boolean).join(" ");
+    return { target: opts.newTab ? "_blank" : null, rel: rel || null };
+}
+
 export const LinkMenu = ({
     editor,
     iconClass = "h-4 w-4",
@@ -38,6 +49,11 @@ export const LinkMenu = ({
 }) => {
     const [open, setOpen] = useState(false);
     const [url, setUrl] = useState("");
+    // External links only, both off unless the author turns them on.
+    const [newTab, setNewTab] = useState(false);
+    const [nofollow, setNofollow] = useState(false);
+    const workspace = useWorkspace();
+    const internal = isInternalHref(url, workspace?.siteUrl);
     const inputRef = useRef<HTMLInputElement>(null);
     const active = editor.isActive("link");
 
@@ -47,7 +63,10 @@ export const LinkMenu = ({
     };
 
     const start = () => {
-        setUrl((editor.getAttributes("link").href as string) ?? "");
+        const cur = editor.getAttributes("link") as { href?: string; target?: string | null; rel?: string | null };
+        setUrl(cur.href ?? "");
+        setNewTab(cur.target === "_blank");
+        setNofollow(/\bnofollow\b/i.test(cur.rel ?? ""));
         change(true);
     };
 
@@ -60,7 +79,7 @@ export const LinkMenu = ({
 
     const apply = () => {
         const href = url.trim();
-        if (href) editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
+        if (href) editor.chain().focus().extendMarkRange("link").setLink({ href, ...linkAttrs(href, workspace?.siteUrl, { newTab, nofollow }) }).run();
         else editor.chain().focus().extendMarkRange("link").unsetLink().run();
         change(false);
     };
@@ -95,7 +114,7 @@ export const LinkMenu = ({
             {open && (
                 <>
                     <div className="fixed inset-0 z-20" onMouseDown={() => change(false)} aria-hidden />
-                    <div className="absolute left-0 top-full z-30 mt-1.5 flex w-[19rem] max-w-[78vw] items-center gap-0.5 rounded-xl border border-grey-light bg-white py-1 pl-3 pr-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:border-grey-light/10 dark:bg-dark-1">
+                    <div className="absolute left-0 top-full z-30 mt-1.5 flex w-[19rem] max-w-[78vw] flex-wrap items-center gap-0.5 rounded-xl border border-grey-light bg-white py-1 pl-3 pr-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:border-grey-light/10 dark:bg-dark-1">
                         <input
                             ref={inputRef}
                             type="url"
@@ -123,6 +142,18 @@ export const LinkMenu = ({
                         <button type="button" title="Remove link" disabled={!active} onMouseDown={(e) => { e.preventDefault(); remove(); }} className={cn(iconBtn, "hover:text-error")}>
                             <EditorIcon name="trash" className={iconClass} />
                         </button>
+                        {/* Links to another site can opt in to these; links to your own
+                            site never get them. Applied with the link (Enter or Apply). */}
+                        {!!url.trim() && !internal && (
+                            <div className="flex w-full basis-full items-center gap-4 border-t border-grey-light pb-1 pt-1.5 text-caption-2 text-grey dark:border-grey-light/10">
+                                <label className="inline-flex cursor-pointer items-center gap-1.5">
+                                    <input type="checkbox" checked={newTab} onChange={(e) => setNewTab(e.target.checked)} /> Open in new tab
+                                </label>
+                                <label className="inline-flex cursor-pointer items-center gap-1.5">
+                                    <input type="checkbox" checked={nofollow} onChange={(e) => setNofollow(e.target.checked)} /> nofollow
+                                </label>
+                            </div>
+                        )}
                     </div>
                 </>
             )}
