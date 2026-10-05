@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { runProgress, type RunState } from "@/lib/seoDash";
 import Link from "next/link";
 import Card from "@/components/ui/Card";
 import StatNumber from "@/components/motion/StatNumber";
@@ -34,7 +35,7 @@ type Kpi = {
 };
 
 /** The one issue total the Optimizer shows (`/seo/scan/issues`). */
-type IssuesTotal = { counts?: { total?: number } };
+type IssuesTotal = { counts?: { total?: number }; run?: RunState | null };
 
 /** What a tile shows: a pulse while loading, a dash when there is no number. */
 export const kpiDisplay = (value: number | null, loading: boolean): "loading" | "none" | number => (loading ? "loading" : value == null ? "none" : value);
@@ -49,10 +50,15 @@ const KpiStrip = () => {
     const { data: summary, loading, error } = useDashboard();
     // undefined = still loading, null = no data / no access / failed.
     const [seoIssues, setSeoIssues] = useState<number | null | undefined>(undefined);
+    // An audit in progress: the total covers only the pages checked so far.
+    const [seoRun, setSeoRun] = useState<RunState | null>(null);
 
     useEffect(() => {
         api<IssuesTotal>("/seo/scan/issues")
-            .then((d) => setSeoIssues(typeof d.counts?.total === "number" ? d.counts.total : null))
+            .then((d) => {
+                setSeoIssues(typeof d.counts?.total === "number" ? d.counts.total : null);
+                setSeoRun(d.run ?? null);
+            })
             .catch(() => setSeoIssues(null));
     }, []);
 
@@ -92,6 +98,9 @@ const KpiStrip = () => {
 
                                 {/* Mobile: label sits under the number (the row is too narrow at 2-up). */}
                                 <span className="mt-1.5 min-w-0 truncate text-[0.8125rem] font-semibold text-black sm:hidden dark:text-white">{k.label}</span>
+                                {k.key === "seo" && runProgress(seoRun) && (
+                                    <span role="status" className="mt-1.5 min-w-0 truncate text-caption-2 text-grey">{runProgress(seoRun)}</span>
+                                )}
                             </Card>
                         </Link>
                     );

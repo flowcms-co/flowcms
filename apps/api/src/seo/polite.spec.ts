@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { HostGate, clampRps, isTransient, politeRequest, rateLimitOf, retryAfterMs, type Clock, type Rate } from "./polite";
-import { auditSummary } from "./audit/seo-job.handlers";
+import { HostGate, Stopped, clampRps, fetchTarget, isFetchPrefix, isTransient, maskPrefix, politeRequest, rateLimitOf, realUrl, retryAfterMs, type Clock, type Rate } from "./polite";
+import { auditSummary, waitingNote } from "./audit/seo-job.handlers";
 import { LIVE, make, page } from "./audit/audit.harness";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -36,12 +36,13 @@ function virtualClock() {
  *  in the trailing 60 seconds. `limitAt` lets the limit change as the run goes on. */
 function rateLimitedServer(clock: Pick<Clock, "now">, limitAt: (served: number) => number = () => 120) {
     const window: number[] = [];
-    const stats = { ok: 0, refused: 0, peakPerMinute: 0, okTimes: [] as number[] };
+    const stats = { ok: 0, refused: 0, peakPerMinute: 0, okTimes: [] as number[], refusedTimes: [] as number[] };
     const hit = async () => {
         const now = clock.now();
         while (window.length && window[0] <= now - 60_000) window.shift();
         if (window.length >= limitAt(stats.ok)) {
             stats.refused++;
+            stats.refusedTimes.push(now);
             return { status: 429, retryAfter: window[0] + 60_000 - now };
         }
         window.push(now);
@@ -60,7 +61,9 @@ function auditAgainst(n: number, rate: Rate, limitAt?: (served: number) => numbe
     const gate = new HostGate(clock);
     // Spread over small page types, so every page is fetched (no type is big enough to sample).
     const pages = Array.from({ length: n }, (_, i) => page(`p${String(i).padStart(4, "0")}`, `/p${i}`, {}, { typeId: `t${i % 10}` }));
-    const h = make({ pages, site: "https://x.com", rate, live: async (_url, r) => ({ ...LIVE, ...(await politeRequest(gate, "x.com", r, server.hit)) }) });
+    // The real service reports the gate's hold as a wall-clock time; map virtual time onto it.
+    const pausedUntil = () => { const until = gate.pausedUntil("x.com", rate); return until ? new Date(Date.now() + (until - clock.t)) : null; };
+    const h = make({ pages, site: "https://x.com", rate, pausedUntil, live: async (_url, r) => ({ ...LIVE, ...(await politeRequest(gate, "x.com", r, server.hit)) }) });
     return { ...h, clock, server, gate };
 }
 const codesIn = (ledger: any[]) => new Set(ledger.flatMap((row) => (row.l1Findings ?? []).map((f: any) => f.code)));
@@ -76,35 +79,68 @@ describe("polite crawling against a site that 429s above 120 requests per minute
         expect(ledger).toHaveLength(300);
     });
 
-    it("allowed to adapt, it speeds up, backs off on 429, resumes, and records no finding for a refused page", async () => {
-        const { audit, server, ledger, gate, clock } = auditAgainst(600, { start: 1, max: 10 });
-        const progress: { done: number; notChecked: number }[] = [];
-        const r = await clock.run(audit.auditWorkspace("w", (p) => void progress.push(p)));
-        expect(server.stats.refused).toBeGreaterThan(0); // it found the limit
+    /** Refusals more than 10 seconds apart are separate events. */
+    const events = (times: number[]) => times.filter((t, i) => i === 0 || t - times[i - 1] > 10_000).length;
+
+    it("a 1,500-page run is refused at most once, stays under the learned ceiling afterwards, and fails no page", async () => {
+        const learned: Record<string, number> = {};
+        const rate: Rate = { start: 1, max: 10, onLearn: (host, rps) => void (learned[host] = rps) };
+        const { audit, server, ledger, gate, clock } = auditAgainst(1500, rate);
+        const r = await clock.run(audit.auditWorkspace("w"));
+        expect(events(server.stats.refusedTimes)).toBe(1); // it found the limit once, and did not probe again
         expect(server.stats.peakPerMinute).toBeLessThanOrEqual(120);
-        // After honouring Retry-After every page ended up checked: none left behind.
-        expect(r).toMatchObject({ scanned: 600, fetched: 600, notChecked: 0 });
-        expect(progress.at(-1)).toMatchObject({ done: 600, notChecked: 0 });
-        // A 429 never became a finding, and the rate ended below the maximum.
+        // The ceiling it learned is below what the site allows (2 a second), and was reported for storing.
+        const ceiling = gate.ceilingOf("x.com", rate)!;
+        expect(ceiling).toBeLessThan(2);
+        expect(learned["x.com"]).toBeCloseTo(ceiling);
+        // After the refusal it never ran faster than that ceiling.
+        const after = server.stats.okTimes.filter((t) => t > server.stats.refusedTimes[0]);
+        for (let i = 60; i < after.length; i += 60) expect(60 / ((after[i] - after[i - 60]) / 1000)).toBeLessThanOrEqual(ceiling * 1.05);
+        // Every page was checked: refusals were retried, none counted as failed.
+        expect(r).toMatchObject({ scanned: 1500, fetched: 1500, notChecked: 0, failed: 0 });
         expect(codesIn(ledger).has("TECH_PAGE_UNREACHABLE")).toBe(false);
         expect(ledger.every((row) => !row.live?.notChecked)).toBe(true);
-        expect(gate.rateOf("x.com", { start: 1, max: 10 })).toBeLessThan(10);
+    });
+
+    it("a later run starts below the stored ceiling and is not refused at all", async () => {
+        const { audit, server, clock } = auditAgainst(600, { start: 1, max: 10, learned: { "x.com": 1.4 } });
+        const r = await clock.run(audit.auditWorkspace("w"));
+        expect(server.stats.refused).toBe(0);
+        expect(r).toMatchObject({ fetched: 600, failed: 0 });
     });
 
     it("when the site tightens its limit mid-run, the rate drops and no page is misreported", async () => {
         // 300 a minute for the first 400 pages, then 30 a minute.
-        const { audit, server, ledger, clock } = auditAgainst(700, { start: 1, max: 10 }, (served) => (served < 400 ? 300 : 30));
+        const { audit, server, ledger, clock } = auditAgainst(900, { start: 1, max: 10 }, (served) => (served < 400 ? 300 : 30));
         const r = await clock.run(audit.auditWorkspace("w"));
         const perMinute = (from: number, to: number) => {
             const t = server.stats.okTimes.slice(from, to);
             return (t.length - 1) / ((t[t.length - 1] - t[0]) / 60_000);
         };
-        expect(perMinute(100, 400)).toBeGreaterThan(60); // faster than the 60 a minute it started at
-        expect(perMinute(450, 700)).toBeLessThanOrEqual(31); // and settled under the new limit
-        expect(r).toMatchObject({ scanned: 700, fetched: 700, notChecked: 0, failed: 0 });
-        expect(ledger).toHaveLength(700);
+        expect(perMinute(200, 400)).toBeGreaterThan(60); // faster than the 60 a minute it started at
+        expect(perMinute(750, 900)).toBeLessThanOrEqual(31); // and settled under the new limit
+        expect(r).toMatchObject({ scanned: 900, fetched: 900, notChecked: 0, failed: 0 });
+        expect(ledger).toHaveLength(900);
         expect(codesIn(ledger).has("TECH_PAGE_UNREACHABLE")).toBe(false);
         expect(ledger.every((row) => row.live?.status === 200 && row.fetchedAt)).toBe(true);
+    });
+
+    it("a cancel issued while waiting for the site stops the job within one second", async () => {
+        // 5 a minute: the run is refused almost at once and has to wait most of a minute.
+        const { audit, server, clock } = auditAgainst(40, { start: 1, max: 10 }, () => 5);
+        let cancelledAt = 0;
+        const progress: { waitingSeconds?: number }[] = [];
+        const run = audit.auditWorkspace("w", (p) => void progress.push(p));
+        void clock.sleep(20_000).then(() => { cancelledAt = clock.t; return audit.control("w", "cancel"); });
+        const r = await clock.run(run);
+        expect(server.stats.refused).toBeGreaterThan(0);
+        expect(cancelledAt).toBe(20_000);
+        expect(clock.t - cancelledAt).toBeLessThanOrEqual(1000);
+        expect(r).toMatchObject({ cancelled: true, failed: 0 });
+        expect(r.fetched).toBeLessThan(40);
+        // While it waited, it said so.
+        expect(progress.some((p) => (p.waitingSeconds ?? 0) > 0)).toBe(true);
+        expect(waitingNote(40)).toBe("Waiting, the site asked us to slow down (resumes in 40s)");
     });
 
     it("marks pages 'not checked, rate limited' when the site keeps refusing, and says so in the summary", async () => {
@@ -147,22 +183,50 @@ describe("HostGate", () => {
         expect(clock.t).toBe(31_000);
     });
 
-    it("speeds up gradually while healthy, halves on a refusal, and never passes the maximum", () => {
+    it("climbs 10% per 30 healthy responses, never past the maximum", () => {
         const gate = new HostGate(virtualClock());
-        const rate: Rate = { start: 1, max: 3 };
-        for (let i = 0; i < 20; i++) gate.ok("a.com", rate);
-        expect(gate.rateOf("a.com", rate)).toBe(2); // +0.5 per 10 healthy responses
-        for (let i = 0; i < 200; i++) gate.ok("a.com", rate);
-        expect(gate.rateOf("a.com", rate)).toBe(3);
-        gate.backoff("a.com", undefined, rate);
-        expect(gate.rateOf("a.com", rate)).toBe(1.5);
+        const rate: Rate = { start: 1, max: 1.3 };
+        for (let i = 0; i < 29; i++) gate.ok("a.com", rate);
+        expect(gate.rateOf("a.com", rate)).toBe(1);
+        gate.ok("a.com", rate);
+        expect(gate.rateOf("a.com", rate)).toBeCloseTo(1.1);
+        for (let i = 0; i < 300; i++) gate.ok("a.com", rate);
+        expect(gate.rateOf("a.com", rate)).toBe(1.3);
     });
 
-    it("doubles the pause when the host gives no Retry-After, and resets on success", () => {
-        const gate = new HostGate(virtualClock());
-        expect([gate.backoff("a.com"), gate.backoff("a.com"), gate.backoff("a.com")]).toEqual([5000, 10000, 20000]);
-        gate.ok("a.com");
-        expect(gate.backoff("a.com")).toBe(5000);
+    it("learns a ceiling at 70% of the refused rate, halves once, and waits a window before climbing again", async () => {
+        const clock = virtualClock();
+        const gate = new HostGate(clock);
+        const learned: number[] = [];
+        const rate: Rate = { start: 4, max: 10, onLearn: (_h, rps) => void learned.push(rps) };
+        expect(gate.backoff("a.com", undefined, rate)).toBe(60_000); // no Retry-After: one window, not a growing pause
+        // The other requests in flight are refused too: same event, nothing more happens.
+        clock.t += 2000;
+        gate.backoff("a.com", undefined, rate);
+        gate.backoff("a.com", undefined, rate);
+        expect(gate.rateOf("a.com", rate)).toBe(2);
+        expect(gate.ceilingOf("a.com", rate)).toBeCloseTo(2.8);
+        expect(learned).toEqual([expect.closeTo(2.8)]);
+        // Healthy again, but not for a full minute yet: no speeding up.
+        for (let i = 0; i < 60; i++) gate.ok("a.com", rate);
+        expect(gate.rateOf("a.com", rate)).toBe(2);
+        clock.t += 61_000;
+        for (let i = 0; i < 600; i++) gate.ok("a.com", rate);
+        expect(gate.rateOf("a.com", rate)).toBeCloseTo(2.8); // back up to the ceiling, never past it
+        // A new maximum or fetch path voids what was learned.
+        expect(gate.ceilingOf("a.com", { ...rate, epoch: "changed" })).toBeUndefined();
+    });
+
+    it("a wait gives up within a slice when the run is stopped", async () => {
+        const clock = virtualClock();
+        const gate = new HostGate(clock);
+        let stop = false;
+        const rate: Rate = { start: 1, max: 1, stop: () => stop };
+        gate.backoff("a.com", 300_000, rate);
+        const waiting = gate.take("a.com", rate).then(() => "sent", (e) => (e instanceof Stopped ? "stopped" : "error"));
+        void clock.sleep(7000).then(() => void (stop = true));
+        expect(await clock.run(waiting)).toBe("stopped");
+        expect(clock.t).toBeLessThanOrEqual(7500);
     });
 
     it("stays under an advertised rate limit, and waits for the reset when none is left", async () => {
@@ -188,5 +252,32 @@ describe("HostGate", () => {
         expect([clampRps(undefined), clampRps(50), clampRps(0.01), clampRps(2)]).toEqual([1, 10, 0.1, 2]);
         expect([429, 500, 503, 0].every(isTransient)).toBe(true);
         expect([200, 304, 403, 404].some(isTransient)).toBe(false);
+    });
+});
+
+describe("audit fetch prefix helpers", () => {
+    const PREFIX = "/_audit/3f9c0a7e";
+
+    it("validates the prefix", () => {
+        expect([PREFIX, "/a", "/a.b/c_d~e-f"].every(isFetchPrefix)).toBe(true);
+        expect(["", "audit/key", "/_audit/key/", "/a?x=1", "/a#b", "/a b", "/a//b", "/"].some(isFetchPrefix)).toBe(false);
+    });
+
+    it("requests origin + prefix + path, keeping the query string, and leaves URLs alone when off", () => {
+        expect(fetchTarget("https://example.com/services/fire?utm=1", PREFIX)).toBe(`https://example.com${PREFIX}/services/fire?utm=1`);
+        expect(fetchTarget("https://example.com/", PREFIX)).toBe(`https://example.com${PREFIX}/`);
+        expect(fetchTarget("https://example.com/services/fire?utm=1")).toBe("https://example.com/services/fire?utm=1");
+    });
+
+    it("reads a redirect that carries the prefix as the real URL, and leaves one that left it", () => {
+        expect(realUrl(`https://example.com${PREFIX}/new-path`, PREFIX)).toBe("https://example.com/new-path");
+        expect(realUrl(`https://example.com${PREFIX}`, PREFIX)).toBe("https://example.com/");
+        expect(realUrl("https://example.com/login", PREFIX)).toBe("https://example.com/login");
+        expect(realUrl(`https://example.com${PREFIX}x/other`, PREFIX)).toBe(`https://example.com${PREFIX}x/other`);
+    });
+
+    it("masks the key for display", () => {
+        expect(maskPrefix(PREFIX)).toBe("/_audit/••••");
+        expect(maskPrefix(PREFIX)).not.toContain("3f9c");
     });
 });

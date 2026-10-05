@@ -12,7 +12,7 @@ import { SitePagesService, absoluteUrl } from "./site-pages.service";
 import { sitemapLastmods, crawlSeeds, mapLimit, parsePsi, pctChange, periods, psiReason, psiUrl, singleFlight, sitemapLocs, speedScore, weightedCtr, weightedPosition, type PsiResult } from "./seo-math";
 import type { LiveFacts } from "./audit/audit-engine";
 import { rankPages } from "./site-pages.service";
-import { HostGate, DEFAULT_RATE, politeRequest, rateLimitOf, retryAfterMs, type Rate, type RateLimit } from "./polite";
+import { HostGate, DEFAULT_RATE, fetchTarget, politeRequest, rateLimitOf, realUrl, retryAfterMs, type Rate, type RateLimit } from "./polite";
 import { navHrefs, rankSignal, toPaths } from "./audit/indexing";
 
 /** The crawler identifies itself with this user agent. Sites with bot or geo rules
@@ -837,32 +837,98 @@ export class SeoService {
     private fetchHtml(url: string, rate: Rate = DEFAULT_RATE, validators?: { etag?: string; lastModified?: string }): Promise<FetchedHtml> {
         let host = url;
         try { host = new URL(url).host; } catch { /* fetched and reported as unreachable below */ }
-        return politeRequest(this.gate, host, rate, () => this.fetchHtmlNow(url, validators));
+        return politeRequest(this.gate, host, rate, () => this.fetchHtmlNow(url, validators, rate.prefix));
     }
 
-    private async fetchHtmlNow(url: string, validators?: { etag?: string; lastModified?: string }): Promise<FetchedHtml> {
+    /** When requests to a site resume, while it is held after the site refused. */
+    pausedUntil(site: string, rate: Rate): Date | null {
+        try {
+            const until = this.gate.pausedUntil(new URL(site).host, rate);
+            return until ? new Date(until) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** The ceiling learned for a site's host from its refusals, if any. */
+    learnedCeiling(site: string, rate: Rate): number | null {
+        try { return this.gate.ceilingOf(new URL(site).host, rate) ?? null; } catch { return null; }
+    }
+
+    /** Whether the site still serves pages through the audit fetch prefix: the
+     *  homepage is requested through it. Remembered for half a minute. */
+    async prefixAccepted(site: string, rate: Rate): Promise<boolean> {
+        if (!rate.prefix) return true;
+        const key = `${site}|${rate.epoch}`;
+        const hit = this.prefixChecks.get(key);
+        if (hit && Date.now() - hit.at < 30_000) return hit.ok;
+        const home = await this.fetchHtml(`${site.replace(/\/+$/, "")}/`, rate);
+        // A refusal says nothing either way; only a clear "not here" rejects it.
+        const ok = home.status !== 404 && home.status !== 403 && home.status !== 401;
+        this.prefixChecks.set(key, { at: Date.now(), ok });
+        return ok;
+    }
+    private readonly prefixChecks = new Map<string, { at: number; ok: boolean }>();
+
+    /** The "Test" button beside the audit fetch prefix: the homepage fetched
+     *  directly and through the prefix, with both status codes and whether the
+     *  titles match. The prefix itself is never part of the result. */
+    async testFetchPrefix(workspaceId: string, candidate?: string) {
+        const site = await this.siteUrlFor(workspaceId);
+        if (!site) return { ok: false, message: "Set the site URL first." };
+        const stored = await this.sitePages.crawlRate(workspaceId);
+        const prefix = candidate ?? stored.prefix;
+        if (!prefix) return { ok: false, message: "Enter an audit fetch prefix to test." };
+        const home = `${site.replace(/\/+$/, "")}/`;
+        const title = (f: FetchedHtml) => (f.html ? this.parsePage(home, f.html).title : "");
+        const [direct, through] = [await this.fetchHtmlNow(home), await this.fetchHtmlNow(home, undefined, prefix)];
+        const titlesMatch = direct.status === 200 && through.status === 200 && title(direct) === title(through);
+        const message =
+            through.status === 404 ? "The site answered 404 through the prefix: the key is wrong, or the prefix is not set up on the site."
+            : through.status === 403 || through.status === 401 ? `The site blocked the request through the prefix (HTTP ${through.status}).`
+            : through.status !== 200 ? `The site answered HTTP ${through.status || "no response"} through the prefix.`
+            : direct.status === 200 && !titlesMatch ? "Both requests worked, but the page titles differ: the prefix is not serving the same page."
+            : "The prefix works: the homepage is served through it.";
+        return { ok: through.status === 200 && (direct.status !== 200 || titlesMatch), direct: { status: direct.status }, prefixed: { status: through.status }, titlesMatch, message };
+    }
+
+    /** Fetch one page. `url` is the page's real URL and stays its identity; with an
+     *  audit fetch prefix the request goes to `origin + prefix + path` instead.
+     *  Redirects are followed by hand so a Location that carries the prefix is
+     *  understood as the real URL it stands for (and requested through the prefix
+     *  again), while a redirect that leaves the prefix is followed as it is. The
+     *  prefix never reaches the returned HTML, the result, or a log line. */
+    private async fetchHtmlNow(url: string, validators?: { etag?: string; lastModified?: string }, prefix?: string): Promise<FetchedHtml> {
         try {
             // Conditional request: a 304 costs the site almost nothing and us no parsing.
             const conditional: Record<string, string> = {};
             if (validators?.etag) conditional["If-None-Match"] = validators.etag;
             if (validators?.lastModified) conditional["If-Modified-Since"] = validators.lastModified;
-            // SSRF-guarded crawl of the user's own site; follow canonical/https
-            // redirects (each hop re-validated against private ranges). 8s timeout.
-            const res = await safeFetch(
-                url,
-                { headers: { "User-Agent": CRAWLER_UA, ...conditional } },
-                { timeoutMs: 8000, maxRedirects: 3 },
-            );
-            const ct = res.headers.get("content-type") ?? "";
-            const html = ct.includes("html") ? (await res.text()).slice(0, 600_000) : "";
-            // Only a 200 is a page: a 403/404/5xx body is an error page, not content.
-            return {
-                url, ok: res.status === 200, status: res.status, html,
-                retryAfter: retryAfterMs(res.headers.get("retry-after"), Date.now()),
-                rateLimit: rateLimitOf((n) => res.headers.get(n), Date.now()),
-                etag: res.headers.get("etag") ?? undefined,
-                lastModified: res.headers.get("last-modified") ?? undefined,
-            };
+            const origin = new URL(url).origin;
+            let real = url;
+            for (let hop = 0; ; hop++) {
+                // SSRF-guarded: each hop is validated against private ranges. 8s timeout.
+                // The prefix only ever applies on the site's own origin.
+                const target = new URL(real).origin === origin ? fetchTarget(real, prefix) : real;
+                const res = await safeFetch(target, { headers: { "User-Agent": CRAWLER_UA, ...conditional } }, { timeoutMs: 8000, maxRedirects: 0 });
+                const location = res.status >= 300 && res.status < 400 && res.status !== 304 ? res.headers.get("location") : null;
+                if (location && hop < 3) {
+                    real = realUrl(new URL(location, target).toString(), prefix);
+                    continue;
+                }
+                const ct = res.headers.get("content-type") ?? "";
+                let html = ct.includes("html") ? (await res.text()).slice(0, 600_000) : "";
+                // Should the site echo the keyed path in a link or canonical, read it as the real one.
+                if (prefix && html.includes(prefix)) html = html.split(prefix).join("");
+                return {
+                    // Only a 200 is a page: a 403/404/5xx body is an error page, not content.
+                    url, ok: res.status === 200, status: res.status, html,
+                    retryAfter: retryAfterMs(res.headers.get("retry-after"), Date.now()),
+                    rateLimit: rateLimitOf((n) => res.headers.get(n), Date.now()),
+                    etag: res.headers.get("etag") ?? undefined,
+                    lastModified: res.headers.get("last-modified") ?? undefined,
+                };
+            }
         } catch {
             return { url, ok: false, status: 0, html: "" };
         }
@@ -958,6 +1024,9 @@ export class SeoService {
             description, descLen: description.length,
             canonical: !!canonical,
             canonicalHref: canonical,
+            // Self-canonical: resolved against the page's real URL (never the URL it
+            // was fetched through), ignoring a trailing slash.
+            canonicalSelf: !!canonical && (() => { try { const n = (u: string) => u.replace(/\/+$/, ""); return n(new URL(canonical, url).toString()) === n(url); } catch { return false; } })(),
             indexable, viewport, h1, ogTitle, ogImage,
             imgs: imgs.length, imgsNoAlt, internalLinks, words,
             ldTypes: [...new Set(ldTypes)], ldValid: ldCount === 0 ? true : ldValid, ldCount,

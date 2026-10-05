@@ -47,4 +47,11 @@ describe("KpiStrip", () => {
         expect(screen.getByRole("alert").textContent).toMatch(/Couldn.t load/);
         await waitFor(() => expect(screen.getByLabelText("SEO issues: 0")).toBeTruthy());
     });
+
+    it("shows the in-progress state on the SEO tile while an audit runs", async () => {
+        vi.mocked(api).mockResolvedValue({ counts: { total: 312 }, run: { done: 84, total: 1414, startedAt: "" } });
+        render(<KpiStrip />);
+        await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Audit in progress, 84 of 1,414"));
+        expect(screen.getByLabelText("SEO issues: 312")).toBeTruthy();
+    });
 });

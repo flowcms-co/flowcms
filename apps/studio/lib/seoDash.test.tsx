@@ -110,3 +110,17 @@ describe("audit runs and freshness", () => {
         expect(auditNotes({ counts: {} })).toEqual([]);
     });
 });
+
+describe("run progress on every issue card", () => {
+    it("has one short form, and says when the site asked the audit to wait", async () => {
+        const { runProgress, runBanner, waitingSeconds } = await import("./seoDash");
+        const NOW3 = Date.parse("2026-10-07T12:00:00Z");
+        const run = { done: 84, total: 1414, startedAt: "" };
+        expect(runProgress(run)).toBe("Audit in progress, 84 of 1,414");
+        expect(runProgress(null)).toBeNull();
+        const held = { ...run, waitingUntil: "2026-10-07T12:00:40Z" };
+        expect(waitingSeconds(held, NOW3)).toBe(40);
+        expect(runBanner(held, NOW3)).toContain("Waiting, the site asked us to slow down (resumes in 40s). 84 of 1,414 pages fetched.");
+        expect(waitingSeconds({ ...run, waitingUntil: "2026-10-07T11:59:00Z" }, NOW3)).toBeNull();
+    });
+});

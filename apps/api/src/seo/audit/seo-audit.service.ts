@@ -17,7 +17,7 @@ import {
 import { lookupCode } from "./seo-codes";
 import { entryToPageInput, type ParseContext } from "./parse-content";
 import { SitePagesService, absoluteUrl, rankPages, type SitePage } from "../site-pages.service";
-import { isTransient, type Rate } from "../polite";
+import { Stopped, isTransient, type Rate } from "../polite";
 import { SAMPLE_SIZE, estimateSeconds, fetchOrder, inferLive, planRun, templateOf, type Action, type PlanRow, type RunMode, type Sampled } from "./audit-plan";
 import { resolveTokens, str } from "./parse-content";
 import { RULES_VERSION, expectsArticle, hasArticle, noindexFindings, rankSignal, toPaths, withRules } from "./indexing";
@@ -40,7 +40,15 @@ const RETRY_ROUNDS = 3;
 
 /** Why a row holds no verdict: the live page answered 429/5xx or not at all. */
 export type NotChecked = { notChecked: "rate limited" | "server error" | "no response"; status: number };
-type RunState = { done: number; total: number; startedAt: string; mode?: RunMode; paused?: boolean };
+type RunState = { done: number; total: number; startedAt: string; mode?: RunMode; paused?: boolean; /** Held until then: the site asked us to slow down. */ waitingUntil?: string | null };
+
+/** The site stopped serving pages through the audit fetch prefix (a rotated key, a
+ *  removed rule). The run stops rather than record every page as broken. */
+export class PrefixRejected extends Error {
+    constructor() {
+        super("Audit fetch prefix is no longer accepted by the site");
+    }
+}
 const notCheckedOf = (status: number): NotChecked => ({ status, notChecked: status === 429 ? "rate limited" : status === 0 ? "no response" : "server error" });
 
 @Injectable()
@@ -168,6 +176,9 @@ export class SeoAuditService {
                 }
                 return { skipped: false, notChecked: true as const, status: got.status, findings: [] as Finding[] };
             }
+            // A page that used to load now 404s through the fetch prefix: before
+            // believing it, make sure the prefix itself still works.
+            if (rate.prefix && got.status === 404 && stored?.status === 200 && !(await this.seo.prefixAccepted(site, rate))) throw new PrefixRejected();
             // 304: unchanged since the stored copy, so its facts stand.
             live = got.status === 304 && stored?.status === 200 ? stored : got;
             fetchedAt = new Date();
@@ -257,9 +268,12 @@ export class SeoAuditService {
      * findings, are retried once the site allows, and any still refused are left
      * for the next run. The run can be paused or cancelled between pages.
      */
-    async auditWorkspace(workspaceId: string, onProgress?: (p: { done: number; total: number; notChecked: number }) => Promise<void> | void, mode: RunMode = "changed") {
+    async auditWorkspace(workspaceId: string, onProgress?: (p: { done: number; total: number; notChecked: number; failed: number; waitingSeconds?: number }) => Promise<void> | void, mode: RunMode = "changed") {
         const { pages, site, rowById, actions } = await this.planFor(workspaceId, mode);
-        const [altFor, rate, impressions] = await Promise.all([this.altLookup(workspaceId), this.sitePages.crawlRate(workspaceId), this.seo.impressionsByPath(workspaceId).catch(() => new Map<string, number>())]);
+        const [altFor, baseRate, impressions] = await Promise.all([this.altLookup(workspaceId), this.sitePages.crawlRate(workspaceId), this.seo.impressionsByPath(workspaceId).catch(() => new Map<string, number>())]);
+        // A wait at the rate gate (the site asked us to slow down) gives up within a
+        // second when the run is cancelled.
+        const rate: Rate = { ...baseRate, stop: async () => (await this.cache.get<string>(this.ctlKey(workspaceId))) === "cancel" };
         await this.prisma.pageAudit.deleteMany({ where: { workspaceId, task: PAGE, target: { notIn: pages.map((p) => p.id) } } });
         const of = (a: Action) => pages.filter((p) => actions.get(p.id) === a);
         let toFetch = fetchOrder(of("fetch"), rowById, impressions);
@@ -274,9 +288,13 @@ export class SeoAuditService {
             if (!force && done - lastSaved < 5 && done !== total) return;
             lastSaved = done;
             const paused = (await this.cache.get<string>(this.ctlKey(workspaceId))) === "pause";
-            await this.cache.set(this.runKey(workspaceId), { done, total, startedAt, mode, paused } satisfies RunState, 2 * 3600);
+            const waitingUntil = site ? this.seo.pausedUntil(site, rate)?.toISOString() ?? null : null;
+            await this.cache.set(this.runKey(workspaceId), { done, total, startedAt, mode, paused, waitingUntil } satisfies RunState, 2 * 3600);
         };
         await this.cache.del(this.ctlKey(workspaceId));
+        // With a fetch prefix, make sure the site still accepts it before asking
+        // for a thousand pages through it.
+        if (site && rate.prefix && toFetch.length && !(await this.seo.prefixAccepted(site, rate))) throw new PrefixRejected();
         await saveRun(true);
 
         const c = { changed: 0, unchanged: 0, escalated: 0, failed: 0, fetched: 0, reused: 0, inferred: 0 };
@@ -300,6 +318,7 @@ export class SeoAuditService {
 
         // 2. Fetch, most important pages first, retrying what the site refused.
         let cancelled = false;
+        let rejected = false;
         const fetchAll = async (list: SitePage[]) => {
             let queue = list;
             for (let round = 0; queue.length && round <= RETRY_ROUNDS && !cancelled; round++) {
@@ -307,13 +326,27 @@ export class SeoAuditService {
                 // The gate sets the pace; a few in flight lets a fast site be used.
                 await mapLimit(queue, 6, async (page) => {
                     if (cancelled || (cancelled = await this.stopRequested(workspaceId))) return;
-                    const r = await this.auditEntry(workspaceId, page.id, { page, site, altFor, rate }).catch(() => null);
-                    if (r && "notChecked" in r && r.notChecked) { refused.push(page); return; }
+                    const r = await this.auditEntry(workspaceId, page.id, { page, site, altFor, rate }).catch((e) => {
+                        // Cancelled while waiting for the site, or the fetch prefix stopped
+                        // working: stop the run. Neither says anything about this page.
+                        if (e instanceof Stopped || e instanceof PrefixRejected) cancelled = true;
+                        if (e instanceof PrefixRejected) rejected = true;
+                        return e instanceof Stopped || e instanceof PrefixRejected ? undefined : null;
+                    });
+                    if (r === undefined) return;
+                    if (r && "notChecked" in r && r.notChecked) {
+                        // Refused by the site's rate limit: retried, never a failed page.
+                        refused.push(page);
+                        const until = site ? this.seo.pausedUntil(site, rate) : null;
+                        await saveRun(true);
+                        await onProgress?.({ done, total, notChecked: refused.length, failed: c.failed, waitingSeconds: until ? Math.max(1, Math.ceil((until.getTime() - Date.now()) / 1000)) : undefined });
+                        return;
+                    }
                     tally(r);
                     if (r) c.fetched++;
                     done++;
                     await saveRun();
-                    await onProgress?.({ done, total, notChecked: refused.length });
+                    await onProgress?.({ done, total, notChecked: refused.length, failed: c.failed });
                 });
                 queue = refused;
             }
@@ -351,11 +384,12 @@ export class SeoAuditService {
             }
         }
 
-        await onProgress?.({ done: done + notChecked, total, notChecked });
+        await onProgress?.({ done, total, notChecked, failed: c.failed });
         await this.cache.del(this.runKey(workspaceId));
         await this.cache.del(this.ctlKey(workspaceId));
         await this.cache.del(this.issuesKey(workspaceId));
         toFetch = [];
+        if (rejected) throw new PrefixRejected();
         return { scanned: pages.length, checked: c.changed + c.unchanged, ...c, notChecked, cancelled, escalatedTypes, mode, live: !!site, rps: site ? this.seo.currentRate(site, rate) : null };
     }
 

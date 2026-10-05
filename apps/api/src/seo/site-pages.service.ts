@@ -3,6 +3,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { entryPath, isPageType } from "../content/route-path";
 import { fieldsOf } from "../content/entry-validation";
 import { placeholdersIn, resolvePlaceholders } from "../content/slug-pattern";
+import { createHash } from "node:crypto";
+import { decryptSecret } from "@flowcms/shared";
 import { DEFAULT_RATE, clampRps, type Rate } from "./polite";
 
 export type SitePage = {
@@ -88,9 +90,26 @@ export class SitePagesService {
 
     /** The rate the audit and crawler start at, and the most they may adapt up to. */
     async crawlRate(workspaceId: string): Promise<Rate> {
-        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { seoCrawlRps: true, seoCrawlMaxRps: true } });
+        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { seoCrawlRps: true, seoCrawlMaxRps: true, seoLearnedRate: true, seoFetchPrefixEnc: true } });
         const start = clampRps(ws?.seoCrawlRps);
-        return { start, max: Math.max(start, clampRps(ws?.seoCrawlMaxRps, DEFAULT_RATE.max)) };
+        const max = Math.max(start, clampRps(ws?.seoCrawlMaxRps, DEFAULT_RATE.max));
+        const prefix = ws?.seoFetchPrefixEnc ? decryptSecret(ws.seoFetchPrefixEnc) : undefined;
+        return {
+            start,
+            max,
+            prefix,
+            // A ceiling was learned for one maximum and one fetch path; either changing voids it.
+            epoch: `${max}|${ws?.seoFetchPrefixEnc ? createHash("sha256").update(ws.seoFetchPrefixEnc).digest("hex").slice(0, 8) : "direct"}`,
+            learned: (ws?.seoLearnedRate ?? undefined) as Record<string, number> | undefined,
+            onLearn: (host, rps) => void this.rememberCeiling(workspaceId, host, rps).catch(() => undefined),
+        };
+    }
+
+    /** Store the ceiling a host taught us, so later runs start below it. */
+    private async rememberCeiling(workspaceId: string, host: string, rps: number) {
+        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { seoLearnedRate: true } });
+        const learned = { ...((ws?.seoLearnedRate ?? {}) as Record<string, number>), [host]: Math.round(rps * 100) / 100 };
+        await this.prisma.workspace.update({ where: { id: workspaceId }, data: { seoLearnedRate: learned } });
     }
 
     /** Every page is re-verified against the live site within this many days. */

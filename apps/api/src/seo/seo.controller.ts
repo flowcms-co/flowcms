@@ -1,9 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from "@nestjs/common";
 import { IsArray, IsIn, IsObject, IsOptional, IsString } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { SeoService } from "./seo.service";
+import { isFetchPrefix } from "./polite";
+
+export const FETCH_PREFIX_RULE = "The audit fetch prefix must start with /, use only letters, digits, dots, dashes, underscores and slashes, and have no trailing slash, query string or spaces.";
 
 class SuggestMetaDto {
     @IsString() path!: string;
@@ -40,6 +43,10 @@ class KeywordResearchDto {
 
 class GenerateFileDto {
     @IsIn(["llms", "robots", "sitemap"]) kind!: "llms" | "robots" | "sitemap";
+}
+
+class FetchPrefixDto {
+    @IsOptional() @IsString() prefix?: string;
 }
 
 class ApplyLinkDto {
@@ -180,6 +187,15 @@ export class SeoController {
     @RequirePermissions(PERMISSIONS.AI_USE)
     aeoProbe(@CurrentUser() user: AuthUser) {
         return this.seo.aeoProbe(user.workspaceId, user.id);
+    }
+
+    /** Test the audit fetch prefix (the stored one, or a candidate before saving). */
+    @Post("fetch-prefix/test")
+    @RequirePermissions(PERMISSIONS.SEO_MANAGE)
+    testFetchPrefix(@CurrentUser() user: AuthUser, @Body() dto: FetchPrefixDto) {
+        const candidate = dto.prefix?.trim();
+        if (candidate && !isFetchPrefix(candidate)) throw new BadRequestException(FETCH_PREFIX_RULE);
+        return this.seo.testFetchPrefix(user.workspaceId, candidate || undefined);
     }
 
     @Post("generate-file")

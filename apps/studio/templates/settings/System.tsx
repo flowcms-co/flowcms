@@ -26,6 +26,12 @@ const System = () => {
     const [crawlRps, setCrawlRps] = useState("1");
     const [crawlMaxRps, setCrawlMaxRps] = useState("10");
     const [recheckDays, setRecheckDays] = useState("14");
+    // Audit fetch prefix: a secret. The stored value is never loaded, only its
+    // masked form; typing replaces it, and null means "leave it as it is".
+    const [prefixMasked, setPrefixMasked] = useState<string | null>(null);
+    const [prefix, setPrefix] = useState<string | null>(null);
+    const [prefixTest, setPrefixTest] = useState<{ ok: boolean; text: string } | null>(null);
+    const [testing, setTesting] = useState(false);
     const [authorMode, setAuthorMode] = useState<Workspace["authorMode"]>("creator");
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -43,6 +49,7 @@ const System = () => {
                 setCrawlRps(String(w.seoCrawlRps ?? 1));
                 setCrawlMaxRps(String(w.seoCrawlMaxRps ?? 10));
                 setRecheckDays(String(w.seoRecheckDays ?? 14));
+                setPrefixMasked(w.seoFetchPrefixMasked ?? null);
                 setAuthorMode(w.authorMode ?? "creator");
             })
             .catch(() => {});
@@ -51,13 +58,31 @@ const System = () => {
         };
     }, []);
 
+    // Fetch the homepage directly and through the prefix (the typed one, or the
+    // stored one) and say whether they match.
+    const testPrefix = async () => {
+        setTesting(true);
+        setPrefixTest(null);
+        try {
+            const r = await api<{ ok: boolean; message: string; direct?: { status: number }; prefixed?: { status: number } }>("/seo/fetch-prefix/test", { method: "POST", body: JSON.stringify(prefix?.trim() ? { prefix: prefix.trim() } : {}) });
+            const codes = r.direct && r.prefixed ? ` Direct: HTTP ${r.direct.status || "no response"}. Through the prefix: HTTP ${r.prefixed.status || "no response"}.` : "";
+            setPrefixTest({ ok: r.ok, text: `${r.message}${codes}` });
+        } catch (e) {
+            setPrefixTest({ ok: false, text: e instanceof ApiError ? e.message : "The test could not be run." });
+        } finally {
+            setTesting(false);
+        }
+    };
+
     const save = async () => {
         setSaving(true);
         setMsg(null);
         try {
-            await api("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), siteUrl: siteUrl.trim(), timezone, seoCrawlRps: Math.min(10, Math.max(0.1, Number(crawlRps) || 1)), seoCrawlMaxRps: Math.min(10, Math.max(0.1, Number(crawlMaxRps) || 10)), seoRecheckDays: Math.min(365, Math.max(1, Math.round(Number(recheckDays)) || 14)), authorMode }) });
+            const saved = await api<Workspace>("/workspace", { method: "PATCH", body: JSON.stringify({ name: name.trim(), previewUrl: previewUrl.trim(), siteUrl: siteUrl.trim(), timezone, seoCrawlRps: Math.min(10, Math.max(0.1, Number(crawlRps) || 1)), seoCrawlMaxRps: Math.min(10, Math.max(0.1, Number(crawlMaxRps) || 10)), seoRecheckDays: Math.min(365, Math.max(1, Math.round(Number(recheckDays)) || 14)), authorMode, ...(prefix !== null ? { seoFetchPrefix: prefix.trim() } : {}) }) });
             clearWorkspaceCache();
             setTimezoneInvalid(null);
+            setPrefixMasked(saved.seoFetchPrefixMasked ?? null);
+            setPrefix(null);
             setMsg({ ok: true, text: "Saved" });
         } catch (e) {
             setMsg({ ok: false, text: e instanceof ApiError ? e.message : "Could not save." });
@@ -119,6 +144,35 @@ const System = () => {
                         <input type="number" min={1} max={365} step={1} value={recheckDays} onChange={(e) => setRecheckDays(e.target.value)} className="flow-input" />
                     </Field>
                 </div>
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field label="Audit fetch prefix (optional)">
+                        <div className="flex gap-2">
+                            <input
+                                type="password"
+                                autoComplete="off"
+                                spellCheck={false}
+                                value={prefix ?? ""}
+                                onChange={(e) => { setPrefix(e.target.value); setPrefixTest(null); }}
+                                placeholder={prefixMasked ? `${prefixMasked} (set, type to replace)` : "/_audit/your-key"}
+                                className="flow-input grow"
+                            />
+                            <button type="button" onClick={() => void testPrefix()} disabled={testing || (!prefix?.trim() && !prefixMasked)} className="btn-secondary btn-md shrink-0 disabled:opacity-60">
+                                {testing ? "Testing…" : "Test"}
+                            </button>
+                            {prefixMasked && prefix === null && (
+                                <button type="button" onClick={() => { setPrefix(""); setPrefixTest(null); }} className="btn-secondary btn-md shrink-0">Clear</button>
+                            )}
+                        </div>
+                    </Field>
+                </div>
+                {prefix === "" && prefixMasked && <p className="mt-2 text-caption-2 text-grey">The prefix will be removed when you save.</p>}
+                {prefixTest && <p role="status" className={`mt-2 text-caption-2 ${prefixTest.ok ? "text-success" : "text-error"}`}>{prefixTest.text}</p>}
+                <p className="mt-2 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
+                    For sites whose host can only lift its rate limit for a path, not for a client. If your site serves the same pages
+                    under a keyed path (for example /_audit/your-key/services/page serves /services/page), enter that path here and the
+                    SEO audit, crawler and background check fetch pages through it. It is stored as a secret and never shown again.
+                    Reports, links and exports always use the real page URLs. PageSpeed, robots.txt and the sitemap are not affected.
+                </p>
                 {timezoneInvalid && (
                     <p role="alert" className="mt-2.5 rounded-xl border border-warning/40 bg-warning/[0.08] p-3 text-caption-2 text-black dark:text-white">
                         The saved time zone &ldquo;{timezoneInvalid}&rdquo; is not a valid zone, so dashboards are using UTC. Pick a zone and save.

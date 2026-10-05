@@ -8,6 +8,9 @@ import { toLowerId, normalizeFieldNames } from "../content/naming";
 import { pluralize } from "../content/pluralize";
 import { AUTHOR_MODES } from "../content/author";
 import { normalizeSiteUrl } from "../seo/site-pages.service";
+import { isFetchPrefix, maskPrefix } from "../seo/polite";
+import { Prisma } from "@flowcms/db";
+import { decryptSecret, encryptSecret } from "@flowcms/shared";
 
 class UpdateWorkspaceDto {
     @IsOptional() @IsString() name?: string;
@@ -25,6 +28,8 @@ class UpdateWorkspaceDto {
     @IsOptional() @IsNumber() @Min(0.1) @Max(10) seoCrawlRps?: number;
     @IsOptional() @IsNumber() @Min(0.1) @Max(10) seoCrawlMaxRps?: number;
     @IsOptional() @IsInt() @Min(1) @Max(365) seoRecheckDays?: number;
+    /** Write-only secret: a new value replaces it, "" clears it. Never returned. */
+    @IsOptional() @IsString() seoFetchPrefix?: string;
     /** IANA time zone the dashboards measure "today" and weeks in, e.g. "Asia/Kolkata". */
     @IsOptional() @IsString() timezone?: string;
     /** Fallback weekly content goal per writer (when no personal goal is set). */
@@ -52,7 +57,7 @@ const STARTERS: Record<string, StarterType[]> = {
     blank: [],
 };
 
-const shape = (w: { id: string; name: string; slug: string; locales: unknown; defaultLocale: string; onboardedAt: Date | null; jsonLdOrg?: unknown; previewUrl?: string | null; siteUrl?: string | null; seoCrawlRps?: number; seoCrawlMaxRps?: number; seoRecheckDays?: number; timezone?: string; authorMode?: string; defaultWeeklyGoal?: number; brandName?: string | null; brandLogoUrl?: string | null; brandAccent?: string | null }) => ({
+const shape = (w: { id: string; name: string; slug: string; locales: unknown; defaultLocale: string; onboardedAt: Date | null; jsonLdOrg?: unknown; previewUrl?: string | null; siteUrl?: string | null; seoCrawlRps?: number; seoCrawlMaxRps?: number; seoRecheckDays?: number; seoFetchPrefixEnc?: string | null; timezone?: string; authorMode?: string; defaultWeeklyGoal?: number; brandName?: string | null; brandLogoUrl?: string | null; brandAccent?: string | null }) => ({
     id: w.id,
     name: w.name,
     slug: w.slug,
@@ -70,6 +75,10 @@ const shape = (w: { id: string; name: string; slug: string; locales: unknown; de
     seoCrawlRps: w.seoCrawlRps ?? 1,
     seoCrawlMaxRps: w.seoCrawlMaxRps ?? 10,
     seoRecheckDays: w.seoRecheckDays ?? 14,
+    // The audit fetch prefix holds a secret: only whether one is set, and a masked
+    // form, ever leave the API.
+    seoFetchPrefixSet: !!w.seoFetchPrefixEnc,
+    seoFetchPrefixMasked: w.seoFetchPrefixEnc ? maskPrefix(decryptSecret(w.seoFetchPrefixEnc)) : null,
     authorMode: w.authorMode ?? "creator",
     defaultWeeklyGoal: w.defaultWeeklyGoal ?? 3,
     // White-label branding (applied client-side only when licensed for white_label).
@@ -109,6 +118,14 @@ export class WorkspaceController {
         }
         if (dto.seoCrawlRps !== undefined) data.seoCrawlRps = dto.seoCrawlRps;
         if (dto.seoCrawlMaxRps !== undefined) data.seoCrawlMaxRps = dto.seoCrawlMaxRps;
+        if (dto.seoFetchPrefix !== undefined) {
+            const prefix = dto.seoFetchPrefix.trim();
+            // The message never repeats the value: it is a secret.
+            if (prefix && !isFetchPrefix(prefix)) throw new BadRequestException("The audit fetch prefix must start with /, use only letters, digits, dots, dashes, underscores and slashes, and have no trailing slash, query string or spaces.");
+            data.seoFetchPrefixEnc = prefix ? encryptSecret(prefix) : null;
+        }
+        // The crawl-rate ceiling was learned for one maximum and one fetch path.
+        if (dto.seoCrawlMaxRps !== undefined || dto.seoFetchPrefix !== undefined) data.seoLearnedRate = Prisma.DbNull;
         if (dto.seoRecheckDays !== undefined) data.seoRecheckDays = dto.seoRecheckDays;
         if (dto.timezone !== undefined) {
             if (!isTimeZone(dto.timezone)) throw new BadRequestException(`"${dto.timezone}" is not a time zone. Pick one from the list, for example Europe/London.`);

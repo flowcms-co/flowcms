@@ -11,6 +11,9 @@ import type { RunMode } from "./audit-plan";
 
 type BatchPayload = { fix: string; key: string; pages: { id: string; url: string | null }[] };
 
+/** Shown on the job while the audit is holding off at the site's request. */
+export const waitingNote = (seconds: number) => `Waiting, the site asked us to slow down (resumes in ${seconds}s)`;
+
 /** The audit job's one-line result: pages checked, skipped (unchanged) and failed. */
 export function auditSummary(r: { scanned: number; checked: number; unchanged: number; notChecked: number; failed: number; fetched?: number; inferred?: number; cancelled?: boolean }): string {
     const parts = [`Checked ${r.checked} of ${r.scanned} page${r.scanned === 1 ? "" : "s"}`, `${r.unchanged} unchanged`];
@@ -67,10 +70,12 @@ export class SeoJobHandlers implements OnModuleInit {
     private async auditPages(job: JobRow, helpers: JobHelpers) {
         let total = 0;
         const mode = (job.payload as { mode?: RunMode } | null)?.mode ?? "changed";
-        const r = await this.audit.auditWorkspace(job.workspaceId, async ({ done, total: n, notChecked }) => {
+        const r = await this.audit.auditWorkspace(job.workspaceId, async ({ done, total: n, failed, waitingSeconds }) => {
             // The total grows if a sampled page type has to be checked in full.
             if (total !== n) await helpers.setTotal((total = n));
-            if (done % 5 === 0 || done === n) await helpers.progress(done - notChecked, notChecked, notChecked ? "Rate limited by the site, will retry" : undefined);
+            // Pages the site's rate limit refused are retried; they are not failures.
+            if (waitingSeconds) await helpers.progress(done, failed, waitingNote(waitingSeconds));
+            else if (done % 5 === 0 || done === n) await helpers.progress(done, failed);
         }, mode);
         return { summary: auditSummary(r), result: r };
     }

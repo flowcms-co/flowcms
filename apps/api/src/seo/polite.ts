@@ -1,17 +1,35 @@
 /**
  * Polite fetching of a customer's live site: a per-host gate whose rate adapts to
- * the site. It starts at the workspace's configured rate, speeds up gradually
- * while responses stay healthy, halves on any 429/503, honours Retry-After and
- * stays under advertised RateLimit headers, and never exceeds the workspace
- * maximum. Time is injected so the behaviour is testable without waiting.
+ * the site. It starts at the workspace's configured rate and climbs slowly while
+ * responses stay healthy. Most limits are per-minute windows that give no warning
+ * until they are spent, so the first refusal teaches the gate where the limit is:
+ * it remembers a ceiling below that rate and never probes past it again. It
+ * honours Retry-After and advertised RateLimit headers, and never exceeds the
+ * workspace maximum. Time is injected so the behaviour is testable without waiting.
  * Pure: no Nest/Prisma/network.
  */
 
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
 const realClock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
 
-/** Requests per second: where a host starts, and the most it may ever be sent. */
-export type Rate = { start: number; max: number };
+/** How a site may be requested. */
+export type Rate = {
+    /** Requests per second a host starts at. */
+    start: number;
+    /** The most it may ever be sent. */
+    max: number;
+    /** Ceilings learned on earlier runs, by host: start below them, don't probe again. */
+    learned?: Record<string, number>;
+    /** Called when a host's ceiling is learned or lowered, so it can be stored. */
+    onLearn?: (host: string, rps: number) => void;
+    /** Changes when what was learned no longer applies (a new maximum, a different
+     *  fetch path): the host's learned state is then dropped. */
+    epoch?: string;
+    /** Checked while waiting: true abandons the wait (a cancelled run). */
+    stop?: () => boolean | Promise<boolean>;
+    /** Secret path prefix live fetches go through (see fetchTarget). Never logged. */
+    prefix?: string;
+};
 export const DEFAULT_RATE: Rate = { start: 1, max: 10 };
 const MIN_RPS = 0.1;
 /** A workspace's requests-per-second setting, clamped to a sane range. */
@@ -23,6 +41,13 @@ export const clampRps = (v: unknown, fallback = DEFAULT_RATE.start): number => {
 /** A response that says "not now" rather than something about the page: rate
  *  limited, a server error, or no response at all. Never a page finding. */
 export const isTransient = (status: number) => status === 429 || status >= 500 || status === 0;
+
+/** A wait was abandoned because the run was cancelled. */
+export class Stopped extends Error {
+    constructor() {
+        super("stopped");
+    }
+}
 
 /** Retry-After (seconds, or an HTTP date) as milliseconds from `now`. */
 export function retryAfterMs(header: string | null | undefined, now: number): number | undefined {
@@ -48,66 +73,113 @@ export function rateLimitOf(get: (name: string) => string | null | undefined, no
     return { remaining, resetMs };
 }
 
-const BACKOFF_BASE_MS = 5_000;
+/** Most limits count requests per minute: wait one window out when the site gives
+ *  no Retry-After, and go a full window without a refusal before speeding up. */
+export const WINDOW_MS = 60_000;
+/** Refusals this close together are one event: the requests already in flight
+ *  when the window ran out. One halving, one pause. */
+const EVENT_MS = 10_000;
 /** Longest single pause. A host asking for more than this is left for a later run. */
 export const MAX_PAUSE_MS = 10 * 60_000;
-/** Speed up by this much after this many healthy responses in a row. */
-const STEP_RPS = 0.5;
-const STEP_EVERY = 10;
+/** Speed up by 10% after this many healthy responses in a row. */
+const STEP = 1.1;
+const STEP_EVERY = 30;
+/** After a refusal at rate r, never go above this share of r again. */
+const CEILING = 0.7;
+/** How often a wait checks whether the run was cancelled. */
+const SLICE_MS = 500;
+
+type HostState = { nextAt: number; rps?: number; healthy: number; ceiling?: number; refusedAt?: number; pausedUntil?: number; epoch?: string };
 
 export class HostGate {
-    private readonly nextAt = new Map<string, number>();
-    private readonly streak = new Map<string, number>();
-    private readonly rps = new Map<string, number>();
-    private readonly healthy = new Map<string, number>();
+    private readonly hosts = new Map<string, HostState>();
     constructor(private readonly clock: Clock = realClock) {}
+
+    private state(host: string, rate: Rate): HostState {
+        let s = this.hosts.get(host);
+        // A new maximum or fetch path: what was learned about this host is void.
+        if (!s || s.epoch !== rate.epoch) this.hosts.set(host, (s = { nextAt: 0, healthy: 0, epoch: rate.epoch }));
+        return s;
+    }
+
+    /** The ceiling learned for a host (this run or an earlier one), if any. */
+    ceilingOf(host: string, rate: Rate = DEFAULT_RATE): number | undefined {
+        return this.state(host, rate).ceiling ?? rate.learned?.[host];
+    }
 
     /** The rate currently used for a host. */
     rateOf(host: string, rate: Rate = DEFAULT_RATE): number {
-        return Math.min(rate.max, this.rps.get(host) ?? Math.min(rate.start, rate.max));
+        const cap = Math.min(rate.max, this.ceilingOf(host, rate) ?? Infinity);
+        return Math.max(MIN_RPS, Math.min(cap, this.state(host, rate).rps ?? rate.start));
     }
 
-    /** Wait for this host's next free slot, and reserve the one after it. */
+    /** When requests to this host resume, while it is being held after a refusal. */
+    pausedUntil(host: string, rate: Rate = DEFAULT_RATE): number | null {
+        const until = this.state(host, rate).pausedUntil ?? 0;
+        return until > this.clock.now() ? until : null;
+    }
+
+    /** Wait for this host's next free slot, and reserve the one after it. The wait
+     *  is taken in short slices, so a cancelled run stops within a second even in
+     *  the middle of a long pause (throws Stopped). */
     async take(host: string, rate: Rate = DEFAULT_RATE): Promise<void> {
+        const s = this.state(host, rate);
         const now = this.clock.now();
-        const at = Math.max(now, this.nextAt.get(host) ?? 0);
-        this.nextAt.set(host, at + 1000 / this.rateOf(host, rate));
-        if (at > now) await this.clock.sleep(at - now);
+        const at = Math.max(now, s.nextAt);
+        s.nextAt = at + 1000 / this.rateOf(host, rate);
+        for (let left = at - now; left > 0; left = at - this.clock.now()) {
+            if (await rate.stop?.()) throw new Stopped();
+            await this.clock.sleep(Math.min(SLICE_MS, left));
+        }
+        if (await rate.stop?.()) throw new Stopped();
     }
 
-    /** The host said slow down: halve its rate and hold every later request to it
-     *  for Retry-After, or 5s, 10s, 20s… (doubling per consecutive refusal) when it
-     *  gave none. Returns the pause applied. */
+    /** The host said slow down. The first refusal of an event halves the rate,
+     *  sets the ceiling to 70% of the rate that was refused, and holds every later
+     *  request for Retry-After, or for one window when it gave none. Further
+     *  refusals within the same few seconds are the same event: they only extend
+     *  the hold if the site asks for longer. Returns the pause applied. */
     backoff(host: string, retryAfter?: number, rate: Rate = DEFAULT_RATE): number {
-        const n = this.streak.get(host) ?? 0;
-        this.streak.set(host, n + 1);
-        this.healthy.set(host, 0);
-        this.rps.set(host, Math.max(MIN_RPS, this.rateOf(host, rate) / 2));
-        const pause = Math.min(MAX_PAUSE_MS, retryAfter ?? BACKOFF_BASE_MS * 2 ** n);
-        this.nextAt.set(host, Math.max(this.nextAt.get(host) ?? 0, this.clock.now() + pause));
+        const s = this.state(host, rate);
+        const now = this.clock.now();
+        const pause = Math.min(MAX_PAUSE_MS, retryAfter ?? WINDOW_MS);
+        const sameEvent = s.refusedAt !== undefined && now - s.refusedAt < EVENT_MS;
+        if (!sameEvent) {
+            const refused = this.rateOf(host, rate);
+            s.refusedAt = now;
+            s.healthy = 0;
+            s.ceiling = Math.max(MIN_RPS, Math.min(this.ceilingOf(host, rate) ?? Infinity, refused * CEILING));
+            s.rps = Math.max(MIN_RPS, refused / 2);
+            rate.onLearn?.(host, s.ceiling);
+        }
+        s.pausedUntil = Math.max(s.pausedUntil ?? 0, now + pause);
+        s.nextAt = Math.max(s.nextAt, s.pausedUntil);
         return pause;
     }
 
-    /** A healthy response: the back-off streak is over, and after enough of them in
-     *  a row the rate steps up, never past the workspace maximum. */
+    /** A healthy response. After enough of them in a row, and a full window since
+     *  the last refusal, the rate steps up 10%: never past the learned ceiling or
+     *  the workspace maximum. */
     ok(host: string, rate: Rate = DEFAULT_RATE): void {
-        this.streak.delete(host);
-        const n = (this.healthy.get(host) ?? 0) + 1;
-        this.healthy.set(host, n);
-        if (n % STEP_EVERY === 0) this.rps.set(host, Math.min(rate.max, this.rateOf(host, rate) + STEP_RPS));
+        const s = this.state(host, rate);
+        if (++s.healthy % STEP_EVERY !== 0) return;
+        if (s.refusedAt !== undefined && this.clock.now() - s.refusedAt < WINDOW_MS) return;
+        s.rps = this.rateOf(host, rate) * STEP;
     }
 
     /** Stay under what the site advertises: spread the remaining requests over the
      *  time until the window resets (with headroom), or wait for the reset when
      *  none are left. */
     limit(host: string, rl: RateLimit, rate: Rate = DEFAULT_RATE): void {
+        const s = this.state(host, rate);
         if (rl.remaining <= 0) {
-            this.nextAt.set(host, Math.max(this.nextAt.get(host) ?? 0, this.clock.now() + Math.min(MAX_PAUSE_MS, rl.resetMs)));
+            s.pausedUntil = Math.max(s.pausedUntil ?? 0, this.clock.now() + Math.min(MAX_PAUSE_MS, rl.resetMs));
+            s.nextAt = Math.max(s.nextAt, s.pausedUntil);
             return;
         }
         if (rl.resetMs <= 0) return;
         const ceiling = (rl.remaining / (rl.resetMs / 1000)) * 0.8;
-        if (ceiling < this.rateOf(host, rate)) this.rps.set(host, Math.max(MIN_RPS, ceiling));
+        if (ceiling < this.rateOf(host, rate)) s.rps = Math.max(MIN_RPS, ceiling);
     }
 }
 
@@ -120,4 +192,36 @@ export async function politeRequest<T extends { status: number; retryAfter?: num
     else if (res.status !== 0) gate.ok(host, rate);
     if (res.rateLimit) gate.limit(host, res.rateLimit, rate);
     return res;
+}
+
+// ─── Audit fetch prefix ─────────────────────────────────────────────────────
+
+/** A valid audit fetch prefix: starts with "/", path characters only, no trailing
+ *  slash, no query string, fragment or whitespace. */
+export const isFetchPrefix = (v: string) => /^(\/[A-Za-z0-9._~-]+)+$/.test(v);
+
+/** What to show for a stored prefix: its first segment, with the key masked. */
+export const maskPrefix = (prefix: string) => `/${prefix.split("/")[1] ?? ""}/••••`;
+
+/**
+ * The URL actually requested for a page: `origin + prefix + path + query`. Some
+ * hosts can only exempt a path from their visitor rate limit, not a client, so the
+ * site serves the same pages under a keyed path. The page's identity everywhere
+ * else stays its real URL.
+ */
+export function fetchTarget(realUrl: string, prefix?: string): string {
+    if (!prefix) return realUrl;
+    const u = new URL(realUrl);
+    u.pathname = `${prefix}${u.pathname}`;
+    return u.toString();
+}
+
+/** The real URL behind a URL the site answered with (a redirect Location): the
+ *  prefix removed when it is there, untouched when the redirect left it. */
+export function realUrl(url: string, prefix?: string): string {
+    if (!prefix) return url;
+    const u = new URL(url);
+    if (u.pathname !== prefix && !u.pathname.startsWith(`${prefix}/`)) return url;
+    u.pathname = u.pathname.slice(prefix.length) || "/";
+    return u.toString();
 }

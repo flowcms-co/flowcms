@@ -28,6 +28,8 @@ export type Opts = {
     crawl?: any;
     rate?: Rate;
     lastmod?: Map<string, Date>;
+    pausedUntil?: () => Date | null;
+    prefixAccepted?: () => boolean;
 };
 
 export function make(opts: Opts) {
@@ -77,6 +79,8 @@ export function make(opts: Opts) {
         livePage: vi.fn(async (url: string, rate: Rate, validators?: any) => opts.live?.(url, rate, validators) ?? LIVE),
         sitemapLastmod: async () => opts.lastmod ?? new Map<string, Date>(),
         currentRate: (_site: string, rate: Rate) => rate.start,
+        pausedUntil: () => opts.pausedUntil?.() ?? null,
+        prefixAccepted: vi.fn(async () => opts.prefixAccepted?.() ?? true),
         score: async () => ({ score: null }),
         crawl: async () => opts.crawl ?? { hasData: false },
         vitals: async () => opts.vitals ?? { hasData: false, reason: "psi-timeout" },

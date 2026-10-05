@@ -81,7 +81,7 @@ export const storedPageFlag = (t: { isPage?: boolean; isPageSet?: boolean }): bo
 
 // ─── Audit runs, freshness and what was not verified ────────────────────────
 
-export type RunState = { done: number; total: number; startedAt: string; mode?: string; paused?: boolean };
+export type RunState = { done: number; total: number; startedAt: string; mode?: string; paused?: boolean; waitingUntil?: string | null };
 export type AuditPlan = { mode: string; total: number; toFetch: number; reuse: number; sampled: number; rps: number; maxRps: number; estimatedSeconds: number; live: boolean };
 export type Freshness = { live: boolean; oldestFetchedAt: string | null; neverFetched: number; recheckDays: number; sampledTypes: { name: string; verified: number; total: number }[] };
 
@@ -105,9 +105,22 @@ export function planSummary(p: AuditPlan): string {
     return `${plural(p.toFetch, "page")} of ${n(p.total)} will be fetched from your site, ${duration(p.estimatedSeconds)} at the current ${p.rps} per second (it speeds up to ${p.maxRps} per second if the site allows, and slows down if it objects).${sampled} You can pause or cancel at any time.`;
 }
 
-/** The line shown while a run is in progress. */
-export const runBanner = (r: RunState | null | undefined): string | null =>
-    r ? `${r.paused ? "Audit paused" : "Audit in progress"}, ${n(r.done)} of ${n(r.total)} pages fetched. Results appear as pages are checked; pages not reached yet are left out.` : null;
+/** The short in-progress line every issue card shows: "Audit in progress, N of M". */
+export const runProgress = (r: RunState | null | undefined): string | null => (r ? `${r.paused ? "Audit paused" : "Audit in progress"}, ${n(r.done)} of ${n(r.total)}` : null);
+
+/** Seconds until a held run resumes, or null when it is not being held. */
+export const waitingSeconds = (r: RunState | null | undefined, now = Date.now()): number | null => {
+    const left = r?.waitingUntil ? Math.ceil((new Date(r.waitingUntil).getTime() - now) / 1000) : 0;
+    return left > 0 ? left : null;
+};
+
+/** The line shown on the Optimizer while a run is in progress. */
+export function runBanner(r: RunState | null | undefined, now = Date.now()): string | null {
+    if (!r) return null;
+    const wait = waitingSeconds(r, now);
+    const status = wait && !r.paused ? `Waiting, the site asked us to slow down (resumes in ${wait}s). ${n(r.done)} of ${n(r.total)} pages fetched.` : `${runProgress(r)} pages fetched.`;
+    return `${status} Results appear as pages are checked; pages not reached yet are left out.`;
+}
 
 /** "today", "3 days ago". */
 export function daysAgo(iso: string, now = Date.now()): string {

@@ -49,6 +49,8 @@ model Workspace {
   seoCrawlRps   Float    @default(1) // requests per second the SEO audit and crawler start at
   seoCrawlMaxRps Float   @default(10) // the most they may reach while the site stays healthy
   seoRecheckDays Int     @default(14) // every page is re-verified against the live site within this many days
+  seoFetchPrefixEnc String? // encrypted secret path prefix live audit fetches go through ("/_audit/<key>"); never returned by the API
+  seoLearnedRate Json?   // { "<host>": rps } crawl-rate ceiling learned from the site's refusals
   // White-label (Enterprise `white_label`): a workspace's own studio branding.
   // Stored on the core model (nullable) but only APPLIED when licensed; writes are
   // gated by the ee/white-label controller.

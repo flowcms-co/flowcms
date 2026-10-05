@@ -25,26 +25,63 @@ self-hosted install), so a geo rule has to allow that server's region.
 
 ## How fast it requests
 
-The rate adapts to your site. It starts at **1 request per second per host**,
-speeds up by half a request per second after every 10 healthy responses, and
-never passes the workspace maximum (10 per second by default). Both numbers
-are in Settings, Workspace, System; set the maximum equal to the start to hold
-a fixed rate.
+The rate adapts to your site. It starts at **1 request per second per host**
+and climbs slowly: 10% after every 30 healthy responses, and only once a full
+minute has passed without a refusal. It never passes the workspace maximum
+(10 per second by default). Both numbers are in Settings, Workspace, System;
+set the maximum equal to the start to hold a fixed rate.
 
-It slows down whenever the site asks:
+Most rate limits count requests per minute and give no warning until the
+minute's allowance is spent. So the first refusal teaches the crawler where
+your limit is:
 
-- On **429 or 503** it halves its rate and stops sending to that host for the
-  time in `Retry-After` (or 5, 10, 20 seconds and so on, doubling, when there
-  is no header; 10 minutes at most), then resumes where it left off.
+- On **429 or 503** it halves its rate, sets a ceiling at 70% of the rate
+  that was refused, and stops sending to that host for the time in
+  `Retry-After` (or one minute when there is no header; 10 minutes at most).
+  Then it resumes where it left off.
+- Requests already on their way when the limit hit are refused too. Refusals
+  within ten seconds of each other count as one event: one halving, one wait.
+- The ceiling is remembered per workspace and host, so later runs start below
+  it and do not probe again. It is cleared when you change the maximum rate or
+  the audit fetch prefix.
 - It reads `RateLimit-Remaining` / `RateLimit-Reset` and the `X-RateLimit-*`
   equivalents, spreads the remaining requests over the window, and waits for
   the reset when none are left.
 
+While it waits, the job and the AI Optimizer say "Waiting, the site asked us
+to slow down (resumes in Ns)". Pause and cancel take effect within a second,
+also during a wait.
+
 A page that answered 429, a 5xx error or nothing at all is never given
-findings. A page checked before keeps its earlier result and its "last
-fetched" date; a page with no earlier result is marked "not checked" and left
-out of "clean pages". Both are retried: up to three more times in the same
-run, then by the background check.
+findings and never counted as a failed page. A page checked before keeps its
+earlier result and its "last fetched" date; a page with no earlier result is
+marked "not checked" and left out of "clean pages". Both are retried: up to
+three more times in the same run, then by the background check.
+
+## When your host can only lift the limit for a path
+
+Some hosts scope a rate limit by URL path, not by client, so they cannot give
+the crawler a higher limit by user agent. If your site serves the same pages
+under a keyed path that is exempt from the visitor limit:
+
+```
+https://example.com/_audit/<key>/<page path>   serves   <page path>
+```
+
+enter that path (for example `/_audit/<key>`) as the **Audit fetch prefix** in
+Settings, Workspace, System, and use **Test** to check it.
+
+- The page audit, the site crawler and the background check then request
+  `site URL + prefix + page path`. PageSpeed (Google fetches that itself),
+  `robots.txt`, `sitemap.xml` and `llms.txt` are requested as usual.
+- The prefix is a secret: it is stored encrypted, never shown again, and never
+  appears in findings, issue rows, "View live" links, exports, notifications,
+  job records or logs. Everything is stored and reported under the real URL.
+- A redirect whose `Location` carries the prefix is understood as the real URL
+  behind it; a redirect that leaves the prefix is followed as it is.
+- If the site stops accepting the prefix (a rotated key), the run stops with
+  "Audit fetch prefix is no longer accepted by the site" and every page keeps
+  its last good result.
 
 ## How it avoids fetching
 

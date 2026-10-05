@@ -24,6 +24,9 @@ export type Workspace = {
     seoCrawlMaxRps?: number;
     /** Every page is re-verified against the live site within this many days. */
     seoRecheckDays?: number;
+    /** Audit fetch prefix: a secret, so only whether it is set and a masked form are sent. */
+    seoFetchPrefixSet?: boolean;
+    seoFetchPrefixMasked?: string | null;
     /** Who an entry's author is: its creator, or whoever last edited the content. */
     authorMode: "creator" | "lastEditor";
     /** White-label (applied only when licensed for `white_label`). */
