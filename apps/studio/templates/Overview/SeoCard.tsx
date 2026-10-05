@@ -9,7 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import LiveBadge from "../seo/LiveBadge";
 import { api } from "@/lib/api";
 import { useConnections } from "@/lib/useConnections";
-import { issueCounts, ratingOf, scoreCta, type RunState } from "@/lib/seoDash";
+import { issueCounts, ratingOf, runProgress, scoreCta, type RunState } from "@/lib/seoDash";
 
 type ScoreResp = { hasData: boolean; score: number | null };
 type IssuesResp = { counts: { total: number; pages: number }; run?: RunState | null; groups: { severity: "high" | "med" | "low"; count: number }[] };
@@ -113,8 +113,8 @@ const SeoCard = () => {
                 </div>
             </div>
 
-            <p className="mt-2.5 text-caption-2 leading-relaxed text-grey">
-                {countsFailed ? "Couldn't load the issue counts. " : ""}{run ? `${run.paused ? "Audit paused" : "Audit in progress"}, ${run.done.toLocaleString("en-US")} of ${run.total.toLocaleString("en-US")}: counts cover the pages checked so far. ` : ""}Score: Search Console, live crawl and PageSpeed. Counts: the page audit, as in the AI Optimizer.
+            <p className="mt-2.5 truncate text-center text-caption-2 text-grey" title="The score blends Search Console, the live crawl and PageSpeed. The counts come from the page audit.">
+                {countsFailed ? "Couldn't load the issue counts." : run ? runProgress(run) : "Counts from the page audit, as in the AI Optimizer."}
             </p>
             <button
                 type="button"

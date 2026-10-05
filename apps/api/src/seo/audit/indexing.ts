@@ -52,6 +52,18 @@ export function noindexFindings(findings: RenderedFinding[], signal: string | nu
 const ARTICLE_TYPES = new Set(["article", "blogposting", "newsarticle"]);
 export const hasArticle = (types: Set<string>) => [...types].some((t) => ARTICLE_TYPES.has(t));
 
+/** JSON-LD types that already say what a page is about. A page carrying one of
+ *  these is a service, product, FAQ or listing page, whatever its content type's
+ *  page type defaults to, so Article schema is not what it is missing. */
+const PRIMARY_TYPES = new Set([
+    "service", "product", "offer", "localbusiness", "professionalservice", "homeandconstructionbusiness", "faqpage", "howto", "event", "recipe", "course",
+    "jobposting", "collectionpage", "itemlist", "profilepage", "aboutpage", "contactpage", "qapage", "videoobject", "softwareapplication", "review", "aggregaterating",
+]);
+/** Whether a page that should be an article is missing Article schema: it has some
+ *  JSON-LD, none of it an article type, and nothing else that describes the page
+ *  (only generic blocks such as BreadcrumbList, Organization or WebSite). */
+export const missingArticle = (types: Set<string>) => types.size > 0 && !hasArticle(types) && ![...types].some((t) => PRIMARY_TYPES.has(t));
+
 /** Whether pages of a content type are articles (so Article schema is expected):
  *  a "blog" page type, or a legacy type with no page type whose JSON-LD type is an
  *  article one. Service, static, home and reference pages are not. */

@@ -51,7 +51,11 @@ describe("KpiStrip", () => {
     it("shows the in-progress state on the SEO tile while an audit runs", async () => {
         vi.mocked(api).mockResolvedValue({ counts: { total: 312 }, run: { done: 84, total: 1414, startedAt: "" } });
         render(<KpiStrip />);
-        await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Audit in progress, 84 of 1,414"));
+        // Inside the tile's single row (no extra line that would make this tile taller
+        // than the others); the full wording is the accessible label and tooltip.
+        await waitFor(() => expect(screen.getByRole("status").getAttribute("aria-label")).toBe("Audit in progress, 84 of 1,414"));
+        expect(screen.getByRole("status").textContent).toBe("84 of 1,414");
+        expect(screen.getByRole("status").parentElement?.className).toContain("items-center");
         expect(screen.getByLabelText("SEO issues: 312")).toBeTruthy();
     });
 });

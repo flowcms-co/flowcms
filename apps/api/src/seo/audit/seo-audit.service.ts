@@ -20,7 +20,7 @@ import { SitePagesService, absoluteUrl, rankPages, type SitePage } from "../site
 import { Stopped, isTransient, type Rate } from "../polite";
 import { SAMPLE_SIZE, estimateSeconds, fetchOrder, inferLive, planRun, templateOf, type Action, type PlanRow, type RunMode, type Sampled } from "./audit-plan";
 import { resolveTokens, str } from "./parse-content";
-import { RULES_VERSION, expectsArticle, hasArticle, noindexFindings, rankSignal, toPaths, withRules } from "./indexing";
+import { RULES_VERSION, expectsArticle, missingArticle, noindexFindings, rankSignal, toPaths, withRules } from "./indexing";
 import { CacheService } from "../../cache/cache.service";
 import { ContentEntriesService } from "../../content/content-entries.service";
 import { altBackfillPatch, altLookupFrom, type AltLookup } from "../../content/alt-backfill";
@@ -623,7 +623,7 @@ export class SeoAuditService {
             const isOrgPage = isHome || /^(about|contact|team|company|careers)/.test(slug);
             const isService = /(service|pricing|solution|capabilit|what-we-do|offering|package)/.test(hay);
             const looksFaq = /\bfaq\b|frequently asked/.test(hay) || (text.match(/\?/g) || []).length >= 3;
-            if (expectsArticle({ pageType: e.pageType, jsonLd: e.typeJsonLd }) && have.size > 0 && !hasArticle(have))
+            if (expectsArticle({ pageType: e.pageType, jsonLd: e.typeJsonLd }) && missingArticle(have))
                 schemaPages.article.push({ id: e.id, url, title, schemaType: "Article", priority: /\/blog\//.test(url) ? "high" : "med" });
             if (looksFaq && !have.has("faqpage"))
                 schemaPages.faq.push({ id: e.id, url, title, schemaType: "FAQ", priority: "med" });

@@ -366,7 +366,7 @@ const SeoDashboard = () => {
                         </div>
                         <Link href="/seo/optimizer" className="text-caption-1 text-primary hover:opacity-70">View all issues →</Link>
                     </div>
-                    {runBanner(issues?.run) && <p role="status" className="mb-4 rounded-xl border border-primary/30 bg-primary/[0.06] px-3 py-2 text-caption-2 text-black dark:text-white">{runBanner(issues?.run)}</p>}
+                    {runBanner(issues?.run) && <p role="status" className="mb-4 rounded-xl bg-grey-light/50 px-3 py-2 text-caption-2 text-black dark:bg-dark-3 dark:text-white">{runBanner(issues?.run)}</p>}
                     {!issuesLive ? (
                         issuesLoaded && (
                             <div className="py-10">

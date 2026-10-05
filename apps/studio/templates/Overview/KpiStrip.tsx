@@ -94,13 +94,19 @@ const KpiStrip = () => {
                                         <StatNumber value={String(shown)} className="font-poppins text-[1.25rem] leading-none font-extrabold text-black dark:text-white" />
                                     )}
                                     <span className="hidden min-w-0 truncate text-[0.875rem] font-semibold text-black sm:block dark:text-white">{k.label}</span>
+                                    {/* Audit progress sits inside the row, so the tile keeps the same
+                                        height as its neighbours. Full wording is in the label and tooltip. */}
+                                    {k.key === "seo" && seoRun && (
+                                        <span role="status" aria-label={runProgress(seoRun) ?? undefined} title={runProgress(seoRun) ?? undefined} className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md bg-grey-light/60 px-2 py-0.5 text-[0.6875rem] font-bold text-grey dark:bg-dark-3">
+                                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+                                            <span className="hidden xl:inline">{seoRun.done.toLocaleString("en-US")} of {seoRun.total.toLocaleString("en-US")}</span>
+                                        </span>
+                                    )}
                                 </div>
 
                                 {/* Mobile: label sits under the number (the row is too narrow at 2-up). */}
                                 <span className="mt-1.5 min-w-0 truncate text-[0.8125rem] font-semibold text-black sm:hidden dark:text-white">{k.label}</span>
-                                {k.key === "seo" && runProgress(seoRun) && (
-                                    <span role="status" className="mt-1.5 min-w-0 truncate text-caption-2 text-grey">{runProgress(seoRun)}</span>
-                                )}
+
                             </Card>
                         </Link>
                     );

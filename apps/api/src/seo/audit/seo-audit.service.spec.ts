@@ -93,6 +93,17 @@ describe("structured data findings", () => {
     });
 });
 
+describe("site-wide findings", () => {
+    it("count as one issue, not zero, when they have no page list", async () => {
+        const vitals = { hasData: true, vitals: [{ metric: "LCP", value: "5s", status: "poor" }], opportunities: [{ code: "PERF_UNMINIFIED", title: "Minify", savingsMs: 0 }] };
+        const { audit } = make({ pages: [page("p1", "/a")], vitals });
+        await audit.auditWorkspace("w");
+        const { groups } = await audit.issues("w");
+        expect(groups.find((g) => g.key === "CWV_LCP_POOR")!.count).toBe(1);
+        expect(groups.find((g) => g.key === "PERF_UNMINIFIED")!.count).toBe(1);
+    });
+});
+
 describe("noindexed pages", () => {
     const hidden = (id: string, intended = false) => ({ ...page(id, `/${id}`, { body: `<p>${"same words here again ".repeat(80)}</p>` }), pageType: "service", typeJsonLd: null, noindexIntended: intended });
     // noindex, a 90-character title and no description: all ranking-only problems.
@@ -125,7 +136,8 @@ describe("rows from before", () => {
         const stale = { id: "s1", target: "old", entryId: "old", task: "page", url: null, contentHash: "abc123", l1Findings: [{ code: "TECH_CANONICAL_MISSING", task: "technical_diagnosis", severity: 1 }] };
         const { audit, ledger } = make({ pages: [page("p1", "/a")], ledger: [stale] });
         const before = await audit.issues("w"); // before any run: the old row is not shown
-        expect(before.counts.total).toBe(0);
+        expect(before.groups.find((g) => g.key === "TECH_CANONICAL_MISSING")).toBeUndefined();
+        expect(before.counts.pages).toBe(0);
         expect(before.groups.flatMap((g) => g.pages).some((p) => !p.url && !p.title)).toBe(false);
         await audit.auditWorkspace("w");
         expect(ledger.map((r) => r.target)).toEqual(["p1"]);

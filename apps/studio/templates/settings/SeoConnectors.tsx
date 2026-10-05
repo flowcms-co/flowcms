@@ -89,8 +89,8 @@ const SeoConnectors = () => {
                     name="PageSpeed Insights"
                     desc={
                         status?.pagespeed.needsKey
-                            ? "PageSpeed runs are being refused: Google's shared quota is used up. Add a free Google API key to keep measuring."
-                            : "Core Web Vitals and Lighthouse scores, mobile and desktop. Works without a key until Google's shared quota runs out; a free API key lifts that."
+                            ? "Google's shared quota is used up. Add a free API key to keep measuring."
+                            : "Core Web Vitals and Lighthouse scores. Works without a key; a free API key lifts Google's shared quota."
                     }
                     connected={psConnected}
                     onConnect={() => open("pagespeed")}

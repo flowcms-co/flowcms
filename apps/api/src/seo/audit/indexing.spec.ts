@@ -46,3 +46,16 @@ describe("schema expectations and rule versions", () => {
         expect(isCurrentRules("abc123")).toBe(false); // written before rule versions existed
     });
 });
+
+describe("Article schema on pages that already describe themselves", () => {
+    it("is not asked of a page with Service, FAQ or Product schema, only of one with generic blocks", async () => {
+        const { missingArticle } = await import("./indexing");
+        const set = (...t: string[]) => new Set(t);
+        // A city/service page whose content type still has the default "blog" page type.
+        expect(missingArticle(set("service", "faqpage", "breadcrumblist", "organization"))).toBe(false);
+        expect(missingArticle(set("product", "breadcrumblist"))).toBe(false);
+        expect(missingArticle(set("blogposting", "breadcrumblist"))).toBe(false);
+        expect(missingArticle(set("breadcrumblist", "organization", "website"))).toBe(true);
+        expect(missingArticle(set())).toBe(false); // no JSON-LD at all is "No structured data"
+    });
+});

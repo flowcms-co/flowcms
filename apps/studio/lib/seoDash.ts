@@ -54,7 +54,7 @@ export function dataSources(status: AnalyticsStatus | null, connectors: Connecto
  *  offered when a scan can actually produce a score. */
 export function scoreCta(site: string | null | undefined, forbidden: boolean): { title: string; description: string; label?: string; href?: string } {
     if (forbidden) return { title: "No access", description: "You don't have access to this data." };
-    if (!site) return { title: "Set your site URL", description: "The SEO score comes from a crawl of your live site, PageSpeed and Search Console. Add the site URL to start.", label: "Open settings", href: "/settings/workspace" };
+    if (!site) return { title: "Set your site URL", description: "The SEO score comes from a crawl of your live site, PageSpeed and Search Console. Add the site URL to start.", label: "Open settings", href: "/settings/workspace?tab=system" };
     return { title: "No SEO score yet", description: "The first crawl and PageSpeed run are in progress or could not reach the site.", label: "Open the SEO dashboard", href: "/seo" };
 }
 

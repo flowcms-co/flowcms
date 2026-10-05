@@ -40,7 +40,7 @@ describe("seoDash", () => {
     });
 
     it("only offers a scan when a scan can produce a score", () => {
-        expect(scoreCta(null, false).href).toBe("/settings/workspace");
+        expect(scoreCta(null, false).href).toBe("/settings/workspace?tab=system");
         expect(scoreCta("https://x.com", false).href).toBe("/seo");
         expect(scoreCta("https://x.com", true)).toMatchObject({ description: "You don't have access to this data." });
     });

@@ -134,17 +134,40 @@ const System = () => {
                     <Field label="Time zone">
                         <TimeZoneSelect value={timezone} onChange={setTimezone} />
                     </Field>
-                    <Field label="SEO crawl rate: start (requests per second)">
+                </div>
+                <p className="mt-2.5 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
+                    Your public website: the SEO crawl, PageSpeed and &ldquo;View live&rdquo; links use it. The time zone sets what
+                    &ldquo;today&rdquo; and &ldquo;this week&rdquo; mean on the dashboards.
+                </p>
+                {timezoneInvalid && (
+                    <p role="alert" className="mt-2.5 rounded-xl border border-warning/40 bg-warning/[0.08] p-3 text-caption-2 text-black dark:text-white">
+                        The saved time zone &ldquo;{timezoneInvalid}&rdquo; is not a valid zone, so dashboards are using UTC. Pick a zone and save.
+                    </p>
+                )}
+
+                {/* SEO crawler: one row of three, then the prefix across the full width. */}
+                <h3 className="mt-7 text-title font-semibold text-black dark:text-white">SEO crawler</h3>
+                <p className="mt-1 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
+                    How the SEO audit requests pages from your site. It identifies itself as{" "}
+                    <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">FlowCMS-SEO-Auditor</code>;
+                    allow that user agent if your site blocks bots.
+                </p>
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <Field label="Starting rate (per second)">
                         <input type="number" min={0.1} max={10} step={0.1} value={crawlRps} onChange={(e) => setCrawlRps(e.target.value)} className="flow-input" />
                     </Field>
-                    <Field label="SEO crawl rate: maximum (requests per second)">
+                    <Field label="Maximum rate (per second)">
                         <input type="number" min={0.1} max={10} step={0.1} value={crawlMaxRps} onChange={(e) => setCrawlMaxRps(e.target.value)} className="flow-input" />
                     </Field>
                     <Field label="Re-check every page within (days)">
                         <input type="number" min={1} max={365} step={1} value={recheckDays} onChange={(e) => setRecheckDays(e.target.value)} className="flow-input" />
                     </Field>
                 </div>
-                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <p className="mt-2.5 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
+                    The crawler speeds up slowly towards the maximum while your site responds normally, and slows down whenever the
+                    site asks. Set both rates the same to hold a fixed rate.
+                </p>
+                <div className="mt-4">
                     <Field label="Audit fetch prefix (optional)">
                         <div className="flex gap-2">
                             <input
@@ -167,27 +190,10 @@ const System = () => {
                 </div>
                 {prefix === "" && prefixMasked && <p className="mt-2 text-caption-2 text-grey">The prefix will be removed when you save.</p>}
                 {prefixTest && <p role="status" className={`mt-2 text-caption-2 ${prefixTest.ok ? "text-success" : "text-error"}`}>{prefixTest.text}</p>}
-                <p className="mt-2 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
-                    For sites whose host can only lift its rate limit for a path, not for a client. If your site serves the same pages
-                    under a keyed path (for example /_audit/your-key/services/page serves /services/page), enter that path here and the
-                    SEO audit, crawler and background check fetch pages through it. It is stored as a secret and never shown again.
-                    Reports, links and exports always use the real page URLs. PageSpeed, robots.txt and the sitemap are not affected.
-                </p>
-                {timezoneInvalid && (
-                    <p role="alert" className="mt-2.5 rounded-xl border border-warning/40 bg-warning/[0.08] p-3 text-caption-2 text-black dark:text-white">
-                        The saved time zone &ldquo;{timezoneInvalid}&rdquo; is not a valid zone, so dashboards are using UTC. Pick a zone and save.
-                    </p>
-                )}
                 <p className="mt-2.5 max-w-[44rem] text-caption-2 leading-relaxed text-grey">
-                    The site URL is your public website. The SEO crawl, PageSpeed and &ldquo;View live&rdquo; links use it, with or
-                    without Search Console. The crawler identifies itself as{" "}
-                    <code className="rounded bg-lavender-mist px-1 py-0.5 text-[0.6875rem] text-primary dark:bg-dark-3 dark:text-lilac">FlowCMS-SEO-Auditor</code>;
-                    allow that user agent if your site blocks bots. The time zone (an IANA name) sets what &ldquo;today&rdquo; and
-                    &ldquo;this week&rdquo; mean on the dashboards. The SEO audit and crawler start at the first crawl rate and
-                    speed up gradually towards the maximum while your site responds normally. They halve the rate and wait whenever
-                    the site answers &ldquo;too many requests&rdquo;, and stay under any rate limit it advertises. Set the maximum equal
-                    to the start to hold a fixed rate. In the background, the stalest pages are re-checked a few at a time so every
-                    page is verified within the number of days above.
+                    Only for sites whose host can lift its rate limit for a path but not for a client. If your site serves the same
+                    pages under a keyed path, enter it and the crawler fetches through it. Stored as a secret and never shown again;
+                    reports and links always use the real page URLs.
                 </p>
                 <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Content author">

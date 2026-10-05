@@ -321,7 +321,8 @@ export function buildIssues(pageRows: PageRow[], site: SiteFinding[], score: num
     for (const [code, g] of byCode) groups.push(toGroup(code, g.sample, "page", g.pages, g.pages.length));
     for (const s of site) {
         const pages = s.pages ?? [];
-        groups.push(toGroup(s.finding.code, s.finding, "site", pages, s.count ?? pages.length ?? 1));
+        // A site-wide finding with no page list (slow LCP, unminified CSS) is one issue, not zero.
+        groups.push(toGroup(s.finding.code, s.finding, "site", pages, s.count ?? (pages.length || 1)));
     }
 
     // Sort: severity desc, then effort easy-first, then more-affected first.

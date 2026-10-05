@@ -433,7 +433,7 @@ const Optimizer = () => {
                         </button>
                     </div>
                 </div>
-                {banner && <p role="status" className="mb-3 rounded-xl border border-primary/30 bg-primary/[0.06] px-4 py-2.5 text-caption-1 text-black dark:text-white">{banner}</p>}
+                {banner && <p role="status" className="mb-3 rounded-xl bg-grey-light/50 px-4 py-2.5 text-caption-1 text-black dark:bg-dark-3 dark:text-white">{banner}</p>}
                 <div data-tour="opt-stats" className="grid grid-cols-2 gap-4 xl:grid-cols-4">
                     <Card reveal={false} className="!p-5">
                         <StatCol icon="document" tint="bg-primary/12" fill="fill-primary" value={pagesAudited} label="Pages audited" delta={deltas?.pages} deltaCls="text-success" />
