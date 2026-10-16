@@ -64,7 +64,7 @@ const VersionHistory = ({ entryId, onRestored, variant = "panel" }: { entryId: s
                                 {i === 0 && <span className="text-caption-2 text-grey">current</span>}
                             </div>
                             <div className="text-caption-2 text-grey" suppressHydrationWarning>
-                                {v.author ?? "Unknown"} · {new Date(v.updatedAt ?? v.createdAt).toLocaleString()}
+                                {v.author ?? "API agent"} · {new Date(v.updatedAt ?? v.createdAt).toLocaleString()}
                             </div>
                             {v.note && <div className="text-caption-2 italic text-grey">{v.note}</div>}
                         </button>
@@ -156,7 +156,7 @@ const VersionModal = ({ entryId, versionId, isCurrent, onClose, onRestored }: { 
                                                     Version {detail.versionNumber} <LabelBadge label={detail.label} />
                                                 </Dialog.Title>
                                                 <p className="mt-0.5 text-caption-2 text-grey" suppressHydrationWarning>
-                                                    {detail.author ?? "Unknown"} · {new Date(detail.updatedAt ?? detail.createdAt).toLocaleString()}
+                                                    {detail.author ?? "API agent"} · {new Date(detail.updatedAt ?? detail.createdAt).toLocaleString()}
                                                     {detail.note ? ` · ${detail.note}` : ""}
                                                 </p>
                                             </div>

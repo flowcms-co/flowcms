@@ -179,7 +179,17 @@ describe.skipIf(!RUN)("activity log, versions and rollback (integration)", () =>
         await expect(prisma.auditLog.update({ where: { id: row.id }, data: { actorName: "someone else" } })).rejects.toThrow(/append-only/);
     });
 
-    it("delete goes to the bin and comes back whole under the same id", async () => {
+    it("names the API token for versions and log rows saved before authors were recorded", async () => {
+        const e = await prisma.contentEntry.create({ data: { workspaceId, contentTypeId: typeId, slug: `old-${uniq()}`, data: { title: "Old agent page" } } });
+        await prisma.contentVersion.create({ data: { entryId: e.id, data: {}, status: "DRAFT", versionNumber: 1, label: "draft" } });
+        await prisma.auditLog.create({ data: { workspaceId, action: "content.edit", resource: "ContentEntry", resourceId: e.id } });
+        const [v] = await entries.versions(workspaceId, e.id);
+        expect(v.author).toBe("City pages script (API token)"); // the only write token then
+        const { items } = await audit.list(workspaceId, { entry: e.id });
+        expect(items[0].actor?.name).toBe("City pages script (API token)");
+    });
+
+        it("delete goes to the bin and comes back whole under the same id", async () => {
         const created = await as({ user: userA, ip: "203.0.113.10" }, () => entries.create(workspaceId, userA.id, { contentTypeId: typeId, title: "Fire damage", slug: `fire-${uniq()}`, data: { intro: "x" } } as never));
         await as({ user: userA, ip: "203.0.113.10" }, () => entries.publish(workspaceId, created.id, userA.id, ALL));
         const versions = await prisma.contentVersion.count({ where: { entryId: created.id } });

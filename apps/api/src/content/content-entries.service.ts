@@ -20,6 +20,7 @@ import { draftDiff, pickPaths, type FieldChange } from "./draft-diff";
 import { eventForStatusChange, type ContentEvent } from "./content-events";
 import { AuditService } from "../audit/audit.service";
 import { currentActor } from "../common/request-context";
+import { apiActorAt } from "../common/token-at";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
  *  which carries the page type that `entryPath` uses to build the public path
@@ -266,13 +267,18 @@ export class ContentEntriesService {
     /** Version history for an entry (newest first): who made each, whether it was a
      *  draft or what went live, and any note ("restored from v41"). */
     async versions(workspaceId: string, entryId: string) {
-        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId }, select: { id: true } });
+        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId }, select: { id: true, workspaceId: true } });
         if (!entry) throw new NotFoundException("Entry not found.");
         const rows = await this.prisma.contentVersion.findMany({ where: { entryId }, orderBy: { versionNumber: "desc" }, take: ContentEntriesService.VERSION_RETENTION });
         // Versions from before authors were stored by name: look the user up.
         const ids = [...new Set(rows.filter((r) => !r.actorName).map((r) => r.createdById).filter(Boolean) as string[])];
         const users = ids.length ? await this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } }) : [];
         const nameOf = (id: string | null) => (id ? (users.find((u) => u.id === id)?.name ?? users.find((u) => u.id === id)?.email ?? null) : null);
+        // No author stored: an API write from before names were recorded.
+        const tokens = rows.some((r) => !r.actorName && !r.createdById)
+            ? await this.prisma.apiToken.findMany({ where: { workspaceId, type: { in: ["AGENT", "ADMIN"] } }, select: { name: true, createdAt: true, revokedAt: true } })
+            : [];
+        const authorOf = (v: (typeof rows)[number]) => v.actorName ?? (v.createdById ? (nameOf(v.createdById) ?? "Former member") : apiActorAt(tokens, v.createdAt));
         return rows.map((v) => ({
             id: v.id,
             versionNumber: v.versionNumber,
@@ -280,7 +286,7 @@ export class ContentEntriesService {
             label: v.label,
             note: v.note,
             title: ((v.data as { title?: string })?.title) ?? "Untitled",
-            author: v.actorName ?? nameOf(v.createdById),
+            author: authorOf(v),
             createdAt: v.createdAt,
             updatedAt: v.updatedAt,
         }));

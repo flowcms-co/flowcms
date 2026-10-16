@@ -146,7 +146,9 @@ export function buildActivity(
                 id: ev.id,
                 entryId: ev.resourceId!,
                 // No user = the scheduler or an API token; a user with no membership has left.
-                person: who?.name ?? (ev.userId ? "Former member" : (ev.actorName ?? "System")),
+                // No actor stored: an API write (or, for a publish, possibly a schedule) from
+                // before actor names were recorded.
+                person: who?.name ?? (ev.userId ? "Former member" : (ev.actorName ?? (ev.action === "content.publish" ? "System" : "API agent"))),
                 role: who?.role ?? (ev.userId ? "member" : "system"),
                 roleName: who?.roleName ?? (ev.userId ? "Member" : ev.actorName?.endsWith("(API token)") ? "API token" : "Automation"),
                 authorId: ev.userId,

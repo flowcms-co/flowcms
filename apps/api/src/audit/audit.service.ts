@@ -6,6 +6,7 @@ import { RedisService } from "../redis/redis.service";
 import { WebhooksService } from "../webhooks/webhooks.service";
 import { MailService } from "../mail/mail.service";
 import { currentActor } from "../common/request-context";
+import { apiActorAt, type WriteToken } from "../common/token-at";
 
 export type AuditEntry = {
     workspaceId: string;
@@ -161,7 +162,7 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
         return where;
     }
 
-    private shape(r: Row) {
+    private shape(r: Row, tokens: WriteToken[] = []) {
         return {
             id: r.id,
             action: r.action,
@@ -181,7 +182,13 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
                 ? { id: r.user.id, name: r.user.name || r.actorName || r.user.email, email: r.user.email as string | null, role: r.actorRole }
                 : r.actorName
                   ? { id: r.tokenId, name: r.actorName, email: null, role: r.actorRole }
-                  : null,
+                  : r.resource === "ContentEntry"
+                    ? // A content change with no actor predates actor names: it came through the
+                      // API, or (a publish) from a schedule, which was logged the same way then.
+                      r.action === "content.publish"
+                        ? { id: null, name: "Scheduled publish or API agent", email: null, role: null }
+                        : { id: null, name: apiActorAt(tokens, r.createdAt), email: null, role: "API token" }
+                    : null,
         };
     }
 
@@ -194,7 +201,8 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
             this.prisma.auditLog.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take, skip, include: { user: { select: { id: true, name: true, email: true } } } }),
             this.prisma.auditLog.count({ where }),
         ]);
-        return { items: rows.map((r) => this.shape(r)), total, limit: take, offset: skip };
+        const tokens = await this.unattributedTokens(workspaceId, rows);
+        return { items: rows.map((r) => this.shape(r, tokens)), total, limit: take, offset: skip };
     }
 
     /** Every matching row for an export, a page at a time. */
@@ -210,10 +218,17 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
                 include: { user: { select: { id: true, name: true, email: true } } },
             });
             if (!rows.length) return;
-            for (const r of rows) yield this.shape(r);
+            const tokens = await this.unattributedTokens(workspaceId, rows);
+            for (const r of rows) yield this.shape(r, tokens);
             sent += rows.length;
             cursor = rows[rows.length - 1].id;
         }
+    }
+
+    /** The workspace's write tokens, when some rows need an actor guessed (see apiActorAt). */
+    private async unattributedTokens(workspaceId: string, rows: Row[]): Promise<WriteToken[]> {
+        if (!rows.some((r) => !r.userId && !r.actorName && r.resource === "ContentEntry")) return [];
+        return this.prisma.apiToken.findMany({ where: { workspaceId, type: { in: ["AGENT", "ADMIN"] } }, select: { name: true, createdAt: true, revokedAt: true } });
     }
 
     /** People and tokens that can appear in the log, for the Activity page's filter. */
