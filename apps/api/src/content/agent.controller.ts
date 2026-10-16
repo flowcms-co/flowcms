@@ -1,7 +1,8 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Query, Req, Patch, Post, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
-import { ArrayMaxSize, IsArray, IsIn, IsObject, IsOptional, IsString, MaxLength } from "class-validator";
+import { Type } from "class-transformer";
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { Public } from "../auth/decorators";
 import { AgentTokenGuard } from "./agent-token.guard";
@@ -34,6 +35,20 @@ class AgentUpdateDto {
     @IsOptional() @IsObject() data?: Record<string, unknown>;
     @IsOptional() @IsIn(EDITABLE) status?: (typeof EDITABLE)[number];
     @IsOptional() @IsString() scheduledAt?: string;
+}
+
+class BulkWhereDto {
+    @IsOptional() @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) slug?: string[];
+    @IsOptional() @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) id?: string[];
+    @IsOptional() @IsIn(["DRAFT", "IN_REVIEW", "APPROVED", "SCHEDULED", "PUBLISHED", "ARCHIVED"]) status?: string;
+}
+
+class AgentBulkSetDto {
+    /** Which entries of the type: by slug, id and/or status. {} or absent = all. */
+    @IsOptional() @ValidateNested() @Type(() => BulkWhereDto) where?: BulkWhereDto;
+    /** Field path → value, e.g. { "heroSection.subheadline": "Serving {CityCount} cities." }. */
+    @IsObject() set!: Record<string, unknown>;
+    @IsOptional() @IsBoolean() dryRun?: boolean;
 }
 
 class AgentRestoreDto {
@@ -175,6 +190,22 @@ export class AgentController {
         requireScope(req, PERMISSIONS.CONTENT_CREATE);
         const ct = await this.query.resolveType(req.apiToken.workspaceId, type);
         return this.entries.create(req.apiToken.workspaceId, null, { contentTypeId: ct.id, ...dto });
+    }
+
+    /**
+     * Set field paths on many entries at once: `{ where?, set, dryRun? }`. Each entry
+     * is updated as a single PATCH would be (a live entry's change goes to its draft;
+     * status never changes). Needs only `content.update`. At most 500 entries per
+     * request. Returns `{ matched, updated, skipped, failed, entries }`; with
+     * `dryRun`, each entry's slug, status, old and new values and nothing written.
+     * Declared before `:type/:id` so "bulk" isn't read as an entry id.
+     */
+    @Patch(":type/bulk")
+    async bulkSet(@Req() req: TokenReq, @Param("type") type: string, @Body() dto: AgentBulkSetDto) {
+        requireScope(req, PERMISSIONS.CONTENT_UPDATE);
+        const ct = await this.query.resolveType(req.apiToken.workspaceId, type);
+        // No publish right is passed: a bulk edit can never move an entry's status.
+        return this.entries.bulkSet(req.apiToken.workspaceId, ct.id, { where: dto.where, set: dto.set, dryRun: dto.dryRun }, []);
     }
 
     @Patch(":type/:id")

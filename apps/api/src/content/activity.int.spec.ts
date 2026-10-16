@@ -189,6 +189,51 @@ describe.skipIf(!RUN)("activity log, versions and rollback (integration)", () =>
         expect(items[0].actor?.name).toBe("City pages script (API token)");
     });
 
+        it("bulk-sets a nested field on each working copy without touching live data, status or other keys", async () => {
+        const hero = (sub: string) => ({ headline: "Restoration {City:Near You}", subheadline: sub, ctaLabel: "<p>Call</p>", featuredReview: { starRating: "5" }, serviceCategories: [], showTrustpilotBadge: true });
+        const OLD = "Serving {City:Your City} and Nearby Areas";
+        const NEW = "Serving {CityCount} cities.";
+        const typeB = (await prisma.contentType.create({ data: { workspaceId, name: "Svc", apiId: `svc${uniq()}`, pluralApiId: `svcs${uniq()}`, kind: "COLLECTION", schema: { fields: [] } } })).id;
+        const mk = (slug: string, status: "DRAFT" | "PUBLISHED", draft?: Record<string, string | object>) =>
+            prisma.contentEntry.create({
+                data: { workspaceId, contentTypeId: typeB, slug, status, ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}), data: { title: slug, heroSection: hero(OLD) }, ...(draft ? { draftData: draft } : {}) },
+            });
+        const draft = await mk("draft-one", "DRAFT");
+        const pending = await mk("live-pending", "PUBLISHED", { title: "live-pending", intro: "pending edit", heroSection: hero(OLD) });
+        const live = await mk("live-clean", "PUBLISHED");
+        const done = await prisma.contentEntry.create({ data: { workspaceId, contentTypeId: typeB, slug: "already", status: "DRAFT", data: { title: "already", heroSection: hero(NEW) } } });
+
+        const dry = await as({ token, ip: "192.0.2.5" }, () => entries.bulkSet(workspaceId, typeB, { set: { "heroSection.subheadline": NEW }, dryRun: true }, []));
+        expect(dry).toMatchObject({ matched: 4, dryRun: true, wouldUpdate: 3, skipped: 1, failed: [] });
+        expect(dry.entries.find((e) => e.slug === "live-pending")).toMatchObject({ status: "PUBLISHED", changes: [{ path: "heroSection.subheadline", old: OLD, new: NEW }] });
+        expect((await prisma.contentEntry.findUniqueOrThrow({ where: { id: draft.id } })).updatedAt).toEqual(draft.updatedAt); // nothing written
+
+        const res = await as({ token, ip: "192.0.2.5" }, () => entries.bulkSet(workspaceId, typeB, { set: { "heroSection.subheadline": NEW } }, []));
+        expect(res).toMatchObject({ matched: 4, updated: 3, skipped: 1, failed: [] });
+
+        const after = async (id: string) => prisma.contentEntry.findUniqueOrThrow({ where: { id } });
+        const d = await after(draft.id);
+        expect(d.status).toBe("DRAFT");
+        expect(d.data).toEqual({ title: "draft-one", metaTitle: "draft-one", heroSection: hero(NEW) });
+        const p = await after(pending.id);
+        expect(p.status).toBe("PUBLISHED");
+        expect(p.data).toEqual(pending.data); // live untouched
+        expect(p.draftData).toMatchObject({ intro: "pending edit", heroSection: hero(NEW) }); // other pending edit kept
+        const l = await after(live.id);
+        expect(l.status).toBe("PUBLISHED");
+        expect(l.data).toEqual(live.data);
+        expect((l.draftData as { heroSection: unknown }).heroSection).toEqual(hero(NEW)); // a new draft with the change
+        expect((await after(done.id)).updatedAt).toEqual(done.updatedAt);
+
+        const rows = await prisma.auditLog.findMany({ where: { workspaceId, resourceId: { in: [draft.id, pending.id, live.id] }, action: "content.edit" } });
+        expect(rows).toHaveLength(3);
+        expect(rows.every((r) => r.actorName === "City pages script (API token)")).toBe(true);
+        expect((rows[0].metadata as { changes: { path: string }[] }).changes.map((c) => c.path)).toContain("heroSection.subheadline");
+
+        const bySlug = await entries.bulkSet(workspaceId, typeB, { where: { slug: ["draft-one"] }, set: { "heroSection.subheadline": NEW }, dryRun: true }, []);
+        expect(bySlug).toMatchObject({ matched: 1, skipped: 1 });
+    });
+
         it("delete goes to the bin and comes back whole under the same id", async () => {
         const created = await as({ user: userA, ip: "203.0.113.10" }, () => entries.create(workspaceId, userA.id, { contentTypeId: typeId, title: "Fire damage", slug: `fire-${uniq()}`, data: { intro: "x" } } as never));
         await as({ user: userA, ip: "203.0.113.10" }, () => entries.publish(workspaceId, created.id, userA.id, ALL));

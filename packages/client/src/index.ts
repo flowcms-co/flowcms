@@ -171,6 +171,10 @@ export function createClient(options: ClientOptions) {
         discardDraft(type: string, id: string): Promise<Entry> {
             return request(`/agent/${type}/${id}/discard-draft`, { method: "POST" });
         },
+        /** Set field paths on many entries of a type (max 500; never changes status). Needs content.update. */
+        bulkSet(type: string, body: { where?: { slug?: string[]; id?: string[]; status?: string }; set: Record<string, unknown>; dryRun?: boolean }): Promise<unknown> {
+            return request(`/agent/${type}/bulk`, { method: "PATCH", body: JSON.stringify(body) });
+        },
         /** Delete an entry into "Deleted items" (restorable for 30 days). */
         remove(type: string, id: string): Promise<{ ok: boolean }> {
             return request(`/agent/${type}/${id}`, { method: "DELETE" });

@@ -16,7 +16,7 @@ import { entryPath } from "./route-path";
 import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
 import { keepStoredShape } from "./component-shape";
 import { placeholdersIn, resolvePlaceholders, slugFromPattern } from "./slug-pattern";
-import { draftDiff, pickPaths, type FieldChange } from "./draft-diff";
+import { draftDiff, getPath, pickPaths, setPaths, type FieldChange } from "./draft-diff";
 import { eventForStatusChange, type ContentEvent } from "./content-events";
 import { AuditService } from "../audit/audit.service";
 import { currentActor } from "../common/request-context";
@@ -41,6 +41,9 @@ const REQUIRE_COMPLETE = new Set<ContentStatus>(["PUBLISHED", "SCHEDULED", "APPR
  *  publisher. This stops a content.update-only actor from PATCHing straight to
  *  APPROVED and then publishing (approval-workflow bypass). */
 const PUBLISH_STATES = new Set<string>(["APPROVED", "SCHEDULED", "PUBLISHED"]);
+
+/** The top-level field a path starts in ("heroSection" for "heroSection.subheadline"). */
+const pathKeysTop = (path: string) => path.split(/[.[]/)[0];
 
 /** The events the Review tab's sign-off log shows. */
 const SIGNOFF_ACTIONS = ["content.submit", "content.approve", "content.request_changes", "content.schedule", "content.publish", "content.unpublish", "content.restore"] as const;
@@ -1139,6 +1142,71 @@ export class ContentEntriesService {
             else if (targetStatus === "SCHEDULED") this.fire(workspaceId, "content.scheduled", shaped);
         }
         return shaped;
+    }
+
+    /** Most entries one bulk field update may touch. */
+    static readonly BULK_MAX = 500;
+
+    /**
+     * Set field paths (`heroSection.subheadline`) on every matching entry of one type.
+     * Each entry goes through update(), exactly like a single PATCH: a live entry gets
+     * the change on its draft (its live data and other pending edits untouched), any
+     * other entry is edited in place, status never changes, and versions, the
+     * activity log and webhooks follow. Entries whose values already match are
+     * skipped. `dryRun` reports each change and writes nothing.
+     * ponytail: one entry at a time, like the single update (no cross-entry
+     * transaction); a failure is reported for that entry and the rest go on.
+     */
+    async bulkSet(
+        workspaceId: string,
+        contentTypeId: string,
+        opts: { where?: { slug?: string[]; id?: string[]; status?: string }; set: Record<string, unknown>; dryRun?: boolean },
+        actorPermissions?: string[],
+        role?: RoleRules,
+    ) {
+        const paths = Object.keys(opts.set ?? {});
+        if (!paths.length) throw new BadRequestException("`set` needs at least one field path.");
+        if (paths.length > 50) throw new BadRequestException("`set` takes at most 50 field paths.");
+        try {
+            setPaths({}, opts.set); // reject a malformed path before reading anything
+        } catch (e) {
+            throw new BadRequestException((e as Error).message);
+        }
+        const w = opts.where ?? {};
+        const where: Prisma.ContentEntryWhereInput = { workspaceId, contentTypeId };
+        if (w.slug) where.slug = { in: w.slug };
+        if (w.id) where.id = { in: w.id };
+        if (w.status) where.status = w.status as ContentStatus;
+        const rows = await this.prisma.contentEntry.findMany({ where, orderBy: { id: "asc" }, take: ContentEntriesService.BULK_MAX + 1, select: { id: true, slug: true, status: true, data: true, draftData: true } });
+        if (rows.length > ContentEntriesService.BULK_MAX) throw new BadRequestException(`More than ${ContentEntriesService.BULK_MAX} entries match. Narrow \`where\` (by slug, id or status) and send several requests.`);
+
+        const entries: { id: string; slug: string | null; status: ContentStatus; changes: { path: string; old: unknown; new: unknown }[] }[] = [];
+        const failed: { id: string; slug: string | null; error: string }[] = [];
+        let updated = 0;
+        let skipped = 0;
+        for (const r of rows) {
+            // The working copy: a live entry's pending draft, or else its data.
+            const base = (r.status === "PUBLISHED" ? (r.draftData ?? r.data) : r.data) as Record<string, unknown>;
+            const changes = paths
+                .map((path) => ({ path, old: getPath(base, path) ?? null, new: opts.set[path] }))
+                .filter((c) => JSON.stringify(c.old) !== JSON.stringify(c.new));
+            if (!changes.length) {
+                skipped++;
+                continue;
+            }
+            entries.push({ id: r.id, slug: r.slug, status: r.status, changes });
+            if (opts.dryRun) continue;
+            try {
+                const next = setPaths(base, opts.set);
+                // Send whole top-level values (update() merges one level deep).
+                const tops = [...new Set(changes.map((c) => pathKeysTop(c.path)))];
+                await this.update(workspaceId, r.id, { data: Object.fromEntries(tops.map((k) => [k, next[k]])) } as UpdateEntryDto, undefined, role, actorPermissions);
+                updated++;
+            } catch (e) {
+                failed.push({ id: r.id, slug: r.slug, error: e instanceof Error ? e.message : String(e) });
+            }
+        }
+        return { matched: rows.length, ...(opts.dryRun ? { dryRun: true, wouldUpdate: entries.length } : { updated }), skipped, failed, entries };
     }
 
     private async setStatus(workspaceId: string, id: string, status: ContentStatus, publishedAt: Date | null, actorId?: string) {

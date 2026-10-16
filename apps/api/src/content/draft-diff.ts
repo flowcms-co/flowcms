@@ -65,3 +65,31 @@ export function pickPaths(base: unknown, source: unknown, paths: string[]): Reco
     }
     return out;
 }
+
+/** The value at a field path, or undefined when any step is missing. */
+export function getPath(obj: unknown, path: string): unknown {
+    let v: unknown = obj;
+    for (const k of pathKeys(path)) v = v == null || typeof v !== "object" ? undefined : (v as Record<string | number, unknown>)[k];
+    return v;
+}
+
+/**
+ * `base` with each `path → value` deep-set (`heroSection.subheadline`,
+ * `faq[0].answer`): every other key at every level is kept. Missing objects on the
+ * way are created; a step through a non-object value is refused.
+ */
+export function setPaths(base: unknown, set: Record<string, unknown>): Record<string, unknown> {
+    const out = structuredClone((base ?? {}) as Record<string, unknown>);
+    for (const [path, value] of Object.entries(set)) {
+        const keys = pathKeys(path);
+        if (!keys.length) throw new Error(`Empty field path.`);
+        let to = out as Record<string | number, unknown>;
+        for (const [i, k] of keys.slice(0, -1).entries()) {
+            if (to[k] == null) to[k] = typeof keys[i + 1] === "number" ? [] : {};
+            else if (typeof to[k] !== "object") throw new Error(`${keys.slice(0, i + 1).join(".")} is not an object, so ${path} can't be set.`);
+            to = to[k] as Record<string | number, unknown>;
+        }
+        to[keys[keys.length - 1]] = structuredClone(value);
+    }
+    return out;
+}

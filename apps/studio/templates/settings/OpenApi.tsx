@@ -25,6 +25,7 @@ const AGENT: Endpoint[] = [
     { method: "PATCH", path: "/agent/:type/:id", desc: "Update (title?, slug?, data?, status?, scheduledAt?)" },
     { method: "POST", path: "/agent/:type/:id/publish", desc: "Publish an entry" },
     { method: "POST", path: "/agent/:type/:id/unpublish", desc: "Move an entry back to draft" },
+    { method: "PATCH", path: "/agent/:type/bulk", desc: "Set field paths on many entries: { where?: { slug?, id?, status? }, set: { \"hero.subheadline\": \"…\" }, dryRun? }. Max 500, never changes status" },
     { method: "DELETE", path: "/agent/:type/:id", desc: "Delete an entry (kept 30 days in Deleted items)" },
     { method: "GET", path: "/agent/activity", desc: "Activity log: ?entry=&user=&action=&type=&q=&from=&to=&limit=&offset=" },
     { method: "GET", path: "/agent/:type/:id/versions", desc: "Version history" },
