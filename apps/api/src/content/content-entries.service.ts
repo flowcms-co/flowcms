@@ -16,8 +16,10 @@ import { entryPath } from "./route-path";
 import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
 import { keepStoredShape } from "./component-shape";
 import { placeholdersIn, resolvePlaceholders, slugFromPattern } from "./slug-pattern";
-import { draftDiff } from "./draft-diff";
+import { draftDiff, pickPaths, type FieldChange } from "./draft-diff";
 import { eventForStatusChange, type ContentEvent } from "./content-events";
+import { AuditService } from "../audit/audit.service";
+import { currentActor } from "../common/request-context";
 
 /** The content-type columns every entry read needs: identity + the schema JSON,
  *  which carries the page type that `entryPath` uses to build the public path
@@ -39,6 +41,9 @@ const REQUIRE_COMPLETE = new Set<ContentStatus>(["PUBLISHED", "SCHEDULED", "APPR
  *  APPROVED and then publishing (approval-workflow bypass). */
 const PUBLISH_STATES = new Set<string>(["APPROVED", "SCHEDULED", "PUBLISHED"]);
 
+/** The events the Review tab's sign-off log shows. */
+const SIGNOFF_ACTIONS = ["content.submit", "content.approve", "content.request_changes", "content.schedule", "content.publish", "content.unpublish", "content.restore"] as const;
+
 /** Does this actor's permission/scope set grant publish? `undefined` = trusted
  *  internal caller (scheduler, review flow) → allowed. */
 const grantsPublish = (perms?: string[]): boolean =>
@@ -59,6 +64,7 @@ export class ContentEntriesService {
         @Optional() @Inject(APPROVAL_PORT) private readonly approvals?: ApprovalPort,
         // EE `advanced_rbac` field-level rules; absent (unenforced) in Community.
         @Optional() @Inject(RBAC_PORT) private readonly rbac?: RbacPort,
+        @Optional() private readonly audit?: AuditService,
     ) {}
 
     private readonly logger = new Logger(ContentEntriesService.name);
@@ -146,23 +152,36 @@ export class ContentEntriesService {
         }
     }
 
-    /** Record who did what to an entry in the audit log (the dashboard's Recent
-     *  activity reads these). Best-effort. Autosave would flood it, so repeat edits
-     *  by one person to one entry within an hour collapse into a single row. */
-    private async logEvent(workspaceId: string, actorId: string | null | undefined, action: ContentEvent, entryId: string) {
-        try {
-            const userId = actorId ?? null;
-            if (action === "content.edit") {
-                const recent = await this.prisma.auditLog.findFirst({
-                    where: { workspaceId, resourceId: entryId, userId, action, createdAt: { gte: new Date(Date.now() - 3_600_000) } },
-                    select: { id: true },
-                });
-                if (recent) return;
-            }
-            await this.prisma.auditLog.create({ data: { workspaceId, userId, action, resource: "ContentEntry", resourceId: entryId } });
-        } catch (e) {
-            this.logger.warn(`content event not recorded (${action}): ${(e as Error).message}`);
-        }
+    /** Record who did what to an entry in the activity log, with the entry's title,
+     *  slug and type as they are now, the field-level changes and the version
+     *  numbers. Every real save is its own row (no-op saves never get here). */
+    private async logEvent(
+        workspaceId: string,
+        actorId: string | null | undefined,
+        action: ContentEvent,
+        entryId: string,
+        extra: { changes?: FieldChange[]; versions?: { before: number | null; after: number | null }; metadata?: Record<string, unknown> } = {},
+    ) {
+        if (!this.audit) return;
+        const e = await this.prisma.contentEntry.findFirst({
+            where: { id: entryId },
+            select: { slug: true, data: true, draftData: true, contentType: { select: { apiId: true } } },
+        });
+        const changes = extra.changes?.map((c) => ({ path: c.path, before: c.before, after: c.after, ...(c.formattingOnly ? { formattingOnly: true } : {}) }));
+        await this.audit.log({
+            workspaceId,
+            // No actor passed: the request's user (or null for an API token).
+            ...(actorId ? { userId: actorId } : {}),
+            action,
+            resource: "ContentEntry",
+            resourceId: entryId,
+            entryType: e?.contentType.apiId ?? null,
+            title: e ? this.title({ data: e.draftData ?? e.data } as ContentEntry) : null,
+            slug: e?.slug ?? null,
+            versionBefore: extra.versions?.before ?? null,
+            versionAfter: extra.versions?.after ?? null,
+            metadata: changes?.length || extra.metadata ? { ...(changes?.length ? { changes } : {}), ...(extra.metadata ?? {}) } : null,
+        });
     }
 
     /** Best-effort outbound fan-out for a content event: webhooks + Slack/Zapier connectors. */
@@ -173,19 +192,54 @@ export class ContentEntriesService {
         void this.cache.delByPrefix(`dash:${workspaceId}:`);
     }
 
-    /** How many full-body version snapshots to retain per entry. Each snapshot
-     *  stores a complete copy of the entry data, so unbounded growth is a real
-     *  storage cost on heavily-edited entries; we keep the most recent N. */
-    private static readonly VERSION_RETENTION = 10;
+    /** How many full-body version snapshots to retain per entry. Each stores a
+     *  complete copy of the entry data, so growth is bounded; drafts merge (below),
+     *  so most of these are publishes, restores and status changes. */
+    private static readonly VERSION_RETENTION = 50;
+    /** One person's autosaves to a draft within this window are one version. */
+    private static readonly DRAFT_MERGE_MS = 10 * 60_000;
 
-    /** Append a version snapshot of the entry's current data + status, then prune
-     *  older snapshots beyond the retention window. */
-    private async snapshot(entryId: string, data: unknown, status: ContentStatus, createdById?: string | null) {
+    /** The display name for a version's author: the request's actor when it's them
+     *  (or an API token), otherwise the named user. */
+    private async actorNameFor(createdById?: string | null): Promise<string | null> {
+        const who = currentActor();
+        if (!createdById || createdById === who.userId || who.tokenId) return who.name;
+        const u = await this.prisma.user.findUnique({ where: { id: createdById }, select: { name: true, email: true } });
+        return u ? u.name || u.email : who.name;
+    }
+
+    /** Append a version snapshot (label "published" when it is what went live,
+     *  "draft" otherwise), then prune past the retention window. Repeated draft
+     *  saves by one person update their open draft version instead of adding one, so
+     *  autosave doesn't push real history out. Returns the version numbers before
+     *  and after. */
+    private async snapshot(
+        entryId: string,
+        data: unknown,
+        status: ContentStatus,
+        createdById?: string | null,
+        opts: { label?: "draft" | "published"; note?: string } = {},
+    ): Promise<{ before: number | null; after: number }> {
+        const label = opts.label ?? (status === "PUBLISHED" ? "published" : "draft");
+        const actorName = await this.actorNameFor(createdById);
         const last = await this.prisma.contentVersion.findFirst({
             where: { entryId },
             orderBy: { versionNumber: "desc" },
-            select: { versionNumber: true },
+            select: { id: true, versionNumber: true, label: true, note: true, createdById: true, actorName: true, updatedAt: true },
         });
+        if (
+            last &&
+            label === "draft" &&
+            !opts.note &&
+            last.label === "draft" &&
+            !last.note &&
+            (last.createdById ?? null) === (createdById ?? null) &&
+            last.actorName === actorName &&
+            Date.now() - last.updatedAt.getTime() < ContentEntriesService.DRAFT_MERGE_MS
+        ) {
+            await this.prisma.contentVersion.update({ where: { id: last.id }, data: { data: (data ?? {}) as object, status } });
+            return { before: last.versionNumber, after: last.versionNumber };
+        }
         const versionNumber = (last?.versionNumber ?? 0) + 1;
         await this.prisma.contentVersion.create({
             data: {
@@ -193,7 +247,10 @@ export class ContentEntriesService {
                 data: (data ?? {}) as object,
                 status,
                 versionNumber,
-                createdById: createdById ?? null,
+                createdById: createdById ?? currentActor().userId ?? null,
+                actorName,
+                label,
+                note: opts.note ?? null,
             },
         });
         // Prune snapshots older than the retention window (keep the newest N).
@@ -203,41 +260,154 @@ export class ContentEntriesService {
                 .deleteMany({ where: { entryId, versionNumber: { lte: cutoff } } })
                 .catch(() => undefined);
         }
+        return { before: last?.versionNumber ?? null, after: versionNumber };
     }
 
-    /** Version history for an entry (newest first), with author display names. */
+    /** Version history for an entry (newest first): who made each, whether it was a
+     *  draft or what went live, and any note ("restored from v41"). */
     async versions(workspaceId: string, entryId: string) {
         const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId }, select: { id: true } });
         if (!entry) throw new NotFoundException("Entry not found.");
         const rows = await this.prisma.contentVersion.findMany({ where: { entryId }, orderBy: { versionNumber: "desc" }, take: ContentEntriesService.VERSION_RETENTION });
-        const ids = [...new Set(rows.map((r) => r.createdById).filter(Boolean) as string[])];
+        // Versions from before authors were stored by name: look the user up.
+        const ids = [...new Set(rows.filter((r) => !r.actorName).map((r) => r.createdById).filter(Boolean) as string[])];
         const users = ids.length ? await this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } }) : [];
-        const nameOf = (id: string | null) => (id ? users.find((u) => u.id === id)?.name ?? users.find((u) => u.id === id)?.email ?? null : null);
+        const nameOf = (id: string | null) => (id ? (users.find((u) => u.id === id)?.name ?? users.find((u) => u.id === id)?.email ?? null) : null);
         return rows.map((v) => ({
             id: v.id,
             versionNumber: v.versionNumber,
             status: v.status,
+            label: v.label,
+            note: v.note,
             title: ((v.data as { title?: string })?.title) ?? "Untitled",
-            author: nameOf(v.createdById),
+            author: v.actorName ?? nameOf(v.createdById),
             createdAt: v.createdAt,
+            updatedAt: v.updatedAt,
         }));
     }
 
-    /** Restore an entry's data to a past version (records a new version). */
-    async restore(workspaceId: string, entryId: string, versionId: string, actorId?: string) {
-        const version = await this.prisma.contentVersion.findUnique({ where: { id: versionId }, include: { entry: { select: { workspaceId: true, status: true } } } });
-        if (!version || version.entryId !== entryId || version.entry.workspaceId !== workspaceId) {
-            throw new NotFoundException("Version not found.");
-        }
-        const e = await this.prisma.contentEntry.update({
-            where: { id: entryId },
-            data: { data: version.data as Prisma.InputJsonValue, ...(actorId ? { lastEditorId: actorId } : {}) },
-            include: { contentType: { select: CT_SELECT } },
+    /** A version by its id or its number ("41" or "v41"), within the workspace. */
+    private async findVersion(workspaceId: string, entryId: string, ref: string) {
+        const n = /^v?\d+$/i.test(ref) ? Number(ref.replace(/^v/i, "")) : null;
+        const version = await this.prisma.contentVersion.findFirst({
+            where: { entryId, entry: { workspaceId }, ...(n != null ? { versionNumber: n } : { id: ref }) },
         });
-        await this.snapshot(entryId, version.data, e.status, actorId);
+        if (!version) throw new NotFoundException("Version not found.");
+        return version;
+    }
+
+    /** One version with its full content, and what it differs by from the live
+     *  version (and from the pending draft, when there is one): changed fields only. */
+    async version(workspaceId: string, entryId: string, ref: string) {
+        const entry = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId }, select: { data: true, draftData: true, status: true } });
+        if (!entry) throw new NotFoundException("Entry not found.");
+        const v = await this.findVersion(workspaceId, entryId, ref);
+        const [meta] = (await this.versions(workspaceId, entryId)).filter((x) => x.id === v.id);
+        const live = entry.status === "PUBLISHED" ? entry.data : null;
+        return {
+            ...(meta ?? { id: v.id, versionNumber: v.versionNumber, status: v.status, label: v.label, note: v.note, author: v.actorName, createdAt: v.createdAt }),
+            data: v.data,
+            // What restoring this version would change on the live page (null when the
+            // entry isn't live), and in the content being edited.
+            diffFromLive: live ? draftDiff(live, v.data) : null,
+            diffFromCurrent: draftDiff(entry.draftData ?? entry.data, v.data),
+        };
+    }
+
+    /**
+     * Restore a past version. Never overwrites history: the result is a new version
+     * noted "restored from vN", logged with the actor and reason.
+     *  - `mode: "draft"` (default) puts the restored content up for review: on a live
+     *    entry it becomes the pending draft (the live page is unchanged until it is
+     *    approved and published); otherwise the entry goes back to draft.
+     *  - `mode: "publish"` makes it live now and fires content.published, so the site
+     *    refreshes. Needs publish rights.
+     *  - `fields` restores only those field paths (`faq`, `sections[2]`), keeping
+     *    every other field as it is.
+     */
+    async restore(
+        workspaceId: string,
+        entryId: string,
+        versionRef: string,
+        actorId?: string,
+        opts: { mode?: "draft" | "publish"; reason?: string; fields?: string[]; actorPermissions?: string[] } = {},
+    ) {
+        const existing = await this.prisma.contentEntry.findFirst({ where: { id: entryId, workspaceId }, include: { contentType: { select: CT_SELECT } } });
+        if (!existing) throw new NotFoundException("Entry not found.");
+        const version = await this.findVersion(workspaceId, entryId, versionRef);
+        const mode = opts.mode ?? "draft";
+        if (mode === "publish" && !grantsPublish(opts.actorPermissions)) throw new ForbiddenException("Restoring and publishing needs publish rights. Restore as a draft instead.");
+        const reason = opts.reason?.trim().slice(0, 1000) || undefined;
+        const fields = (opts.fields ?? []).map((f) => f.trim()).filter(Boolean);
+
+        const live = (existing.data ?? {}) as Record<string, unknown>;
+        const base = (existing.draftData ?? existing.data ?? {}) as Record<string, unknown>;
+        let restored: Record<string, unknown>;
+        try {
+            restored = fields.length ? pickPaths(base, version.data, fields) : structuredClone((version.data ?? {}) as Record<string, unknown>);
+        } catch (e) {
+            throw new BadRequestException((e as Error).message);
+        }
+        const schema = existing.contentType.schema;
+        validateEntryData(fieldsOf(schema), restored, { enforceRequired: mode === "publish", slug: existing.slug, components: await this.componentMap(workspaceId) });
+
+        const note = `restored from v${version.versionNumber}${fields.length ? ` (${fields.join(", ")})` : ""}`;
+        const isLive = existing.status === "PUBLISHED";
+        let e: EntryWithType;
+        let changes: FieldChange[];
+        let versions: { before: number | null; after: number };
+        if (mode === "publish") {
+            const now = new Date();
+            e = await this.prisma.contentEntry.update({
+                where: { id: entryId },
+                data: {
+                    data: restored as Prisma.InputJsonValue,
+                    draftData: Prisma.DbNull,
+                    draftApproved: false,
+                    status: "PUBLISHED",
+                    publishedAt: now,
+                    firstPublishedAt: existing.firstPublishedAt ?? existing.publishedAt ?? now,
+                    scheduledAt: null,
+                    ...(actorId ? { lastEditorId: actorId } : {}),
+                },
+                include: { contentType: { select: CT_SELECT } },
+            });
+            changes = draftDiff(isLive ? live : base, restored);
+            versions = await this.snapshot(entryId, restored, "PUBLISHED", actorId, { label: "published", note });
+        } else if (isLive) {
+            e = await this.prisma.contentEntry.update({
+                where: { id: entryId },
+                data: { draftData: restored as Prisma.InputJsonValue, draftApproved: false, ...(actorId ? { lastEditorId: actorId } : {}) },
+                include: { contentType: { select: CT_SELECT } },
+            });
+            changes = draftDiff(base, restored);
+            versions = await this.snapshot(entryId, restored, "PUBLISHED", actorId, { label: "draft", note });
+        } else {
+            e = await this.prisma.contentEntry.update({
+                where: { id: entryId },
+                data: { data: restored as Prisma.InputJsonValue, status: "DRAFT", scheduledAt: null, ...(actorId ? { lastEditorId: actorId } : {}) },
+                include: { contentType: { select: CT_SELECT } },
+            });
+            changes = draftDiff(base, restored);
+            versions = await this.snapshot(entryId, restored, "DRAFT", actorId, { label: "draft", note });
+        }
+        if (mode === "publish" || !isLive) await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, restored);
+        await this.logEvent(workspaceId, actorId, "content.restore", entryId, {
+            changes,
+            versions,
+            metadata: { fromVersion: version.versionNumber, mode, ...(fields.length ? { fields } : {}), ...(reason ? { reason } : {}) },
+        });
         const shaped = this.shape(e);
+        const out = mode === "draft" && isLive ? { ...shaped, data: e.draftData, title: String((e.draftData as { title?: unknown })?.title ?? shaped.title) } : shaped;
         this.fire(workspaceId, "content.updated", shaped);
-        return shaped;
+        void this.webhooks.dispatch(workspaceId, "content.restored", { ...shaped, restoredFrom: version.versionNumber, version: versions.after, mode });
+        if (mode === "publish") this.fire(workspaceId, "content.published", shaped);
+        return { ...out, versionNumber: versions.after, restoredFrom: version.versionNumber };
+    }
+
+    /** A restore attempt the actor wasn't allowed to make, kept in the log. */
+    async logDeniedRestore(workspaceId: string, entryId: string, versionRef: string, reason: string) {
+        await this.logEvent(workspaceId, undefined, "content.restore", entryId, { metadata: { denied: true, version: versionRef, reason } });
     }
 
     /** Reviewers' sign-off decisions for an entry's current cycle + the policy. */
@@ -263,7 +433,32 @@ export class ContentEntriesService {
             // the workspace is licensed for it.
             enforced,
             reviews: rows.map((r) => ({ reviewer: nameOf(r.reviewerId), decision: r.decision, note: r.note, at: r.createdAt })),
+            // The full sign-off log across every cycle: each submit, decision, publish
+            // and restore with who did it and the version it produced.
+            history: await this.signoffHistory(workspaceId, entryId),
         };
+    }
+
+    private async signoffHistory(workspaceId: string, entryId: string) {
+        const rows = await this.prisma.auditLog.findMany({
+            where: { workspaceId, resourceId: entryId, action: { in: [...SIGNOFF_ACTIONS] } },
+            orderBy: { createdAt: "desc" },
+            take: 100,
+            select: { id: true, action: true, actorName: true, userId: true, createdAt: true, versionAfter: true, metadata: true, user: { select: { name: true, email: true } } },
+        });
+        return rows.flatMap((r) => {
+            const m = (r.metadata ?? {}) as { note?: string; reason?: string; fromVersion?: number; denied?: boolean };
+            if (m.denied) return []; // refused attempts are in the activity log, not the sign-off log
+            return [{
+                id: r.id,
+                action: r.action,
+                actor: r.actorName ?? r.user?.name ?? r.user?.email ?? (r.userId ? "Former member" : "System"),
+                at: r.createdAt,
+                version: r.versionAfter,
+                note: m.note ?? m.reason ?? null,
+                fromVersion: m.fromVersion ?? null,
+            }];
+        });
     }
 
     /** Record a reviewer's decision. Enough APPROVED → flip to APPROVED; a
@@ -283,8 +478,11 @@ export class ContentEntriesService {
         const reviewer = await this.prisma.user.findUnique({ where: { id: reviewerId }, select: { name: true, email: true } });
         const who = reviewer?.name ?? reviewer?.email ?? "A reviewer";
         const href = `/content/editor?id=${entryId}`;
+        const reviewed = await this.prisma.contentVersion.findFirst({ where: { entryId }, orderBy: { versionNumber: "desc" }, select: { versionNumber: true } });
+        const at = reviewed ? { before: reviewed.versionNumber, after: reviewed.versionNumber } : undefined;
 
         if (decision === "request_changes") {
+            await this.logEvent(workspaceId, reviewerId, "content.request_changes", entryId, { versions: at, metadata: note?.trim() ? { note: note.trim() } : undefined });
             if (entry.status !== "DRAFT") await this.prisma.contentEntry.update({ where: { id: entryId }, data: { status: "DRAFT" } });
             const authorId = effectiveAuthorId(entry, await this.authorMode(workspaceId));
             if (authorId && authorId !== reviewerId) {
@@ -306,14 +504,16 @@ export class ContentEntriesService {
         const approvals = await this.prisma.contentReview.count({ where: { entryId, decision: "APPROVED" } });
         const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { approvalsRequired: true } });
         const required = ws?.approvalsRequired ?? 1;
-        if (entry.status === "IN_REVIEW" && approvals >= required) {
+        const flips = entry.status === "IN_REVIEW" && approvals >= required;
+        if (!flips) await this.logEvent(workspaceId, reviewerId, "content.approve", entryId, { versions: at, metadata: { approvals, required, ...(note?.trim() ? { note: note.trim() } : {}) } });
+        if (flips) {
             const e = await this.prisma.contentEntry.update({
                 where: { id: entryId },
                 data: { status: "APPROVED" },
                 include: { contentType: { select: CT_SELECT } },
             });
-            await this.snapshot(entryId, entry.data, "APPROVED", reviewerId);
-            await this.logEvent(workspaceId, reviewerId, "content.approve", entryId);
+            const versions = await this.snapshot(entryId, entry.data, "APPROVED", reviewerId);
+            await this.logEvent(workspaceId, reviewerId, "content.approve", entryId, { versions, metadata: { approvals, required, ...(note?.trim() ? { note: note.trim() } : {}) } });
             await this.notifyTransition(workspaceId, reviewerId, entry, this.title(e), "IN_REVIEW", "APPROVED");
             this.fire(workspaceId, "content.updated", this.shape(e));
         }
@@ -763,8 +963,8 @@ export class ContentEntriesService {
         } else {
             e = await insert(this.prisma);
         }
-        await this.snapshot(e.id, data, "DRAFT", userId);
-        await this.logEvent(workspaceId, userId, "content.create", e.id);
+        const versions = await this.snapshot(e.id, data, "DRAFT", userId, { note: "created" });
+        await this.logEvent(workspaceId, userId, "content.create", e.id, { versions });
         await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, data);
         await this.propagateReverse(workspaceId, e.id, e.contentType.schema, submittedReverse, { actorId: userId ?? undefined, role });
         const shaped = this.shape(e);
@@ -850,8 +1050,9 @@ export class ContentEntriesService {
                 data: patch,
                 include: { contentType: { select: CT_SELECT } },
             });
-            await this.snapshot(updated.id, draft, existing.status, actorId);
-            if (this.changed(base, draft)) await this.logEvent(workspaceId, actorId, "content.edit", id);
+            const versions = await this.snapshot(updated.id, draft, existing.status, actorId, { label: "draft" });
+            if (this.changed(base, draft)) await this.logEvent(workspaceId, actorId, "content.edit", id, { changes: draftDiff(base, draft), versions, metadata: { draft: true } });
+            if (updated.slug !== existing.slug) await this.logEvent(workspaceId, actorId, "content.slug_change", id, { changes: [{ path: "slug", before: existing.slug, after: updated.slug, formattingOnly: false }], versions });
             await this.propagateReverse(workspaceId, updated.id, existing.contentType.schema, submittedReverse, { actorId, role, actorPermissions });
             const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
             this.fire(workspaceId, "content.updated", shaped);
@@ -919,9 +1120,12 @@ export class ContentEntriesService {
         if (targetStatus === "IN_REVIEW" && existing.status !== "IN_REVIEW") {
             await this.prisma.contentReview.deleteMany({ where: { entryId: id } });
         }
-        await this.snapshot(e.id, merged, targetStatus, actorId);
-        if (targetStatus !== existing.status) await this.logEvent(workspaceId, actorId, eventForStatusChange(existing.status, targetStatus), id);
-        else if (dataChanged) await this.logEvent(workspaceId, actorId, "content.edit", id);
+        const versions = await this.snapshot(e.id, merged, targetStatus, actorId);
+        const changes = dataChanged ? draftDiff(existing.data, merged) : [];
+        if (targetStatus !== existing.status) {
+            await this.logEvent(workspaceId, actorId, eventForStatusChange(existing.status, targetStatus), id, { changes, versions, metadata: { from: existing.status, to: targetStatus } });
+        } else if (changes.length) await this.logEvent(workspaceId, actorId, "content.edit", id, { changes, versions });
+        if (e.slug !== existing.slug) await this.logEvent(workspaceId, actorId, "content.slug_change", id, { changes: [{ path: "slug", before: existing.slug, after: e.slug, formattingOnly: false }], versions });
         const shaped = this.shape(e);
         this.fire(workspaceId, "content.updated", shaped);
         if (targetStatus !== existing.status) {
@@ -959,8 +1163,8 @@ export class ContentEntriesService {
             await this.notifyTransition(workspaceId, actorId, existing, this.title(e), existing.status, status);
         }
         if (status !== existing.status) {
-            await this.snapshot(e.id, existing.data, status, actorId);
-            await this.logEvent(workspaceId, actorId, eventForStatusChange(existing.status, status), id);
+            const versions = await this.snapshot(e.id, existing.data, status, actorId);
+            await this.logEvent(workspaceId, actorId, eventForStatusChange(existing.status, status), id, { versions, metadata: { from: existing.status, to: status } });
         }
         const shaped = this.shape(e);
         if (status === "PUBLISHED") this.fire(workspaceId, "content.published", shaped);
@@ -1000,8 +1204,8 @@ export class ContentEntriesService {
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date(), firstPublishedAt: existing.firstPublishedAt ?? existing.publishedAt ?? new Date(), scheduledAt: null },
                 include: { contentType: { select: CT_SELECT } },
             });
-            await this.snapshot(e.id, promoted, "PUBLISHED", actorId);
-            await this.logEvent(workspaceId, actorId, "content.publish", id);
+            const versions = await this.snapshot(e.id, promoted, "PUBLISHED", actorId, { label: "published" });
+            await this.logEvent(workspaceId, actorId, "content.publish", id, { changes: draftDiff(existing.data, promoted), versions, metadata: { from: "PUBLISHED", to: "PUBLISHED", draftPublished: true } });
             await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, promoted);
             const shaped = this.shape(e);
             this.fire(workspaceId, "content.published", shaped);
@@ -1021,8 +1225,8 @@ export class ContentEntriesService {
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "DRAFT", publishedAt: null },
                 include: { contentType: { select: CT_SELECT } },
             });
-            await this.snapshot(e.id, e.data, "DRAFT", actorId);
-            await this.logEvent(workspaceId, actorId, "content.unpublish", id);
+            const versions = await this.snapshot(e.id, e.data, "DRAFT", actorId);
+            await this.logEvent(workspaceId, actorId, "content.unpublish", id, { changes: draftDiff(existing.data, e.data), versions, metadata: { from: "PUBLISHED", to: "DRAFT" } });
             await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, (e.data ?? {}) as Record<string, unknown>);
             const shaped = this.shape(e);
             this.fire(workspaceId, "content.unpublished", shaped);
@@ -1046,7 +1250,12 @@ export class ContentEntriesService {
             data: { draftApproved: true },
             include: { contentType: { select: CT_SELECT } },
         });
-        await this.logEvent(workspaceId, actorId, "content.approve", id);
+        const v = await this.prisma.contentVersion.findFirst({ where: { entryId: id }, orderBy: { versionNumber: "desc" }, select: { versionNumber: true } });
+        await this.logEvent(workspaceId, actorId, "content.approve", id, {
+            changes: draftDiff(existing.data, existing.draftData),
+            versions: v ? { before: v.versionNumber, after: v.versionNumber } : undefined,
+            metadata: { draft: true },
+        });
         // The "Ready to publish" count includes approved drafts of live pages.
         void this.cache.delByPrefix(`dash:${workspaceId}:`);
         const draft = (e.draftData ?? {}) as { title?: string };
@@ -1054,7 +1263,7 @@ export class ContentEntriesService {
     }
 
     /** Discard a published entry's pending draft and revert to the live version. */
-    async discardDraft(workspaceId: string, id: string) {
+    async discardDraft(workspaceId: string, id: string, actorId?: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
             include: { contentType: { select: CT_SELECT } },
@@ -1066,6 +1275,7 @@ export class ContentEntriesService {
             data: { draftData: Prisma.DbNull, draftApproved: false },
             include: { contentType: { select: CT_SELECT } },
         });
+        await this.logEvent(workspaceId, actorId, "content.discard_draft", id, { changes: draftDiff(existing.draftData, existing.data) });
         return this.shape(e);
     }
 
@@ -1090,25 +1300,104 @@ export class ContentEntriesService {
             include: { contentType: { select: CT_SELECT } },
         });
         await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, data);
+        const versions = await this.snapshot(e.id, data, "DRAFT", userId, { note: `copy of ${this.title(src)}` });
+        await this.logEvent(workspaceId, userId, "content.create", e.id, { versions, metadata: { duplicatedFrom: src.id } });
         return this.shape(e);
     }
 
-    async remove(workspaceId: string, id: string) {
+    /** How long a deleted entry or asset stays in "Deleted items" before it's purged. */
+    static readonly TRASH_DAYS = 30;
+
+    /**
+     * Delete an entry into the "Deleted items" bin: the row, its versions and its
+     * relation links are kept for 30 days, so restoreDeleted() can bring it back
+     * whole under the same id. The live page goes away now (content.deleted fires).
+     */
+    async remove(workspaceId: string, id: string, actorId?: string) {
         const existing = await this.prisma.contentEntry.findFirst({
             where: { id, workspaceId },
             include: { contentType: { select: CT_SELECT } },
         });
         if (!existing) throw new NotFoundException("Entry not found.");
-        // deleteMany with workspaceId is defence-in-depth: even if the ownership
-        // check above were ever weakened, the delete itself stays tenant-scoped.
-        await this.prisma.contentEntry.deleteMany({ where: { id, workspaceId } });
+        const [versions, relationsFrom, relationsTo] = await Promise.all([
+            this.prisma.contentVersion.findMany({ where: { entryId: id } }),
+            this.prisma.entryRelation.findMany({ where: { fromId: id } }),
+            this.prisma.entryRelation.findMany({ where: { toId: id } }),
+        ]);
+        const { contentType, ...row } = existing;
+        const who = currentActor();
+        const deletedById = actorId ?? who.userId;
+        await this.logEvent(workspaceId, actorId, "content.delete", id, { metadata: { status: existing.status, type: contentType.name } });
+        await this.prisma.$transaction([
+            this.prisma.deletedItem.create({
+                data: {
+                    workspaceId,
+                    kind: "entry",
+                    itemId: id,
+                    title: this.title(existing),
+                    detail: contentType.name,
+                    payload: JSON.parse(JSON.stringify({ entry: row, versions, relationsFrom, relationsTo })) as Prisma.InputJsonValue,
+                    deletedById,
+                    deletedBy: await this.actorNameFor(deletedById),
+                    purgeAt: new Date(Date.now() + ContentEntriesService.TRASH_DAYS * 86_400_000),
+                },
+            }),
+            // deleteMany with workspaceId is defence-in-depth: even if the ownership
+            // check above were ever weakened, the delete itself stays tenant-scoped.
+            this.prisma.contentEntry.deleteMany({ where: { id, workspaceId } }),
+        ]);
         void this.webhooks.dispatch(workspaceId, "content.deleted", {
             id: existing.id,
             slug: existing.slug,
-            type: existing.contentType.apiId,
-            path: entryPath(existing.contentType, existing.slug),
+            type: contentType.apiId,
+            path: entryPath(contentType, existing.slug),
             title: this.title(existing),
         });
+        void this.cache.delByPrefix(`dash:${workspaceId}:`);
         return { ok: true };
+    }
+
+    /** Bring a deleted entry back from the bin, with its versions and links, under
+     *  its old id. It comes back as a draft (a live page needs publishing again), and
+     *  with "-restored" on its slug if another page took the slug meanwhile. */
+    async restoreDeleted(workspaceId: string, deletedId: string, actorId?: string) {
+        const item = await this.prisma.deletedItem.findFirst({ where: { id: deletedId, workspaceId, kind: "entry" } });
+        if (!item) throw new NotFoundException("Deleted item not found.");
+        type Row = Record<string, unknown> & { id: string; contentTypeId: string; slug: string | null; locale: string; status: ContentStatus };
+        const p = item.payload as { entry: Row; versions: Record<string, unknown>[]; relationsFrom: Record<string, unknown>[]; relationsTo: (Record<string, unknown> & { fromId: string })[] };
+        const type = await this.prisma.contentType.findFirst({ where: { id: p.entry.contentTypeId, workspaceId }, select: { id: true } });
+        if (!type) throw new BadRequestException("Its content type has been deleted, so this entry can't be restored.");
+        if (await this.prisma.contentEntry.findUnique({ where: { id: p.entry.id }, select: { id: true } })) throw new BadRequestException("This entry already exists.");
+        const slug = p.entry.slug && (await this.slugConflict(workspaceId, type.id, p.entry.slug, p.entry.locale)) ? await this.uniqueSlug(workspaceId, type.id, `${p.entry.slug}-restored`, p.entry.locale) : p.entry.slug;
+        // The generated title column is never written.
+        const { title: _title, ...entry } = p.entry;
+        void _title;
+        const wasLive = entry.status === "PUBLISHED" || entry.status === "SCHEDULED";
+        const owners = p.relationsTo.length ? await this.prisma.contentEntry.findMany({ where: { id: { in: p.relationsTo.map((r) => r.fromId) }, workspaceId }, select: { id: true } }) : [];
+        const ownerIds = new Set(owners.map((o) => o.id));
+        await this.prisma.$transaction([
+            this.prisma.contentEntry.create({
+                data: {
+                    ...(entry as unknown as Prisma.ContentEntryUncheckedCreateInput),
+                    slug,
+                    draftData: (entry.draftData ?? Prisma.DbNull) as Prisma.InputJsonValue,
+                    ...(wasLive ? { status: "DRAFT", publishedAt: null, scheduledAt: null } : {}),
+                },
+            }),
+            this.prisma.contentVersion.createMany({ data: p.versions as unknown as Prisma.ContentVersionCreateManyInput[] }),
+            this.prisma.entryRelation.createMany({
+                data: [...p.relationsFrom, ...p.relationsTo.filter((r) => ownerIds.has(r.fromId))] as unknown as Prisma.EntryRelationCreateManyInput[],
+                skipDuplicates: true,
+            }),
+            this.prisma.deletedItem.delete({ where: { id: item.id } }),
+        ]);
+        const e = await this.prisma.contentEntry.findUniqueOrThrow({ where: { id: p.entry.id }, include: { contentType: { select: CT_SELECT } } });
+        // Forward links to entries deleted meanwhile drop out here.
+        await this.relations.syncEntry(workspaceId, e.id, e.contentTypeId, e.contentType.schema, (e.data ?? {}) as Record<string, unknown>);
+        const versions = await this.snapshot(e.id, e.data, e.status, actorId, { note: "restored from Deleted items" });
+        await this.logEvent(workspaceId, actorId, "content.restore_deleted", e.id, { versions, metadata: { deletedAt: item.deletedAt, deletedBy: item.deletedBy, ...(slug !== p.entry.slug ? { slugChanged: { from: p.entry.slug, to: slug } } : {}) } });
+        const shaped = this.shape(e);
+        this.fire(workspaceId, "content.created", shaped);
+        return shaped;
     }
 }

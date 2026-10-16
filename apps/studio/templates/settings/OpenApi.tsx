@@ -25,7 +25,19 @@ const AGENT: Endpoint[] = [
     { method: "PATCH", path: "/agent/:type/:id", desc: "Update (title?, slug?, data?, status?, scheduledAt?)" },
     { method: "POST", path: "/agent/:type/:id/publish", desc: "Publish an entry" },
     { method: "POST", path: "/agent/:type/:id/unpublish", desc: "Move an entry back to draft" },
-    { method: "DELETE", path: "/agent/:type/:id", desc: "Delete an entry" },
+    { method: "DELETE", path: "/agent/:type/:id", desc: "Delete an entry (kept 30 days in Deleted items)" },
+    { method: "GET", path: "/agent/activity", desc: "Activity log: ?entry=&user=&action=&type=&q=&from=&to=&limit=&offset=" },
+    { method: "GET", path: "/agent/:type/:id/versions", desc: "Version history" },
+    { method: "GET", path: "/agent/:type/:id/versions/:v", desc: "One version, with its diff against the live version" },
+    { method: "POST", path: "/agent/:type/:id/versions/:v/restore", desc: "Restore (mode: draft | publish, reason?, fields?). Needs content.restore" },
+    { method: "GET", path: "/agent/assets", desc: "List media: ?q=&folder=&type=&width=&height=&unused=&missingAlt=&tag=. Needs media.read" },
+    { method: "GET", path: "/agent/assets/:id", desc: "One asset" },
+    { method: "GET", path: "/agent/assets/:id/usage", desc: "Entries and field paths using an asset" },
+    { method: "POST", path: "/agent/assets", desc: "Upload (multipart file) or import ({ url }), with alt, caption, folder, tags. Needs media.write" },
+    { method: "PATCH", path: "/agent/assets/:id", desc: "Edit alt, caption, filename, folder, tags (or PATCH /agent/assets with { items } for many)" },
+    { method: "POST", path: "/agent/assets/:id/replace", desc: "Swap the file, keep the id: pages using it update" },
+    { method: "DELETE", path: "/agent/assets/:id", desc: "Delete (refused while in use unless ?force=true). Needs media.delete" },
+    { method: "GET", path: "/agent/asset-folders", desc: "Folders (POST, PATCH /:name, DELETE /:name to manage)" },
 ];
 
 const MethodRow = ({ e }: { e: Endpoint }) => (

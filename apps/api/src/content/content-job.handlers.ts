@@ -2,6 +2,7 @@ import { HttpException, Injectable, OnModuleInit } from "@nestjs/common";
 import { PERMISSIONS } from "@flowcms/shared";
 import { JobsService, type JobRow, type JobHelpers } from "../jobs/jobs.service";
 import { ContentEntriesService } from "./content-entries.service";
+import { BackupsService, BULK_DELETE_SNAPSHOT_AT } from "../backups/backups.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { altBackfillPatch } from "./alt-backfill";
 import { fieldsOf } from "./entry-validation";
@@ -21,6 +22,7 @@ export class ContentJobHandlers implements OnModuleInit {
         private readonly jobs: JobsService,
         private readonly entries: ContentEntriesService,
         private readonly prisma: PrismaService,
+        private readonly backups: BackupsService,
     ) {}
 
     onModuleInit() {
@@ -38,7 +40,12 @@ export class ContentJobHandlers implements OnModuleInit {
             const scheduledAt = (j.payload as { scheduledAt?: string })?.scheduledAt;
             return this.run(j, h, (ws, id, uid) => this.entries.update(ws, id, { status: "SCHEDULED", scheduledAt }, uid, undefined, [PERMISSIONS.CONTENT_PUBLISH]), "Scheduled");
         });
-        this.jobs.register("content.bulkDelete", (j, h) => this.run(j, h, (ws, id) => this.entries.remove(ws, id), "Deleted"));
+        this.jobs.register("content.bulkDelete", async (j, h) => {
+            // A big delete takes a workspace snapshot first (master rollback point).
+            const ids = (j.payload as { ids?: string[] })?.ids ?? [];
+            if (ids.length >= BULK_DELETE_SNAPSHOT_AT) await this.backups.create(j.workspaceId, "pre-bulk-delete", `before deleting ${ids.length} entries`).catch(() => undefined);
+            return this.run(j, h, (ws, id, uid) => this.entries.remove(ws, id, uid), "Deleted");
+        });
         this.jobs.register("content.fillAltFromAssets", (j, h) => this.fillAltFromAssets(j, h));
     }
 

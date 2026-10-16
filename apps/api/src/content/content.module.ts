@@ -22,16 +22,23 @@ import { SelectorMapsService } from "./selector-maps.service";
 import { ApiTokenGuard } from "./api-token.guard";
 import { AgentTokenGuard } from "./agent-token.guard";
 import { ContentJobHandlers } from "./content-job.handlers";
+import { AgentMediaController } from "./agent-media.controller";
+import { TrashController } from "./trash.controller";
+import { AssetsModule } from "../assets/assets.module";
+import { BackupsModule } from "../backups/backups.module";
 
 @Module({
-    imports: [NotificationsModule, WebhooksModule, ConnectorsModule, PluginsModule],
+    imports: [NotificationsModule, WebhooksModule, ConnectorsModule, PluginsModule, AssetsModule, BackupsModule],
     controllers: [
         ContentTypesController,
         ContentEntriesController,
         ApiTokensController,
         PublicController,
         GraphqlController,
+        // Before AgentController: its `:type` route would otherwise take /agent/assets.
+        AgentMediaController,
         AgentController,
+        TrashController,
         StrapiController,
         SelectorMapsController,
     ],

@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Query, Req, Patch, Post, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
-import { IsIn, IsObject, IsOptional, IsString, MaxLength } from "class-validator";
+import { ArrayMaxSize, IsArray, IsIn, IsObject, IsOptional, IsString, MaxLength } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { Public } from "../auth/decorators";
 import { AgentTokenGuard } from "./agent-token.guard";
@@ -9,8 +9,10 @@ import { tokenScopeAllows } from "./agent-scope";
 import { ContentEntriesService } from "./content-entries.service";
 import { ContentTypesService } from "./content-types.service";
 import { PublicQueryService } from "./public-query.service";
+import { AuditService } from "../audit/audit.service";
+import { activityFilter } from "../audit/audit.controller";
 
-type TokenReq = Request & { apiToken: { workspaceId: string; scopes?: unknown; createdById?: string | null } };
+type TokenReq = Request & { apiToken: { id: string; name: string; workspaceId: string; scopes?: unknown; createdById?: string | null } };
 const EDITABLE = ["DRAFT", "IN_REVIEW", "APPROVED", "SCHEDULED", "ARCHIVED"] as const;
 
 /** Throwing wrapper used by the controller routes (see ./agent-scope). */
@@ -32,6 +34,12 @@ class AgentUpdateDto {
     @IsOptional() @IsObject() data?: Record<string, unknown>;
     @IsOptional() @IsIn(EDITABLE) status?: (typeof EDITABLE)[number];
     @IsOptional() @IsString() scheduledAt?: string;
+}
+
+class AgentRestoreDto {
+    @IsOptional() @IsIn(["draft", "publish"]) mode?: "draft" | "publish";
+    @IsOptional() @IsString() @MaxLength(1000) reason?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) fields?: string[];
 }
 
 class AgentReviewDto {
@@ -60,11 +68,25 @@ export class AgentController {
         private readonly entries: ContentEntriesService,
         private readonly types: ContentTypesService,
         private readonly query: PublicQueryService,
+        private readonly audit: AuditService,
     ) {}
 
     @Get("types")
     listTypes(@Req() req: TokenReq) {
         return this.types.list(req.apiToken.workspaceId);
+    }
+
+    /**
+     * The content and media activity log: ?entry=&user=&action=&type=&q=&from=&to=
+     * &limit=&offset= → { items, total }. Each item names the actor (user, or the
+     * token), the entry as it was, the version numbers and, for edits, `metadata.changes`
+     * (field path, before, after). Sign-ins and other security events are not exposed here.
+     * Declared before `:type` so "activity" isn't read as a content type.
+     */
+    @Get("activity")
+    activity(@Req() req: TokenReq, @Query() q: Record<string, string | undefined>) {
+        requireScope(req, PERMISSIONS.CONTENT_READ);
+        return this.audit.list(req.apiToken.workspaceId, { ...activityFilter(q), resources: ["ContentEntry", "Media"] });
     }
 
     @Get(":type")
@@ -111,6 +133,41 @@ export class AgentController {
         requireScope(req, PERMISSIONS.CONTENT_READ);
         const v = await this.entries.liveAndDraft(req.apiToken.workspaceId, id);
         return { hasDraft: v.hasDraft, draftApproved: v.draftApproved, formattingOnly: v.formattingOnly, changes: v.changes };
+    }
+
+    /** Version history: number, draft/published label, author, note, time. */
+    @Get(":type/:id/versions")
+    versions(@Req() req: TokenReq, @Param("id") id: string) {
+        requireScope(req, PERMISSIONS.CONTENT_READ);
+        return this.entries.versions(req.apiToken.workspaceId, id);
+    }
+
+    /** One version (by number, "41" or "v41", or id) with its content and its diff
+     *  against the live version and the content being edited. */
+    @Get(":type/:id/versions/:v")
+    version(@Req() req: TokenReq, @Param("id") id: string, @Param("v") v: string) {
+        requireScope(req, PERMISSIONS.CONTENT_READ);
+        return this.entries.version(req.apiToken.workspaceId, id, v);
+    }
+
+    /**
+     * Restore a version: `{ mode: "draft" | "publish", reason?, fields?: ["faq"] }`.
+     * Needs the `content.restore` scope, which a token has only when it was picked
+     * for it ("*" doesn't include it); "publish" also needs `content.publish`. Creates
+     * a new version ("restored from v41"); every attempt is logged.
+     */
+    @Post(":type/:id/versions/:v/restore")
+    async restore(@Req() req: TokenReq, @Param("id") id: string, @Param("v") v: string, @Body() dto: AgentRestoreDto) {
+        const missing = !tokenScopeAllows(req.apiToken.scopes, PERMISSIONS.CONTENT_RESTORE)
+            ? PERMISSIONS.CONTENT_RESTORE
+            : dto.mode === "publish" && !tokenScopeAllows(req.apiToken.scopes, PERMISSIONS.CONTENT_PUBLISH)
+              ? PERMISSIONS.CONTENT_PUBLISH
+              : null;
+        if (missing) {
+            await this.entries.logDeniedRestore(req.apiToken.workspaceId, id, v, `token lacks the '${missing}' scope`);
+            throw new ForbiddenException(`This token is not authorized for '${missing}'.`);
+        }
+        return this.entries.restore(req.apiToken.workspaceId, id, v, undefined, { mode: dto.mode, reason: dto.reason, fields: dto.fields, actorPermissions: [PERMISSIONS.CONTENT_PUBLISH] });
     }
 
     @Post(":type")

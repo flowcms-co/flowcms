@@ -5,6 +5,11 @@
 {
 	admin off
 	auto_https off
+	# The platform's edge proxy connects from a private or carrier-grade NAT address.
+	# Trusting those keeps the visitor's IP in X-Forwarded-For for the API.
+	servers {
+		trusted_proxies static private_ranges 100.64.0.0/10
+	}
 }
 
 :{$PORT:8080} {

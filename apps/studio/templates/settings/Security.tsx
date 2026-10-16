@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { actionLabel, type ActivityRow } from "@/lib/activity";
 import Card from "@/components/ui/Card";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { api } from "@/lib/api";
-import UpgradeLock from "@/components/ui/UpgradeLock";
 import IpPolicyCard from "@/templates/settings/IpPolicyCard";
 import SsoCard from "@/templates/settings/SsoCard";
 import ScimCard from "@/templates/settings/ScimCard";
@@ -15,37 +16,7 @@ const inputCls =
 type SetupData = { secret: string; otpauth: string; qr: string };
 type Mode = "idle" | "setup" | "disable" | "regen" | "backup";
 
-/** Friendly labels for audit actions. */
-const ACTION_LABEL: Record<string, string> = {
-    "auth.signin": "Signed in",
-    "auth.signin_failed": "Failed sign-in",
-    "auth.signout": "Signed out",
-    "auth.password_reset": "Password reset",
-    "auth.2fa_enabled": "Enabled 2FA",
-    "auth.2fa_disabled": "Disabled 2FA",
-    "auth.2fa_backup_regenerated": "Regenerated backup codes",
-    "user.create": "Created user",
-    "user.update": "Updated user",
-    "user.delete": "Deleted user",
-    "role.create": "Created role",
-    "role.update": "Updated role",
-    "role.delete": "Deleted role",
-    "integration.connect": "Connected integration",
-    "integration.remove": "Removed integration",
-    "apitoken.create": "Created API token",
-    "apitoken.revoke": "Revoked API token",
-};
-
-type AuditRow = {
-    id: string;
-    action: string;
-    resource: string;
-    resourceId: string | null;
-    metadata: Record<string, unknown> | null;
-    ip: string | null;
-    createdAt: string;
-    actor: { id: string; name: string | null; email: string } | null;
-};
+type AuditRow = ActivityRow;
 
 const Security = () => {
     const { user, refresh, can } = useAuth();
@@ -219,12 +190,6 @@ const Security = () => {
                     <div data-tour="security-audit">
                         <AuditLog />
                     </div>
-                    <UpgradeLock
-                        feature="audit_export"
-                        icon="download"
-                        title="Export the audit log"
-                        description="Stream or export the full audit trail to CSV and your SIEM (Splunk, Datadog, Elastic) for long-term retention and compliance."
-                    />
                     <div data-tour="security-enterprise" className="flex flex-col gap-6">
                         <SsoCard />
                         <ScimCard />
@@ -259,11 +224,16 @@ const AuditLog = () => {
             <div className="flex items-center justify-between gap-4">
                 <div>
                     <h2 className="text-h5 text-black dark:text-white">Security audit log</h2>
-                    <p className="mt-1 text-caption-2 text-grey">The 5 most recent security-sensitive actions. Export the full log below.</p>
+                    <p className="mt-1 text-caption-2 text-grey">The 5 most recent events. The full log, with filters and CSV / JSON export, is in Settings › Activity.</p>
                 </div>
-                <button type="button" onClick={load} className="btn-secondary h-9 px-3.5 text-caption-1">
-                    Refresh
-                </button>
+                <div className="flex gap-2">
+                    <button type="button" onClick={load} className="btn-secondary h-9 px-3.5 text-caption-1">
+                        Refresh
+                    </button>
+                    <Link href="/settings/activity" className="btn-primary h-9 px-3.5 text-caption-1">
+                        Full activity log
+                    </Link>
+                </div>
             </div>
 
             {error && <div className="mt-4 rounded-lg bg-error/10 px-4 py-3 text-body-sm font-medium text-error">{error}</div>}
@@ -282,12 +252,13 @@ const AuditLog = () => {
                         {rows?.map((r) => (
                             <tr key={r.id} className="border-b border-grey-light/60 last:border-b-0 dark:border-grey-light/5">
                                 <td className="py-2.5 pr-4 text-black dark:text-white">
-                                    {ACTION_LABEL[r.action] ?? r.action}
+                                    {actionLabel(r.action)}
+                                    {r.title && <span className="ml-1.5 text-caption-2 text-grey">{r.title}</span>}
                                     {r.metadata && typeof r.metadata === "object" && (r.metadata as { reason?: string }).reason && (
                                         <span className="ml-1.5 text-caption-2 text-error">({(r.metadata as { reason?: string }).reason})</span>
                                     )}
                                 </td>
-                                <td className="py-2.5 pr-4 text-grey">{r.actor?.name || r.actor?.email || "—"}</td>
+                                <td className="py-2.5 pr-4 text-grey">{r.actor?.name || r.actor?.email || "System"}</td>
                                 <td className="py-2.5 pr-4 font-mono text-caption-1 text-grey">{r.ip ?? "—"}</td>
                                 <td className="py-2.5 text-grey">{new Date(r.createdAt).toLocaleString()}</td>
                             </tr>

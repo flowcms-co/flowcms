@@ -58,6 +58,11 @@ model Workspace {
   brandLogoUrl  String? // custom logo shown in the sidebar (image URL or /media ref)
   brandAccent   String? // hex accent (e.g. #0EA5E9); retints the studio's primary
   onboardedAt   DateTime? // null until the first-run guided setup is finished/skipped
+  auditRetentionDays Int  @default(365) // activity log rows older than this are pruned daily (minimum 365)
+  alertEmails   String[] @default([]) // who is emailed on sensitive activity (publish/unpublish of a live page, slug change, delete, restore, role change, new token)
+  alertsEnabled Boolean  @default(false) // send those alerts (email + the activity.alert webhook)
+  mediaMaxMb    Int      @default(25) // largest upload accepted, in MB
+  mediaAllowedTypes String[] @default(["jpg", "png", "webp", "avif", "gif", "mp4", "webm", "mov", "pdf", "zip", "txt", "csv", "md", "doc", "docx"]) // file extensions uploads may have (SVG is refused regardless: it can carry script)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -83,6 +88,9 @@ model Workspace {
   aiQuotaDaily    AiQuotaDaily[]
   jobs            Job[]
   selectorMaps    SelectorMap[]
+  mediaFolders    MediaFolder[]
+  deletedItems    DeletedItem[]
+  backups         WorkspaceBackup[]
 }
 
 model User {
@@ -428,7 +436,11 @@ model ContentVersion {
   status        ContentStatus
   versionNumber Int
   createdById   String?
+  actorName     String? // who made it, as they were then (a user's name or "<token> (API token)")
+  label         String  @default("published") // "draft" (unpublished edits) or "published" (what was live)
+  note          String? // e.g. "restored from v41"
   createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @default(now()) @updatedAt // a draft version absorbs its author's later autosaves
 
   @@index([entryId])
 }
@@ -487,8 +499,12 @@ model Media {
   altSource   String? // ai | manual | none
   folder      String?
   hash        String? // sha256 of the original upload bytes; equal hashes = duplicate files
+  caption     String?
+  tags        String[]  @default([])
   createdById String?
+  uploadedBy  String? // who uploaded it, as they were then (a user's name or "<token> (API token)")
   createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
 
   @@index([workspaceId])
   @@index([workspaceId, createdAt])
@@ -638,11 +654,26 @@ model AuditLog {
   action      String // e.g. "content.publish"
   resource    String // e.g. "ContentEntry"
   resourceId  String?
-  metadata    Json?
+  metadata    Json? // action details; content events carry `changes` (field path, before, after)
   ip          String?
+  userAgent   String?
+  // Who acted, as they were at that moment (a user's name, or "<token name> (API token)").
+  actorName   String?
+  actorRole   String?
+  tokenId     String? // the API token an agent write came through
+  // The entry as it was at that moment, so the log reads right after a rename or delete.
+  entryType   String? // content type apiId
+  title       String?
+  slug        String?
+  versionBefore Int?
+  versionAfter  Int?
   createdAt   DateTime  @default(now())
 
+  // Append only: an UPDATE is refused by a trigger (see the activity_log migration).
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, resourceId, createdAt])
+  @@index([workspaceId, action, createdAt])
+  @@index([workspaceId, userId, createdAt])
 }
 
 // Cached metrics pulled from Search Console / Analytics — what the dashboards
@@ -822,4 +853,58 @@ model ConsentRecord {
   createdAt         DateTime @default(now())
 
   @@index([userId])
+}
+
+/// A media folder. Assets name their folder in Media.folder; a row here lets a
+/// folder exist before anything is in it.
+model MediaFolder {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, name])
+}
+
+/// The "Deleted items" bin: a deleted entry or asset, kept whole for 30 days so it
+/// can be restored, then purged (with the asset's files).
+model DeletedItem {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  kind        String // "entry" | "media"
+  itemId      String // the deleted row's id; a restore brings it back under the same id
+  title       String
+  detail      String? // content type name, or the file's mime type
+  payload     Json // the row (and an entry's versions and relation links) as it was
+  deletedById String?
+  deletedBy   String? // display name of who deleted it
+  deletedAt   DateTime  @default(now())
+  purgeAt     DateTime
+
+  @@index([workspaceId, deletedAt])
+  @@index([purgeAt])
+}
+
+/// A snapshot of a workspace's content (types, entries, reviews, relations,
+/// selector maps, media and folders), Brotli-compressed JSON. Taken daily (when
+/// something changed), on demand, before a bulk delete and before a master
+/// rollback; kept 2 days. Only a Super Admin can list, download
+/// or roll back to one; there is no way to delete one except age-based pruning.
+model WorkspaceBackup {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  kind        String // "daily" | "manual" | "pre-bulk-delete" | "pre-rollback"
+  note        String?
+  counts      Json // { types, entries, media, ... }
+  sizeBytes   Int
+  data        Bytes // Brotli-compressed JSON
+  hash        String? // sha256 of the content, to skip a daily snapshot when nothing changed
+  createdById String?
+  createdBy   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
 }

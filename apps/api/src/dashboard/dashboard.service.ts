@@ -120,8 +120,8 @@ export class DashboardService {
             this.prisma.auditLog.findMany({
                 where: { workspaceId, resource: "ContentEntry", action: { startsWith: "content." } },
                 orderBy: { createdAt: "desc" },
-                take: 60,
-                select: { id: true, action: true, userId: true, resourceId: true, createdAt: true },
+                take: 200,
+                select: { id: true, action: true, userId: true, resourceId: true, createdAt: true, actorName: true },
             }),
             // Only this week's items: what is still scheduled, and what went live.
             this.prisma.contentEntry.findMany({

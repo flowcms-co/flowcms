@@ -15,6 +15,13 @@ export const WEBHOOK_EVENTS = [
     "content.unpublished",
     "content.scheduled",
     "content.deleted",
+    "content.restored",
+    "media.created",
+    "media.updated",
+    "media.replaced",
+    "media.deleted",
+    "activity.alert",
+    "workspace.restored",
 ] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 

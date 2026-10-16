@@ -62,6 +62,9 @@ fi
 API_PORT="${API_PORT:-4000}"
 STUDIO_PORT="${STUDIO_PORT:-3000}"
 export PORT="${PORT:-8080}"
+# The API sits behind the local proxy, which sits behind the platform edge: trust
+# both hops so the API sees the visitor's IP, not 127.0.0.1.
+export TRUST_PROXY="${TRUST_PROXY:-loopback, uniquelocal, 100.64.0.0/10}"
 
 set +e   # past bootstrap — manage the three children manually
 

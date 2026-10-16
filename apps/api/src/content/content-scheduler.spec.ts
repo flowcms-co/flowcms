@@ -13,6 +13,7 @@ describe("ContentSchedulerService.publishDue", () => {
                 update,
             },
             auditLog: { create },
+            contentVersion: { findFirst: vi.fn().mockResolvedValue({ versionNumber: 4 }), create: vi.fn().mockResolvedValue({}) },
         };
         const service = new ContentSchedulerService(
             prisma as never,
@@ -22,6 +23,7 @@ describe("ContentSchedulerService.publishDue", () => {
         );
         expect(await service.publishDue()).toBe(1);
         expect(update).toHaveBeenCalledWith({ where: { id: "e1" }, data: { status: "PUBLISHED", publishedAt: scheduledAt, firstPublishedAt: first, scheduledAt: null } });
-        expect(create.mock.calls[0][0].data).toMatchObject({ action: "content.publish", userId: null, resourceId: "e1" });
+        expect(create.mock.calls[0][0].data).toMatchObject({ action: "content.publish", userId: null, resourceId: "e1", actorName: "Scheduled publish", versionBefore: 4, versionAfter: 5 });
+        expect(prisma.contentVersion.create.mock.calls[0][0].data).toMatchObject({ versionNumber: 5, label: "published", note: "scheduled publish" });
     });
 });

@@ -22,6 +22,10 @@ export const EVENT_VERB: Record<string, string> = {
     "content.publish": "published",
     "content.unpublish": "unpublished",
     "content.archive": "archived",
+    "content.request_changes": "requested changes on",
+    "content.restore": "restored a version of",
+    "content.restore_deleted": "restored",
+    "content.discard_draft": "discarded the draft of",
 };
 
 /** This week (Mon to Sun) and last week, as instants, in the workspace's zone. */
@@ -111,7 +115,7 @@ export function buildMy(mine: LiteEntry[], opts: { now: Date; tz: string; typeNa
     };
 }
 
-type EventRow = { id: string; action: string; userId: string | null; resourceId: string | null; createdAt: Date };
+type EventRow = { id: string; action: string; userId: string | null; resourceId: string | null; createdAt: Date; actorName?: string | null };
 type Actor = { name: string; role: string; roleName: string; avatarUrl: string | null; avatarStyle: string | null };
 
 /** Recent activity rows from recorded content events: the verb is the action that
@@ -124,7 +128,15 @@ export function buildActivity(
     typeName: (id: string) => string,
     limit = 20,
 ) {
-    return events
+    // Every save is its own row in the log; here one person's edits to one entry
+    // within an hour read as one line (events arrive newest first).
+    const kept: EventRow[] = [];
+    for (const ev of events) {
+        const prev = kept[kept.length - 1];
+        const repeat = ev.action === "content.edit" && prev?.action === "content.edit" && prev.resourceId === ev.resourceId && prev.userId === ev.userId && (prev.actorName ?? null) === (ev.actorName ?? null) && +prev.createdAt - +ev.createdAt < 3_600_000;
+        if (!repeat) kept.push(ev);
+    }
+    return kept
         .filter((ev) => ev.resourceId && entryById.has(ev.resourceId) && EVENT_VERB[ev.action])
         .slice(0, limit)
         .map((ev) => {
@@ -134,9 +146,9 @@ export function buildActivity(
                 id: ev.id,
                 entryId: ev.resourceId!,
                 // No user = the scheduler or an API token; a user with no membership has left.
-                person: who?.name ?? (ev.userId ? "Former member" : "System"),
+                person: who?.name ?? (ev.userId ? "Former member" : (ev.actorName ?? "System")),
                 role: who?.role ?? (ev.userId ? "member" : "system"),
-                roleName: who?.roleName ?? (ev.userId ? "Member" : "Automation"),
+                roleName: who?.roleName ?? (ev.userId ? "Member" : ev.actorName?.endsWith("(API token)") ? "API token" : "Automation"),
                 authorId: ev.userId,
                 avatarUrl: who?.avatarUrl ?? null,
                 avatarStyle: who?.avatarStyle ?? null,

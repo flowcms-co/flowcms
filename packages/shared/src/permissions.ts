@@ -22,6 +22,8 @@ export const PERMISSIONS = {
     CONTENT_UPDATE: "content.update",
     CONTENT_PUBLISH: "content.publish",
     CONTENT_DELETE: "content.delete",
+    /** Roll an entry back to an earlier version. Not in any default role but Super Admin's "*". */
+    CONTENT_RESTORE: "content.restore",
     // media
     MEDIA_READ: "media.read",
     MEDIA_MANAGE: "media.manage",
@@ -119,6 +121,13 @@ export const SYSTEM_ROLES: SystemRole[] = [
         ],
     },
 ];
+
+/**
+ * API token scopes a token holds only when they were picked for it. A token's "*",
+ * or an empty scope list from before scoping, does not include them, so tokens
+ * made before these existed get none of them.
+ */
+export const OPT_IN_TOKEN_SCOPES = ["content.restore", "media.read", "media.write", "media.delete"] as const;
 
 /** Does a permission set grant a given permission? ("*" grants everything.) */
 export function can(granted: string[] | undefined | null, permission: string): boolean {

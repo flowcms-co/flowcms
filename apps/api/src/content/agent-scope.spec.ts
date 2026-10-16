@@ -28,4 +28,14 @@ describe("tokenScopeAllows", () => {
         expect(tokenScopeAllows(["content.create", "content.update"], "content.update")).toBe(true);
         expect(tokenScopeAllows(["content.create", "content.update"], "content.delete")).toBe(false);
     });
+
+    it("grants restore and media scopes only when listed, never by '*' or an empty list", () => {
+        for (const scope of ["content.restore", "media.read", "media.write", "media.delete"]) {
+            expect(tokenScopeAllows([], scope)).toBe(false);
+            expect(tokenScopeAllows(undefined, scope)).toBe(false);
+            expect(tokenScopeAllows(["*"], scope)).toBe(false);
+            expect(tokenScopeAllows([scope], scope)).toBe(true);
+        }
+        expect(tokenScopeAllows(["media.read"], "media.write")).toBe(false);
+    });
 });

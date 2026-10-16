@@ -73,6 +73,16 @@ export class ApiTokensService {
         return { token, ...this.sanitize(created) };
     }
 
+    /** Change a write token's scopes. An Agent token keeps at least one. */
+    async updateScopes(workspaceId: string, id: string, scopes: string[]) {
+        const existing = await this.prisma.apiToken.findFirst({ where: { id, workspaceId, revokedAt: null } });
+        if (!existing) throw new NotFoundException("Token not found.");
+        if (existing.type !== "AGENT" && existing.type !== "ADMIN") throw new BadRequestException("Only Agent and Admin tokens have scopes.");
+        if (existing.type === "AGENT" && scopes.length === 0) throw new BadRequestException("An Agent token needs at least one scope.");
+        const updated = await this.prisma.apiToken.update({ where: { id }, data: { scopes } });
+        return { before: (existing.scopes as string[]) ?? [], after: this.sanitize(updated) };
+    }
+
     async revoke(workspaceId: string, id: string) {
         // Soft-delete: stamp revokedAt (no hard delete). Auth guards reject revoked
         // tokens and list() hides them, but the row + its audit trail are preserved.

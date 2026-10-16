@@ -12,6 +12,7 @@ import { clearWorkspaceCache, type Workspace } from "@/lib/useWorkspace";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { useUpgrade } from "@/components/providers/UpgradeProvider";
 import { helpUrl, GUIDES } from "@/lib/help";
+import SafetyNetCard from "@/templates/settings/SafetyNetCard";
 
 /**
  * System — workspace identity, the frontend preview URL, data export, and the
@@ -94,6 +95,7 @@ const System = () => {
     return (
         <div className="flex flex-col gap-6">
             <UpdatesCard />
+            <SafetyNetCard />
             <BackupsCard />
             <Card>
                 <h2 className="text-h5 text-black dark:text-white mb-5">Workspace</h2>

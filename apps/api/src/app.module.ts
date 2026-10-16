@@ -43,6 +43,7 @@ import { OrgModule } from "./org/org.module";
 import { RedisModule } from "./redis/redis.module";
 import { CacheModule } from "./cache/cache.module";
 import { JobsModule } from "./jobs/jobs.module";
+import { BackupsModule } from "./backups/backups.module";
 
 // Optionally load the commercial (EE) modules. An open-source build that removes
 // src/ee/ has nothing here; and even when present, every EE route is gated at
@@ -112,6 +113,7 @@ try {
         TelemetryModule,
         OrgModule,
         JobsModule,
+        BackupsModule,
         ...EE_MODULES,
     ],
     providers: [

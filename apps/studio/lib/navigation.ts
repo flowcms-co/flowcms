@@ -87,6 +87,7 @@ export const NAV: NavItem[] = [
         tabs: [
             { label: "Profile", href: "/settings" },
             { label: "Security", href: "/settings/security" },
+            { label: "Activity", href: "/settings/activity", roles: ["super"] },
             { label: "Workspace", href: "/settings/workspace", roles: ["super", "admin"] },
             { label: "Plan", href: "/settings/plan", roles: ["super", "admin"] },
             { label: "Content", href: "/settings/content", roles: ["super", "admin"] },

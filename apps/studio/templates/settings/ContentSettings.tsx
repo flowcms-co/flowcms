@@ -5,11 +5,13 @@ import SubTabs, { type SubTab } from "@/components/shell/SubTabs";
 import SchemaPage from "@/templates/SchemaPage";
 import Localization from "@/templates/settings/Localization";
 import Import from "@/templates/settings/Import";
+import UploadLimits from "@/templates/settings/UploadLimits";
 
 const TABS: SubTab[] = [
     { id: "content-model", label: "Content Model" },
     { id: "localization", label: "Localization" },
     { id: "import", label: "Import" },
+    { id: "uploads", label: "Uploads" },
 ];
 
 /** Content settings — the schema builder, locales, and content import in one page. */
@@ -25,6 +27,7 @@ const ContentSettings = () => {
             {active === "content-model" && <SchemaPage />}
             {active === "localization" && <Localization />}
             {active === "import" && <Import />}
+            {active === "uploads" && <UploadLimits />}
         </div>
     );
 };

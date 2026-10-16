@@ -30,7 +30,9 @@ export class UsersController {
     @Patch(":id")
     async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateUserDto, @Req() req: Request) {
         const updated = await this.users.update(user.workspaceId, user.id, id, dto);
-        this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: "user.update", resource: "User", resourceId: id, metadata: { fields: Object.keys(dto) }, ip: req.ip });
+        // A role change is its own action, so it can raise an alert.
+        const roleChange = dto.roleKey !== undefined;
+        this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: roleChange ? "user.role_change" : "user.update", resource: "User", resourceId: id, metadata: { fields: Object.keys(dto), ...(roleChange ? { role: dto.roleKey } : {}) }, ip: req.ip });
         return updated;
     }
 

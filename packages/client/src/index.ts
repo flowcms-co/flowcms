@@ -60,6 +60,14 @@ export class FlowError extends Error {
     }
 }
 
+/** A plain query string from defined values (filters for history and media). */
+function params(obj: Record<string, string | number | boolean | undefined>): string {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(obj)) if (v !== undefined && v !== "") p.set(k, String(v));
+    const s = p.toString();
+    return s ? `?${s}` : "";
+}
+
 function qs(opts: ListOptions = {}): string {
     const p = new URLSearchParams();
     if (opts.limit != null) p.set("limit", String(opts.limit));
@@ -163,8 +171,54 @@ export function createClient(options: ClientOptions) {
         discardDraft(type: string, id: string): Promise<Entry> {
             return request(`/agent/${type}/${id}/discard-draft`, { method: "POST" });
         },
+        /** Delete an entry into "Deleted items" (restorable for 30 days). */
         remove(type: string, id: string): Promise<{ ok: boolean }> {
             return request(`/agent/${type}/${id}`, { method: "DELETE" });
+        },
+
+        // ── History ──
+        /** The content and media activity log: who changed what, with field diffs. Needs content.read. */
+        activity(filter: { entry?: string; user?: string; action?: string; type?: string; q?: string; from?: string; to?: string; limit?: number; offset?: number } = {}): Promise<{ items: unknown[]; total: number }> {
+            return request(`/agent/activity${params(filter)}`);
+        },
+        versions(type: string, id: string): Promise<unknown[]> {
+            return request(`/agent/${type}/${id}/versions`);
+        },
+        /** One version (number or id) with its content and its diff against the live version. */
+        version(type: string, id: string, v: string | number): Promise<unknown> {
+            return request(`/agent/${type}/${id}/versions/${v}`);
+        },
+        /** Restore a version as a draft (default) or live now. Needs the content.restore scope. */
+        restore(type: string, id: string, v: string | number, body: { mode?: "draft" | "publish"; reason?: string; fields?: string[] } = {}): Promise<Entry> {
+            return request(`/agent/${type}/${id}/versions/${v}/restore`, { method: "POST", body: JSON.stringify(body) });
+        },
+
+        // ── Media — needs the media.read / media.write / media.delete scopes ──
+        assets(filter: { q?: string; folder?: string; type?: string; width?: number; height?: number; unused?: boolean; missingAlt?: boolean; tag?: string; limit?: number; offset?: number } = {}): Promise<{ items: unknown[]; total: number }> {
+            return request(`/agent/assets${params(filter)}`);
+        },
+        asset(id: string): Promise<unknown> {
+            return request(`/agent/assets/${id}`);
+        },
+        assetUsage(id: string): Promise<{ id: string; used: boolean; entries: unknown[] }> {
+            return request(`/agent/assets/${id}/usage`);
+        },
+        /** Import a file from a URL. (For a file upload, POST multipart `file` to /agent/assets.) */
+        importAsset(body: { url: string; alt?: string; caption?: string; folder?: string; tags?: string[] }): Promise<unknown> {
+            return request(`/agent/assets`, { method: "POST", body: JSON.stringify(body) });
+        },
+        updateAsset(id: string, body: { alt?: string; caption?: string; filename?: string; folder?: string; tags?: string[] }): Promise<unknown> {
+            return request(`/agent/assets/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+        },
+        updateAssets(items: { id: string; alt?: string; caption?: string; filename?: string; folder?: string; tags?: string[] }[]): Promise<unknown> {
+            return request(`/agent/assets`, { method: "PATCH", body: JSON.stringify({ items }) });
+        },
+        /** Swap an asset's file for the one at `url`, keeping its id. */
+        replaceAsset(id: string, url: string): Promise<unknown> {
+            return request(`/agent/assets/${id}/replace`, { method: "POST", body: JSON.stringify({ url }) });
+        },
+        removeAsset(id: string, opts: { force?: boolean } = {}): Promise<{ ok: boolean }> {
+            return request(`/agent/assets/${id}${opts.force ? "?force=true" : ""}`, { method: "DELETE" });
         },
     };
 }

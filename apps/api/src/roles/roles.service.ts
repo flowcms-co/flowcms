@@ -26,6 +26,7 @@ const PERMISSION_CATALOG = [
             { key: PERMISSIONS.CONTENT_UPDATE, label: "Edit content" },
             { key: PERMISSIONS.CONTENT_PUBLISH, label: "Publish / approve content" },
             { key: PERMISSIONS.CONTENT_DELETE, label: "Delete content" },
+            { key: PERMISSIONS.CONTENT_RESTORE, label: "Restore versions and deleted entries" },
             { key: PERMISSIONS.MEDIA_READ, label: "View media" },
             { key: PERMISSIONS.MEDIA_MANAGE, label: "Manage media" },
         ],

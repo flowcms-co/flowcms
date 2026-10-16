@@ -47,7 +47,7 @@ export class ContentSchedulerService implements OnModuleInit, OnModuleDestroy {
             const now = new Date();
             const due = await this.prisma.contentEntry.findMany({
                 where: { status: "SCHEDULED", scheduledAt: { not: null, lte: now } },
-                select: { id: true, slug: true, workspaceId: true, scheduledAt: true, publishedAt: true, firstPublishedAt: true, contentType: { select: { apiId: true } } },
+                select: { id: true, slug: true, title: true, data: true, workspaceId: true, scheduledAt: true, publishedAt: true, firstPublishedAt: true, contentType: { select: { apiId: true } } },
             });
             if (due.length === 0) return 0;
             await Promise.all(
@@ -59,9 +59,30 @@ export class ContentSchedulerService implements OnModuleInit, OnModuleDestroy {
                         where: { id: e.id },
                         data: { status: "PUBLISHED", publishedAt: at, firstPublishedAt: e.firstPublishedAt ?? e.publishedAt ?? at, scheduledAt: null },
                     });
-                    // Recent activity: published by the scheduler, not by a person.
+                    // A version for what went live, and the activity row: published by the
+                    // scheduler, not by a person.
+                    const last = await this.prisma.contentVersion.findFirst({ where: { entryId: e.id }, orderBy: { versionNumber: "desc" }, select: { versionNumber: true } });
+                    const versionAfter = (last?.versionNumber ?? 0) + 1;
+                    await this.prisma.contentVersion
+                        .create({ data: { entryId: e.id, data: (e.data ?? {}) as object, status: "PUBLISHED", versionNumber: versionAfter, actorName: "Scheduled publish", label: "published", note: "scheduled publish" } })
+                        .catch(() => undefined);
                     await this.prisma.auditLog
-                        .create({ data: { workspaceId: e.workspaceId, userId: null, action: "content.publish", resource: "ContentEntry", resourceId: e.id } })
+                        .create({
+                            data: {
+                                workspaceId: e.workspaceId,
+                                userId: null,
+                                actorName: "Scheduled publish",
+                                action: "content.publish",
+                                resource: "ContentEntry",
+                                resourceId: e.id,
+                                entryType: e.contentType.apiId,
+                                title: e.title,
+                                slug: e.slug,
+                                versionBefore: last?.versionNumber ?? null,
+                                versionAfter,
+                                metadata: { from: "SCHEDULED", to: "PUBLISHED", scheduledAt: e.scheduledAt },
+                            },
+                        })
                         .catch(() => undefined);
                     void this.cache.delByPrefix(`dash:${e.workspaceId}:`);
                     void this.webhooks.dispatch(e.workspaceId, "content.published", {

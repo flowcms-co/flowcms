@@ -9,6 +9,7 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
 import { AllExceptionsFilter } from "./common/all-exceptions.filter";
+import { requestContext } from "./common/request-context";
 
 async function bootstrap() {
     // bodyParser:false so we can register parsers with explicit size limits below
@@ -33,9 +34,11 @@ async function bootstrap() {
     // client (used for rate limiting). OFF by default so a directly-exposed
     // deployment can't be tricked into trusting a spoofed XFF header to dodge
     // rate limits. Set TRUST_PROXY=1 (hop count) or =true when fronted by
-    // nginx / Cloudflare / a load balancer.
+    // nginx / Cloudflare / a load balancer. A list of subnets also works
+    // ("loopback, uniquelocal, 100.64.0.0/10"): the all-in-one image sets that, so
+    // the activity log and rate limits see the visitor, not 127.0.0.1.
     const tp = process.env.TRUST_PROXY;
-    if (tp) app.set("trust proxy", /^\d+$/.test(tp) ? Number(tp) : tp === "true");
+    if (tp) app.set("trust proxy", /^\d+$/.test(tp) ? Number(tp) : tp === "true" ? true : tp);
     else if (isProd) {
         // Behind a reverse proxy without TRUST_PROXY, req.ip is the proxy IP, so
         // per-IP rate limits + brute-force protection collapse to one bucket
@@ -98,6 +101,9 @@ async function bootstrap() {
     // SCIM provisioning requests (Okta/Azure AD) are parsed into req.body.
     app.useBodyParser("json", { limit: process.env.MAX_JSON_BODY ?? "10mb", type: ["application/json", "application/scim+json"] });
     app.useBodyParser("urlencoded", { limit: process.env.MAX_FORM_BODY ?? "1mb", extended: true });
+    // Make the request reachable from services (the activity log reads the actor
+    // here). After the body parsers, whose stream callbacks would lose the context.
+    app.use((req: Request, _res: Response, next: NextFunction) => requestContext.run(req, next));
 
     // whitelist strips unknown props; forbidNonWhitelisted rejects them with a
     // clear 400 (defence against unexpected/abusive fields); transform coerces

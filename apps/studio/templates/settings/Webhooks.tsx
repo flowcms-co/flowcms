@@ -12,7 +12,7 @@ import { confirm, notice } from "@/components/providers/ConfirmProvider";
 type Hook = { id: string; name: string; url: string; events: string[]; enabled: boolean; hasSecret: boolean; createdAt: string; deliveries: number };
 type Delivery = { id: string; event: string; statusCode: number | null; success: boolean; responseBody: string | null; attempt: number; createdAt: string };
 
-const FALLBACK_EVENTS = ["content.created", "content.updated", "content.published", "content.unpublished", "content.scheduled", "content.deleted"];
+const FALLBACK_EVENTS = ["content.created", "content.updated", "content.published", "content.unpublished", "content.scheduled", "content.deleted", "content.restored", "media.created", "media.updated", "media.replaced", "media.deleted", "activity.alert", "workspace.restored"];
 const field = "w-full h-11 px-4 rounded-2xl border border-grey-light bg-white text-black placeholder:text-grey outline-none transition-colors focus:border-primary dark:border-dark-3 dark:bg-dark-2 dark:text-white";
 
 const blank = { name: "", url: "", events: [] as string[], secret: "", enabled: true };

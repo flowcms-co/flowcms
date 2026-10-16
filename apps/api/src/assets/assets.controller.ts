@@ -11,17 +11,24 @@ import {
     UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { ArrayMaxSize, IsArray, IsOptional, IsString } from "class-validator";
+import { ArrayMaxSize, IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min } from "class-validator";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
-import { AssetsService } from "./assets.service";
+import { AssetsService, UPLOAD_CEILING_BYTES } from "./assets.service";
 import { JobsService } from "../jobs/jobs.service";
 
 class UpdateAssetDto {
     @IsOptional() @IsString() alt?: string;
+    @IsOptional() @IsString() @MaxLength(2000) caption?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) tags?: string[];
     @IsOptional() @IsString() folder?: string;
     @IsOptional() @IsString() filename?: string;
+}
+
+class MediaLimitsDto {
+    @IsOptional() @IsInt() @Min(1) @Max(10_000) maxMb?: number;
+    @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) allowedTypes?: string[];
 }
 
 class BulkDeleteDto {
@@ -62,9 +69,26 @@ export class AssetsController {
         return this.assets.count(user.workspaceId);
     }
 
+    /** Max upload size and allowed file types (Settings › Content). */
+    @Get("limits")
+    limits(@CurrentUser() user: AuthUser) {
+        return this.assets.limits(user.workspaceId);
+    }
+
+    @Patch("limits")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    setLimits(@CurrentUser() user: AuthUser, @Body() dto: MediaLimitsDto) {
+        return this.assets.setLimits(user.workspaceId, dto);
+    }
+
+    @Get("folders")
+    folders(@CurrentUser() user: AuthUser) {
+        return this.assets.folders(user.workspaceId);
+    }
+
     @Post()
     @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
-    @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 26 * 1024 * 1024 } }))
+    @UseInterceptors(FileInterceptor("file", { limits: { fileSize: UPLOAD_CEILING_BYTES } }))
     upload(
         @CurrentUser() user: AuthUser,
         @UploadedFile() file: MulterFile,
@@ -96,7 +120,8 @@ export class AssetsController {
     @Delete(":id")
     @RequirePermissions(PERMISSIONS.MEDIA_MANAGE)
     remove(@CurrentUser() user: AuthUser, @Param("id") id: string) {
-        return this.assets.remove(user.workspaceId, id);
+        // The library has already shown which pages use the file and asked.
+        return this.assets.remove(user.workspaceId, id, { force: true });
     }
 
     @Post(":id/generate-alt")

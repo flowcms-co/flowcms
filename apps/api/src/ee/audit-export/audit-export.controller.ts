@@ -1,18 +1,22 @@
-import { Controller, Get, Query, Req, Res, UseGuards } from "@nestjs/common";
-import type { Request, Response } from "express";
+import { Controller, Get, Query, Res, UseGuards } from "@nestjs/common";
+import type { Response } from "express";
 import { PERMISSIONS } from "@flowcms/shared";
 import { CurrentUser, RequirePermissions } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/types";
-import { PrismaService } from "../../prisma/prisma.service";
+import { AuditService } from "../../audit/audit.service";
+import { activityFilter } from "../../audit/audit.controller";
 import { FeatureGuard, RequireFeature } from "../../license/feature.guard";
 
 const esc = (v: unknown) => {
     const s = v == null ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
+const COLUMNS = ["createdAt", "action", "actor", "actorRole", "ip", "userAgent", "entryType", "resource", "resourceId", "title", "slug", "versionBefore", "versionAfter", "metadata"] as const;
+
 /**
- * EE (Pro) — full audit-log export to CSV (for retention / SIEM ingestion).
+ * EE (Pro): export the activity log as CSV or JSON (for retention / SIEM
+ * ingestion), with the same filters as the Activity page. Streamed a page at a time.
  * Gated by the `audit_export` entitlement; Community gets a 403 from FeatureGuard.
  */
 @Controller("ee/audit")
@@ -20,24 +24,27 @@ const esc = (v: unknown) => {
 @UseGuards(FeatureGuard)
 @RequireFeature("audit_export")
 export class AuditExportController {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(private readonly audit: AuditService) {}
 
     @Get("export")
-    async export(@CurrentUser() user: AuthUser, @Query("limit") limit: string | undefined, @Res() res: Response, @Req() _req: Request) {
-        const rows = await this.prisma.auditLog.findMany({
-            where: { workspaceId: user.workspaceId },
-            orderBy: { createdAt: "desc" },
-            take: Math.min(Number(limit) || 5000, 50000),
-            include: { user: { select: { email: true, name: true } } },
-        });
-        const header = "createdAt,action,resource,resourceId,actor,ip,metadata";
-        const lines = rows.map((r) =>
-            [r.createdAt.toISOString(), r.action, r.resource, r.resourceId ?? "", r.user?.email ?? "", r.ip ?? "", JSON.stringify(r.metadata ?? {})]
-                .map(esc)
-                .join(","),
-        );
-        res.setHeader("Content-Type", "text/csv; charset=utf-8");
-        res.setHeader("Content-Disposition", `attachment; filename="flowcms-audit-${new Date().toISOString().slice(0, 10)}.csv"`);
-        res.send([header, ...lines].join("\n"));
+    async export(@CurrentUser() user: AuthUser, @Query() q: Record<string, string | undefined>, @Res() res: Response) {
+        const json = q.format === "json";
+        const max = Math.min(Number(q.max) || 100_000, 100_000);
+        const filter = { ...activityFilter(q), limit: undefined, offset: undefined };
+        const day = new Date().toISOString().slice(0, 10);
+        res.setHeader("Content-Type", json ? "application/json; charset=utf-8" : "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="flowcms-activity-${day}.${json ? "json" : "csv"}"`);
+        let first = true;
+        res.write(json ? "[" : `${COLUMNS.join(",")}\n`);
+        for await (const r of this.audit.exportRows(user.workspaceId, filter, max)) {
+            if (json) {
+                res.write(`${first ? "" : ","}\n${JSON.stringify(r)}`);
+            } else {
+                const row = { ...r, createdAt: r.createdAt.toISOString(), actor: r.actor?.email ?? r.actor?.name ?? "", actorRole: r.actor?.role ?? "", metadata: JSON.stringify(r.metadata ?? {}) };
+                res.write(`${COLUMNS.map((c) => esc((row as Record<string, unknown>)[c])).join(",")}\n`);
+            }
+            first = false;
+        }
+        res.end(json ? "\n]\n" : "");
     }
 }

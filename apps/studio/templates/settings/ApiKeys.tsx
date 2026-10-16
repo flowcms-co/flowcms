@@ -40,14 +40,65 @@ const AGENT_SCOPES: { key: string; label: string; on: boolean }[] = [
 ];
 const DEFAULT_SCOPES = AGENT_SCOPES.filter((s) => s.on).map((s) => s.key);
 
+/** Access a token has only when it's ticked here: full access ("*") doesn't
+ *  include it, and tokens made before it existed don't have it. */
+const EXTRA_SCOPES: { key: string; label: string }[] = [
+    { key: PERMISSIONS.CONTENT_RESTORE, label: "Restore earlier versions" },
+    { key: "media.read", label: "View media and where it's used" },
+    { key: "media.write", label: "Upload, edit and replace media" },
+    { key: "media.delete", label: "Delete media" },
+];
+const EXTRA_KEYS = new Set(EXTRA_SCOPES.map((s) => s.key));
+
 /** One line saying what a write token may do, for the token list. Tokens made
  *  before permissions existed have none stored, which the API treats as everything. */
 const scopeSummary = (t: Token): string | null => {
     if (t.type !== "AGENT" && t.type !== "ADMIN") return null;
     const scopes = t.scopes ?? [];
-    if (scopes.length === 0 || scopes.includes("*")) return "Full access";
-    const labels = AGENT_SCOPES.filter((s) => scopes.includes(s.key)).map((s) => s.label.toLowerCase());
-    return `Can: ${labels.join(", ")}`;
+    const content = scopes.filter((k) => !EXTRA_KEYS.has(k));
+    const extras = EXTRA_SCOPES.filter((s) => scopes.includes(s.key)).map((s) => s.label.toLowerCase());
+    const base = content.length === 0 || content.includes("*") ? "Full content access" : `Can: ${AGENT_SCOPES.filter((s) => content.includes(s.key)).map((s) => s.label.toLowerCase()).join(", ")}`;
+    return extras.length ? `${base}; also: ${extras.join(", ")}` : base;
+};
+
+/** The scopes a token is created or saved with: an Admin token is full content
+ *  access plus any extras picked. */
+const scopesFor = (type: Token["type"], picked: string[]): string[] | undefined => {
+    if (type === "AGENT") return picked;
+    const extras = picked.filter((k) => EXTRA_KEYS.has(k));
+    return type === "ADMIN" && extras.length ? ["*", ...extras] : undefined;
+};
+
+/** Checkbox list for a token's scopes: content scopes for an Agent token, and the
+ *  extras (restore, media) for both write types. */
+const ScopePicker = ({ type, scopes, onChange }: { type: Token["type"]; scopes: string[]; onChange: (s: string[]) => void }) => {
+    const box = (s: { key: string; label: string }) => (
+        <label key={s.key} className="flex items-center gap-2.5 text-body-sm text-black dark:text-white">
+            <input
+                type="checkbox"
+                checked={scopes.includes(s.key)}
+                onChange={(e) => onChange(e.target.checked ? [...scopes, s.key] : scopes.filter((k) => k !== s.key))}
+                className="h-4 w-4 accent-primary"
+            />
+            {s.label}
+        </label>
+    );
+    return (
+        <>
+            {type === "AGENT" && (
+                <fieldset>
+                    <legend className="mb-1.5 block text-caption-1 text-black dark:text-white">This token can</legend>
+                    <div className="flex flex-col gap-2 rounded-2xl border border-grey-light p-3 dark:border-grey-light/10">{AGENT_SCOPES.map(box)}</div>
+                    {scopes.filter((k) => !EXTRA_KEYS.has(k)).length === 0 && <p className="mt-1.5 text-caption-2 text-error">Pick at least one.</p>}
+                </fieldset>
+            )}
+            <fieldset>
+                <legend className="mb-1.5 block text-caption-1 text-black dark:text-white">Extra access</legend>
+                <div className="flex flex-col gap-2 rounded-2xl border border-grey-light p-3 dark:border-grey-light/10">{EXTRA_SCOPES.map(box)}</div>
+                <p className="mt-1.5 text-caption-2 text-grey">Never part of full access: tick each one this token needs.</p>
+            </fieldset>
+        </>
+    );
 };
 
 const ApiKeys = () => {
@@ -62,6 +113,7 @@ const ApiKeys = () => {
     const [scopes, setScopes] = useState<string[]>(DEFAULT_SCOPES);
     const [saving, setSaving] = useState(false);
     const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
+    const [editing, setEditing] = useState<{ token: Token; scopes: string[] } | null>(null);
     const [copied, setCopied] = useState(false);
 
     const load = useCallback(async () => {
@@ -87,7 +139,7 @@ const ApiKeys = () => {
         try {
             const res = await api<{ token: string; name: string }>("/api-tokens", {
                 method: "POST",
-                body: JSON.stringify({ name: name.trim(), type, ...(type === "AGENT" ? { scopes } : {}) }),
+                body: JSON.stringify({ name: name.trim(), type, ...(scopesFor(type, scopes) ? { scopes: scopesFor(type, scopes) } : {}) }),
             });
             setOpen(false);
             setName("");
@@ -99,6 +151,29 @@ const ApiKeys = () => {
         } finally {
             setSaving(false);
         }
+    };
+
+    const saveAccess = async () => {
+        if (!editing) return;
+        setSaving(true);
+        try {
+            await api(`/api-tokens/${editing.token.id}`, { method: "PATCH", body: JSON.stringify({ scopes: scopesFor(editing.token.type, editing.scopes) ?? [] }) });
+            setEditing(null);
+            await load();
+        } catch (e) {
+            void notice({ title: "Could not save access", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const editAccess = (t: Token) => {
+        const stored = t.scopes ?? [];
+        const extras = stored.filter((k) => EXTRA_KEYS.has(k));
+        const content = stored.filter((k) => !EXTRA_KEYS.has(k));
+        // "*" or nothing stored means every content scope: show them all ticked.
+        const all = content.length === 0 || content.includes("*");
+        setEditing({ token: t, scopes: t.type === "ADMIN" ? extras : [...(all ? AGENT_SCOPES.map((x) => x.key) : content), ...extras] });
     };
 
     const revoke = async (t: Token) => {
@@ -190,6 +265,11 @@ const ApiKeys = () => {
                                 <div>Last used {t.lastUsedAt ? formatDate(t.lastUsedAt) : "never"}</div>
                                 {t.expiresAt && <div suppressHydrationWarning>{new Date(t.expiresAt) < new Date() ? "Expired" : "Expires"} {formatDate(t.expiresAt)}</div>}
                             </div>
+                            {(t.type === "AGENT" || t.type === "ADMIN") && (
+                                <button type="button" onClick={() => editAccess(t)} className="btn-secondary h-9 px-3 text-caption-1">
+                                    Access
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => revoke(t)}
@@ -286,30 +366,47 @@ curl "${displayBase}/public/articles/your-slug" \\
                                                 ]}
                                             />
                                         </label>
-                                        {type === "AGENT" && (
-                                            <fieldset>
-                                                <legend className="mb-1.5 block text-caption-1 text-black dark:text-white">This token can</legend>
-                                                <div className="flex flex-col gap-2 rounded-2xl border border-grey-light p-3 dark:border-grey-light/10">
-                                                    {AGENT_SCOPES.map((s) => (
-                                                        <label key={s.key} className="flex items-center gap-2.5 text-body-sm text-black dark:text-white">
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={scopes.includes(s.key)}
-                                                                onChange={(e) => setScopes(e.target.checked ? [...scopes, s.key] : scopes.filter((k) => k !== s.key))}
-                                                                className="h-4 w-4 accent-primary"
-                                                            />
-                                                            {s.label}
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                                {scopes.length === 0 && <p className="mt-1.5 text-caption-2 text-error">Pick at least one.</p>}
-                                            </fieldset>
-                                        )}
+                                        {(type === "AGENT" || type === "ADMIN") && <ScopePicker type={type} scopes={scopes} onChange={setScopes} />}
                                     </div>
                                     <div className="mt-6 flex gap-3">
                                         <button type="button" onClick={() => setOpen(false)} className="btn-secondary grow">Cancel</button>
-                                        <button type="button" onClick={create} disabled={saving || !name.trim() || (type === "AGENT" && scopes.length === 0)} className="btn-primary grow disabled:opacity-60">
+                                        <button type="button" onClick={create} disabled={saving || !name.trim() || (type === "AGENT" && scopes.filter((k) => !EXTRA_KEYS.has(k)).length === 0)} className="btn-primary grow disabled:opacity-60">
                                             {saving ? "Creating…" : "Create token"}
+                                        </button>
+                                    </div>
+                                </Dialog.Panel>
+                            </Transition.Child>
+                        </div>
+                    </div>
+                </Dialog>
+            </Transition>
+
+            {/* Access modal: change an existing token's scopes */}
+            <Transition appear show={!!editing} as={Fragment}>
+                <Dialog as="div" className="relative z-50" onClose={() => setEditing(null)}>
+                    <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0" enterTo="opacity-100" leave="ease-in duration-150" leaveFrom="opacity-100" leaveTo="opacity-0">
+                        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm" />
+                    </Transition.Child>
+                    <div className="fixed inset-0 overflow-y-auto">
+                        <div className="flex min-h-full items-center justify-center p-4">
+                            <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0 scale-95 translate-y-2" enterTo="opacity-100 scale-100 translate-y-0" leave="ease-in duration-150" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95">
+                                <Dialog.Panel className="w-full max-w-md rounded-3xl bg-white p-7 shadow-[0_1.25rem_3rem_rgba(26,26,46,0.18)] dark:bg-dark-1">
+                                    <Dialog.Title className="text-h5 text-black dark:text-white">Access for “{editing?.token.name}”</Dialog.Title>
+                                    <p className="mt-1 mb-5 text-caption-2 text-grey">Takes effect on the token&apos;s next request. The change is in the activity log.</p>
+                                    {editing && (
+                                        <div className="flex flex-col gap-4">
+                                            <ScopePicker type={editing.token.type} scopes={editing.scopes} onChange={(sc) => setEditing({ ...editing, scopes: sc })} />
+                                        </div>
+                                    )}
+                                    <div className="mt-6 flex gap-3">
+                                        <button type="button" onClick={() => setEditing(null)} className="btn-secondary grow">Cancel</button>
+                                        <button
+                                            type="button"
+                                            onClick={saveAccess}
+                                            disabled={saving || (editing?.token.type === "AGENT" && editing.scopes.filter((k) => !EXTRA_KEYS.has(k)).length === 0)}
+                                            className="btn-primary grow disabled:opacity-60"
+                                        >
+                                            {saving ? "Saving…" : "Save access"}
                                         </button>
                                     </div>
                                 </Dialog.Panel>

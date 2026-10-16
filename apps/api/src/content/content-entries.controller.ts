@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
-import { ArrayNotEmpty, IsArray, IsDateString, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
-import { PERMISSIONS } from "@flowcms/shared";
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsDateString, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
+import { PERMISSIONS, can } from "@flowcms/shared";
+import { AuditService } from "../audit/audit.service";
 import { CurrentUser, RequirePermissions } from "../auth/decorators";
 import type { AuthUser } from "../auth/types";
 import { CreateEntryDto, SetAuthorDto, UpdateEntryDto } from "./entries.dto";
@@ -22,12 +23,19 @@ class BulkScheduleDto extends BulkIdsDto {
     @IsDateString() scheduledAt!: string;
 }
 
+class RestoreDto {
+    @IsOptional() @IsIn(["draft", "publish"]) mode?: "draft" | "publish";
+    @IsOptional() @IsString() @MaxLength(1000) reason?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) fields?: string[];
+}
+
 @Controller("entries")
 export class ContentEntriesController {
     constructor(
         private readonly entries: ContentEntriesService,
         private readonly lists: ContentListService,
         private readonly jobs: JobsService,
+        private readonly audit: AuditService,
     ) {}
 
     /** One page of entries for list screens: searched, filtered, sorted and paged in
@@ -211,7 +219,7 @@ export class ContentEntriesController {
     @Post(":id/discard-draft")
     @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
     discardDraft(@CurrentUser() user: AuthUser, @Param("id") id: string) {
-        return this.entries.discardDraft(user.workspaceId, id);
+        return this.entries.discardDraft(user.workspaceId, id, user.id);
     }
 
     @Post(":id/duplicate")
@@ -252,15 +260,39 @@ export class ContentEntriesController {
         return this.entries.versions(user.workspaceId, id);
     }
 
+    /** One version's content, with the fields it differs by from the live version. */
+    @Get(":id/versions/:versionId")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    version(@CurrentUser() user: AuthUser, @Param("id") id: string, @Param("versionId") versionId: string) {
+        return this.entries.version(user.workspaceId, id, versionId);
+    }
+
+    /** Roll back to a version (Super Admin, or a role given content.restore). Every
+     *  attempt is logged, refused ones included. */
     @Post(":id/versions/:versionId/restore")
-    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
-    restore(@CurrentUser() user: AuthUser, @Param("id") id: string, @Param("versionId") versionId: string) {
-        return this.entries.restore(user.workspaceId, id, versionId, user.id);
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    async restore(@CurrentUser() user: AuthUser, @Param("id") id: string, @Param("versionId") versionId: string, @Body() dto: RestoreDto) {
+        if (!can(user.role.permissions, PERMISSIONS.CONTENT_RESTORE)) {
+            await this.entries.logDeniedRestore(user.workspaceId, id, versionId, "missing content.restore permission");
+            throw new ForbiddenException("Your role can't restore versions. Ask a Super Admin to give your role the Restore permission.");
+        }
+        return this.entries.restore(user.workspaceId, id, versionId, user.id, { mode: dto?.mode, reason: dto?.reason, fields: dto?.fields, actorPermissions: user.role.permissions });
+    }
+
+    /** This entry's activity: every change with who made it and the field diff.
+     *  IP and browser are shown only to people who can see the security log. */
+    @Get(":id/activity")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    async activity(@CurrentUser() user: AuthUser, @Param("id") id: string, @Query("limit") limit?: string, @Query("offset") offset?: string) {
+        await this.entries.get(user.workspaceId, id); // 404 for another workspace's id
+        const page = await this.audit.list(user.workspaceId, { entry: id, limit: Number(limit) || 30, offset: Number(offset) || 0 });
+        if (can(user.role.permissions, PERMISSIONS.SECURITY_MANAGE)) return page;
+        return { ...page, items: page.items.map((r) => ({ ...r, ip: null, userAgent: null })) };
     }
 
     @Delete(":id")
     @RequirePermissions(PERMISSIONS.CONTENT_DELETE)
     remove(@CurrentUser() user: AuthUser, @Param("id") id: string) {
-        return this.entries.remove(user.workspaceId, id);
+        return this.entries.remove(user.workspaceId, id, user.id);
     }
 }

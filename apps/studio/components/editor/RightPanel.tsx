@@ -10,10 +10,12 @@ import { runAi, aiErrorMessage, useAiProviders } from "@/lib/useAi";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
-import { confirm } from "@/components/providers/ConfirmProvider";
 import { escapeHtml } from "@flowcms/shared/strings";
+import VersionHistory from "@/components/activity/VersionHistory";
+import ActivityFeed from "@/components/activity/ActivityFeed";
+import { actionLabel } from "@/lib/activity";
 
-type PanelTab = "seo" | "ai" | "review" | "schema" | "versions";
+type PanelTab = "seo" | "ai" | "review" | "schema" | "versions" | "activity";
 type EntryData = Record<string, unknown>;
 
 const TABS: { id: PanelTab; label: string; icon: string }[] = [
@@ -22,6 +24,7 @@ const TABS: { id: PanelTab; label: string; icon: string }[] = [
     { id: "review", label: "Review", icon: "check" },
     { id: "schema", label: "Schema", icon: "document" },
     { id: "versions", label: "Versions", icon: "clock" },
+    { id: "activity", label: "Activity", icon: "eye" },
 ];
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -98,7 +101,8 @@ const RightPanel = ({ entryId, editor, title, data, status, onReload, onStatus, 
                         {tab === "ai" && <AiTab editor={editor} title={title} />}
                         {tab === "review" && <ReviewTab entryId={entryId} status={status} onStatus={onStatus} />}
                         {tab === "schema" && <SchemaTab title={title} data={data} patchData={patchData} />}
-                        {tab === "versions" && <VersionsTab entryId={entryId} onReload={onReload} />}
+                        {tab === "versions" && <VersionHistory entryId={entryId} onRestored={onReload} />}
+                        {tab === "activity" && <ActivityFeed entryId={entryId} />}
                     </>
                 )}
             </div>
@@ -304,9 +308,10 @@ const AiTab = ({ editor, title }: { editor: Editor | null; title: string }) => {
 };
 
 /* ---------------- Schema ---------------- */
-const SCHEMA_TYPES = ["BlogPosting", "Article", "NewsArticle", "WebPage", "Product", "FAQPage", "HowTo", "Recipe", "Event", "Organization"];
+const SCHEMA_TYPES = ["WebPage", "Service", "LocalBusiness", "BlogPosting", "Article", "NewsArticle", "Product", "FAQPage", "HowTo", "Recipe", "Event", "Organization"];
 const SchemaTab = ({ title, data, patchData }: { title: string; data: EntryData; patchData: (p: EntryData) => Promise<boolean> }) => {
-    const [schemaType, setSchemaType] = useState(str(data.jsonLdType) || "BlogPosting");
+    // Nothing stored means nothing set: show a neutral type, never imply BlogPosting.
+    const [schemaType, setSchemaType] = useState(str(data.jsonLdType) || "WebPage");
     const [canonical, setCanonical] = useState(str(data.canonical));
     const [robots, setRobots] = useState(str(data.robots) || "index, follow");
     const [saving, setSaving] = useState(false);
@@ -325,6 +330,7 @@ const SchemaTab = ({ title, data, patchData }: { title: string; data: EntryData;
     return (
         <div className="flex flex-col gap-5">
             <Field label="Schema type"><Select variant="field" ariaLabel="Schema type" value={schemaType} onChange={setSchemaType} options={SCHEMA_TYPES.map((t) => ({ value: t, label: t }))} /></Field>
+            {!str(data.jsonLdType) && <p className="-mt-2 text-caption-2 text-grey">Not set for this entry yet. If your site builds its own structured data, this has no effect until it reads <code className="font-mono">jsonLdType</code>.</p>}
             <Field label="Canonical URL"><input value={canonical} onChange={(e) => setCanonical(e.target.value)} placeholder="https://…" className="flow-input" /></Field>
             <Field label="Robots"><Select variant="field" ariaLabel="Robots" value={robots} onChange={setRobots} options={["index, follow", "noindex, follow", "index, nofollow", "noindex, nofollow"].map((v) => ({ value: v, label: v }))} /></Field>
             <div>
@@ -339,64 +345,11 @@ const SchemaTab = ({ title, data, patchData }: { title: string; data: EntryData;
     );
 };
 
-/* ---------------- Versions ---------------- */
-type Version = { id: string; versionNumber: number; status: string; title: string; author: string | null; createdAt: string };
-const VersionsTab = ({ entryId, onReload }: { entryId: string; onReload: () => void }) => {
-    const [versions, setVersions] = useState<Version[] | null>(null);
-    const [restoring, setRestoring] = useState<string | null>(null);
-
-    const load = useCallback(() => {
-        setVersions(null);
-        api<Version[]>(`/entries/${entryId}/versions`).then(setVersions).catch(() => setVersions([]));
-    }, [entryId]);
-    useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        load();
-    }, [load]);
-
-    const restore = async (versionId: string) => {
-        if (restoring) return;
-        if (!(await confirm({ title: "Restore this version?", message: "The current content becomes a new version in history.", confirmLabel: "Restore" }))) return;
-        setRestoring(versionId);
-        try {
-            await api(`/entries/${entryId}/versions/${versionId}/restore`, { method: "POST" });
-            onReload();
-            load();
-        } finally {
-            setRestoring(null);
-        }
-    };
-
-    if (versions === null) return <p className="py-6 text-center text-caption-2 text-grey">Loading…</p>;
-    if (versions.length === 0) return <p className="py-6 text-center text-caption-2 text-grey">No versions yet. Saves and status changes are snapshotted here.</p>;
-
-    return (
-        <ul className="flex flex-col">
-            {versions.map((v, i) => (
-                <li key={v.id} className="relative flex gap-3 pb-5 last:pb-0">
-                    {i < versions.length - 1 && <span className="absolute left-[5px] top-4 bottom-0 w-px bg-grey-light dark:bg-grey-light/10" />}
-                    <span className={cn("relative z-1 mt-1 shrink-0 w-3 h-3 rounded-full border-2", i === 0 ? "bg-primary border-primary" : "bg-white border-grey-light dark:bg-dark-1")} />
-                    <div className="grow">
-                        <div className="flex items-center justify-between gap-2">
-                            <span className="text-body-sm text-black dark:text-white">v{v.versionNumber} · {v.status.toLowerCase()}</span>
-                            {i !== 0 && (
-                                <button type="button" onClick={() => void restore(v.id)} disabled={restoring === v.id} className="text-caption-2 text-primary transition-opacity hover:opacity-70 disabled:opacity-50">
-                                    {restoring === v.id ? "Restoring…" : "Restore"}
-                                </button>
-                            )}
-                        </div>
-                        <div className="text-caption-2 text-grey">{v.author ?? "—"} · {new Date(v.createdAt).toLocaleString()}</div>
-                    </div>
-                </li>
-            ))}
-        </ul>
-    );
-};
-
 /* ---------------- Review ---------------- */
 const STATUS_LABEL: Record<string, string> = { DRAFT: "Draft", IN_REVIEW: "In review", APPROVED: "Approved", SCHEDULED: "Scheduled", PUBLISHED: "Published", ARCHIVED: "Archived" };
 type ReviewRow = { reviewer: string; decision: "APPROVED" | "CHANGES_REQUESTED"; note: string | null; at: string };
-type ReviewsResp = { status: string; approvalsRequired: number; approvals: number; isApproved: boolean; enforced: boolean; reviews: ReviewRow[] };
+type SignoffRow = { id: string; action: string; actor: string; at: string; version: number | null; note: string | null; fromVersion: number | null };
+type ReviewsResp = { status: string; approvalsRequired: number; approvals: number; isApproved: boolean; enforced: boolean; reviews: ReviewRow[]; history?: SignoffRow[] };
 
 // Read-only sign-off log. Submitting for approval, approving, and publishing all
 // happen from the editor's top action button now; this tab records who did what.
@@ -500,6 +453,29 @@ const ReviewTab = ({ entryId, status }: { entryId: string; status: string; onSta
                             ))}
                         </ul>
                     )}
+                </div>
+            )}
+
+            {/* Every submit, decision, publish and restore, across all review cycles. */}
+            {(info?.history?.length ?? 0) > 0 && (
+                <div className="rounded-2xl border border-grey-light p-3 dark:border-grey-light/10">
+                    <div className="mb-2 text-caption-1 text-grey">Sign-off log</div>
+                    <ul className="flex flex-col gap-2">
+                        {info!.history!.map((h) => (
+                            <li key={h.id} className="flex flex-col gap-0.5">
+                                <div className="flex items-baseline gap-2">
+                                    <span className="text-caption-2 font-semibold text-black dark:text-white">{actionLabel(h.action)}</span>
+                                    {h.version != null && <span className="text-[0.6875rem] text-grey">v{h.version}</span>}
+                                    <span className="ml-auto shrink-0 text-[0.6875rem] text-grey" suppressHydrationWarning>{new Date(h.at).toLocaleString()}</span>
+                                </div>
+                                <span className="text-caption-2 text-grey">
+                                    {h.actor}
+                                    {h.fromVersion != null ? ` · from v${h.fromVersion}` : ""}
+                                    {h.note ? ` · “${h.note}”` : ""}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
                 </div>
             )}
 
