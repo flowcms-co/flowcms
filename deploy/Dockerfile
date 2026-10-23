@@ -13,7 +13,7 @@
 
 # ---- base: shared runtime layer --------------------------------------------
 # Node 22 LTS: required by undici@8 (>=22.19) used in the API's SSRF guard.
-FROM node:22-bookworm-slim AS base
+FROM node:22.23.4-bookworm-slim AS base
 # openssl + ca-certificates: Prisma query engine (TLS) on Debian.
 # dumb-init: proper PID 1 (signal forwarding + zombie reaping).
 RUN apt-get update \

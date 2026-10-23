@@ -9,8 +9,16 @@ import { createPrivateKey, createPublicKey, sign as edSign, verify as edVerify }
  * Token format:  base64url(JSON payload) "." base64url(ed25519 signature)
  */
 export const LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAPEyHBUrtV4Ouu+b29D6eR60s1EpFX25S6LQsetoy/xo=
+-----END PUBLIC KEY-----`;
+
+/** Signing key retired in v1.9.9 (Oct 2026 hosting incident). Licenses it signed keep
+ *  working until LEGACY_KEY_UNTIL so online installs have time to renew onto the new key;
+ *  after that, only LICENSE_PUBLIC_KEY verifies. Delete both in the next minor release. */
+export const LEGACY_LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAACw3RZ2gPJwW9J41N1ocKqcPnyOciRANttWIhaiXpi8=
 -----END PUBLIC KEY-----`;
+export const LEGACY_KEY_UNTIL = Date.UTC(2027, 0, 31);
 
 export type LicensePlan = "community" | "pro" | "enterprise";
 
@@ -45,11 +53,18 @@ export function signLicense(payload: LicensePayload, privateKeyPem: string): str
  * malformed. Does NOT check expiry — the caller decides how to treat an expired
  * but validly-signed license (e.g. show "expired", grace period).
  */
-export function verifyLicense(token: string, publicKeyPem: string = LICENSE_PUBLIC_KEY): LicensePayload | null {
+export function verifyLicense(token: string, publicKeyPem?: string, now: number = Date.now()): LicensePayload | null {
+    // An explicitly pinned key (LICENSE_PUBLIC_KEY env) is the only key trusted.
+    const keys = publicKeyPem
+        ? [publicKeyPem]
+        : now < LEGACY_KEY_UNTIL
+          ? [LICENSE_PUBLIC_KEY, LEGACY_LICENSE_PUBLIC_KEY]
+          : [LICENSE_PUBLIC_KEY];
     try {
         const [body, sig] = token.trim().split(".");
         if (!body || !sig) return null;
-        const ok = edVerify(null, Buffer.from(body, "utf8"), createPublicKey(publicKeyPem), fromB64url(sig));
+        const signed = Buffer.from(body, "utf8");
+        const ok = keys.some((k) => edVerify(null, signed, createPublicKey(k), fromB64url(sig)));
         if (!ok) return null;
         const payload = JSON.parse(fromB64url(body).toString("utf8")) as LicensePayload;
         if (!payload || typeof payload !== "object" || !payload.plan || !Array.isArray(payload.features)) return null;
