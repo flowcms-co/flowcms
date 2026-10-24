@@ -3,10 +3,11 @@ import {
     Inject,
     Injectable,
     InternalServerErrorException,
+    Logger,
     Optional,
     UnauthorizedException,
 } from "@nestjs/common";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { authenticator } from "otplib";
 import * as QRCode from "qrcode";
 import { decryptSecret, encryptSecret, generateToken, hashPassword, hashToken, verifyPassword } from "@flowcms/shared";
@@ -18,9 +19,9 @@ import { SESSION_IDLE_TTL_MS, SESSION_TTL_MS } from "./constants";
 import { SigninDto, UpdateAvatarDto } from "./dto";
 import { SESSION_POLICY_PORT, type SessionPolicyPort } from "./session-policy.port";
 import type { AuthUser } from "./types";
+import { resetFingerprint, resetLink, verifyResetToken } from "./reset-token";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
-const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // Accept the previous/current/next TOTP step (±30s) to tolerate clock skew and
 // the few seconds between reading a code and submitting it.
@@ -28,6 +29,8 @@ authenticator.options = { window: 1 };
 
 @Injectable()
 export class AuthService {
+    private readonly logger = new Logger(AuthService.name);
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly mail: MailService,
@@ -295,56 +298,27 @@ export class AuthService {
         });
         const membership = user?.memberships[0];
         if (user && membership) {
-            // Bind the token to the current password (fingerprint). Once the password
-            // changes, the fingerprint stops matching → the link is single-use and any
-            // older outstanding links are invalidated too.
-            const fp = user.passwordHash ? hashToken(user.passwordHash).slice(0, 16) : "none";
-            const token = this.signResetToken({ uid: user.id, exp: Date.now() + RESET_TTL_MS, fp });
             const ws = await this.prisma.workspace.findUnique({ where: { id: membership.workspaceId }, select: { name: true } });
-            await this.mail.sendTemplate(membership.workspaceId, "reset_password", e, {
+            const r = await this.mail.sendTemplate(membership.workspaceId, "reset_password", e, {
                 name: user.name ?? "there",
                 workspace: ws?.name ?? "Flow CMS",
-                link: `${STUDIO}/reset-password?token=${token}`,
+                link: resetLink(user, STUDIO),
             });
+            // The response stays "ok" either way (no account enumeration), so the
+            // server log is the only place an operator can see the email never left.
+            if (!r.sent) {
+                this.logger.warn(
+                    `Password reset email NOT sent to ${e} (${r.reason ?? r.error ?? "unknown"}). ` +
+                        `Recover from a shell on the server: node apps/api/dist/recover.js reset-password --email ${e} (see docs/RECOVERY.md).`,
+                );
+            }
         }
         return { ok: true };
     }
 
-    /** Secret for password-reset token HMAC. Prefers JWT_SECRET (so reset tokens
-     *  no longer share the secrets-vault key — a vault-key leak can't forge reset
-     *  links, SECURITY_AUDIT_REPORT F-05 — and JWT_SECRET is finally used, F-06).
-     *  Falls back to the vault key only if JWT_SECRET is unset (dev). */
-    private resetSecret(): string {
-        return process.env.JWT_SECRET || process.env.SECRETS_ENCRYPTION_KEY || "flowcms.dev.reset";
-    }
-
-    /** Sign a reset payload: base64url(json).base64url(HMAC-SHA256). Tamper-evident
-     *  and non-forgeable without the secret (vs. the old reversible encryption). */
-    private signResetToken(payload: { uid: string; exp: number; fp: string }): string {
-        const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-        const sig = createHmac("sha256", this.resetSecret()).update(body).digest("base64url");
-        return `${body}.${sig}`;
-    }
-
-    private verifyResetToken(token: string): { uid?: string; exp?: number; fp?: string } | null {
-        const dot = token.indexOf(".");
-        if (dot < 0) return null;
-        const body = token.slice(0, dot);
-        const sig = token.slice(dot + 1);
-        const expected = createHmac("sha256", this.resetSecret()).update(body).digest("base64url");
-        const a = Buffer.from(sig);
-        const b = Buffer.from(expected);
-        if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-        try {
-            return JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-        } catch {
-            return null;
-        }
-    }
-
     /** Consume a reset token + set a new password (invalidates all sessions). */
     async resetPassword(token: string, newPassword: string) {
-        const payload = this.verifyResetToken(token);
+        const payload = verifyResetToken(token);
         if (!payload) {
             throw new BadRequestException("Invalid or expired reset link.");
         }
@@ -355,8 +329,7 @@ export class AuthService {
         // Single-use check: the fingerprint must still match the user's current
         // password. After any reset the hash changes, so a used/old link fails here.
         const target = await this.prisma.user.findUnique({ where: { id: payload.uid }, select: { passwordHash: true } });
-        const fp = target?.passwordHash ? hashToken(target.passwordHash).slice(0, 16) : "none";
-        if ((payload.fp ?? "") !== fp) {
+        if ((payload.fp ?? "") !== resetFingerprint(target?.passwordHash)) {
             throw new BadRequestException("This reset link has already been used or expired. Request a new one.");
         }
         await this.prisma.user.update({ where: { id: payload.uid }, data: { passwordHash: hashPassword(newPassword) } });

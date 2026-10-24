@@ -5,6 +5,7 @@ import Card from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import Switch from "@/components/ui/Switch";
 import { api, ApiError } from "@/lib/api";
+import { refreshMailStatus } from "@/lib/useMailStatus";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { cn } from "@/lib/cn";
 
@@ -40,6 +41,7 @@ const EmailSettings = () => {
             const [s, t] = await Promise.all([api<Status>("/mail/status"), api<Template[]>("/mail/templates")]);
             setStatus(s);
             setTemplates(t);
+            refreshMailStatus(); // keeps the shell's "no email provider" banner in step
             if (s.connected) {
                 setProvider(s.provider ?? "smtp");
                 setForm((f) => ({ ...f, host: s.host ?? "", port: String(s.port ?? 587), user: s.user ?? "", from: s.from ?? "" }));

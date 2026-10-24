@@ -8,6 +8,7 @@ import MobileTabBar from "@/components/shell/MobileTabBar";
 import BrandStyle from "@/components/shell/BrandStyle";
 import { InstallAppBanner } from "@/components/install/InstallApp";
 import JobToasts from "@/components/jobs/JobToasts";
+import EmailSetupBanner from "@/components/shell/EmailSetupBanner";
 import { TourProvider } from "@/components/tour/TourProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useWorkspace } from "@/lib/useWorkspace";
@@ -133,6 +134,7 @@ const AppShell = ({ children }: { children: ReactNode }) => {
                 <Topbar onMenu={() => setMobileOpen(true)} />
                 {/* pb-tabbar keeps content clear of the fixed mobile tab bar; reset at lg. */}
                 <main className="pb-tabbar mx-auto w-full max-w-[90rem] px-4 pt-5 md:px-6 md:pt-8 xl:px-8 lg:pb-8">
+                    <EmailSetupBanner />
                     {children}
                 </main>
             </div>

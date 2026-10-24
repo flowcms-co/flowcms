@@ -39,6 +39,11 @@ const AGENT: Endpoint[] = [
     { method: "POST", path: "/agent/assets/:id/replace", desc: "Swap the file, keep the id: pages using it update" },
     { method: "DELETE", path: "/agent/assets/:id", desc: "Delete (refused while in use unless ?force=true). Needs media.delete" },
     { method: "GET", path: "/agent/asset-folders", desc: "Folders (POST, PATCH /:name, DELETE /:name to manage)" },
+    { method: "GET", path: "/agent/model/:group", desc: "Content model: group is types or components. GET /:group/:ref for one (apiId or id). Needs model.read" },
+    { method: "POST", path: "/agent/model/:group", desc: "Create a type or component ({ name, apiId?, kind?, schema }). Needs model.update" },
+    { method: "PATCH", path: "/agent/model/:group/:ref", desc: "Edit name, apiId, draftAndPublish or schema keys. Writes take ?dryRun=true" },
+    { method: "POST", path: "/agent/model/:group/:ref/fields", desc: "Add a field ({ field, position? }). PATCH /fields/:field with { changes } to edit" },
+    { method: "DELETE", path: "/agent/model/:group/:ref/fields/:field", desc: "Remove a field. Needs model.delete and ?confirm=true (as does DELETE /:group/:ref)" },
 ];
 
 const MethodRow = ({ e }: { e: Endpoint }) => (

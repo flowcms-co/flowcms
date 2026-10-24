@@ -8,12 +8,14 @@
  *   flowcms migrate            # apply DB migrations (npm run db:migrate)
  *   flowcms seed               # seed the database (npm run db:seed)
  *   flowcms dev                # start studio + api (npm run dev)
+ *   flowcms admin reset-password --email you@x.com [--set-password]   # locked-out recovery
  *   flowcms help
  *
  * Run it from the Flow CMS repo root on the server where the CMS is installed.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
@@ -169,6 +171,19 @@ function run(npmScript) {
     process.exit(r.status ?? 0);
 }
 
+/** Locked-out recovery (apps/api/src/recover.ts). Runs on the server, with its env. */
+function cmdAdmin() {
+    // Resolve from this file, not the cwd: `railway ssh` / `docker exec` may start anywhere.
+    const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+    const built = join(repo, "apps/api/dist/recover.js");
+    const env = existsSync(join(repo, ".env")) ? ["--env-file=.env"] : [];
+    const [bin, argv] = existsSync(built)
+        ? [process.execPath, [...env, built, ...args.slice(1)]]
+        : [join(repo, "node_modules/.bin/tsx"), [...env, "apps/api/src/recover.ts", ...args.slice(1)]];
+    const r = spawnSync(bin, argv, { cwd: repo, stdio: "inherit", env: process.env });
+    process.exit(r.status ?? 1);
+}
+
 function help() {
     console.log(`${C.bold}flowcms${C.reset} — setup & operations for self-hosted Flow CMS
 
@@ -180,6 +195,9 @@ ${C.bold}Commands${C.reset}
   migrate     Apply database migrations (npm run db:migrate)
   seed        Seed the database (npm run db:seed)
   dev         Start studio + api (npm run dev)
+  admin reset-password --email you@x.com [--set-password]
+              Locked out? Run on the server: prints a 1-hour reset link, or with
+              --set-password reads a new password from stdin. See docs/RECOVERY.md
   help        Show this help
 
 Run from the Flow CMS repo root. First time:
@@ -193,6 +211,7 @@ switch (cmd) {
     case "migrate": run("db:migrate"); break;
     case "seed": run("db:seed"); break;
     case "dev": run("dev"); break;
+    case "admin": cmdAdmin(); break;
     case "help":
     case "--help":
     case "-h": help(); break;

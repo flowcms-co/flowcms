@@ -127,7 +127,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
  * or an empty scope list from before scoping, does not include them, so tokens
  * made before these existed get none of them.
  */
-export const OPT_IN_TOKEN_SCOPES = ["content.restore", "media.read", "media.write", "media.delete"] as const;
+export const OPT_IN_TOKEN_SCOPES = ["content.restore", "media.read", "media.write", "media.delete", "model.read", "model.update", "model.delete"] as const;
 
 /** Does a permission set grant a given permission? ("*" grants everything.) */
 export function can(granted: string[] | undefined | null, permission: string): boolean {

@@ -23,6 +23,7 @@ import { ApiTokenGuard } from "./api-token.guard";
 import { AgentTokenGuard } from "./agent-token.guard";
 import { ContentJobHandlers } from "./content-job.handlers";
 import { AgentMediaController } from "./agent-media.controller";
+import { AgentModelController } from "./agent-model.controller";
 import { TrashController } from "./trash.controller";
 import { AssetsModule } from "../assets/assets.module";
 import { BackupsModule } from "../backups/backups.module";
@@ -35,8 +36,9 @@ import { BackupsModule } from "../backups/backups.module";
         ApiTokensController,
         PublicController,
         GraphqlController,
-        // Before AgentController: its `:type` route would otherwise take /agent/assets.
+        // Before AgentController: its `:type` routes would otherwise take /agent/assets and /agent/model.
         AgentMediaController,
+        AgentModelController,
         AgentController,
         TrashController,
         StrapiController,

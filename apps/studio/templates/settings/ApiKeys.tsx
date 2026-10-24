@@ -47,6 +47,9 @@ const EXTRA_SCOPES: { key: string; label: string }[] = [
     { key: "media.read", label: "View media and where it's used" },
     { key: "media.write", label: "Upload, edit and replace media" },
     { key: "media.delete", label: "Delete media" },
+    { key: "model.read", label: "Read the content model" },
+    { key: "model.update", label: "Add and edit fields, types and components" },
+    { key: "model.delete", label: "Remove fields, types and components, or change page URLs (can delete content)" },
 ];
 const EXTRA_KEYS = new Set(EXTRA_SCOPES.map((s) => s.key));
 
@@ -96,6 +99,12 @@ const ScopePicker = ({ type, scopes, onChange }: { type: Token["type"]; scopes: 
                 <legend className="mb-1.5 block text-caption-1 text-black dark:text-white">Extra access</legend>
                 <div className="flex flex-col gap-2 rounded-2xl border border-grey-light p-3 dark:border-grey-light/10">{EXTRA_SCOPES.map(box)}</div>
                 <p className="mt-1.5 text-caption-2 text-grey">Never part of full access: tick each one this token needs.</p>
+                {scopes.some((k) => k.startsWith("model.")) && (
+                    <p className="mt-1.5 rounded-xl bg-warning/10 px-3 py-2 text-caption-2 text-black dark:text-white">
+                        Model access lets this token change the structure your site is built on.
+                        {scopes.includes("model.delete") ? " With removal ticked it can delete fields and types, and the content stored in them." : " It can't remove anything without the removal scope."}
+                    </p>
+                )}
             </fieldset>
         </>
     );

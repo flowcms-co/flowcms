@@ -92,6 +92,13 @@ platform degrades gracefully without it; enable it for multi-instance deploys).
 **Meilisearch** is scaffolded in Docker but not yet wired into the API — search
 runs on Postgres today.
 
+## Locked out?
+
+No email provider set up and forgot the admin password? Recover from the server:
+`node apps/api/dist/recover.js reset-password --email you@example.com` prints a
+one-hour reset link. Railway, Docker, Render and an env-var fallback are covered
+in [docs/RECOVERY.md](docs/RECOVERY.md).
+
 ## License
 
 Flow CMS is **open-core**:

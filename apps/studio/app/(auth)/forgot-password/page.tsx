@@ -35,6 +35,10 @@ export default function ForgotPasswordPage() {
                     If an account exists for <span className="font-semibold text-black dark:text-white">{email}</span>, we&rsquo;ve sent a link to reset
                     your password. The link expires in 1 hour.
                 </p>
+                <p className="mt-3 text-body-sm text-grey">
+                    Nothing after a few minutes? Ask whoever runs this server: they can reset it from the server. Self-hosting?{" "}
+                    <a href="https://github.com/flowcms-co/flowcms/blob/main/docs/RECOVERY.md" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:opacity-70">Recover admin access</a>.
+                </p>
                 <Link href="/login" className="mt-7 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-primary font-bold text-white transition-transform active:scale-[0.98]">
                     Back to sign in
                 </Link>

@@ -49,6 +49,27 @@ export type ReviewState = {
     reviews: Review[];
 };
 
+/** A content-model field as Studio stores it. */
+export type ModelField = {
+    id?: string;
+    name: string;
+    type: string;
+    required?: boolean;
+    repeatable?: boolean;
+    multiple?: boolean;
+    fields?: ModelField[];
+    componentApiId?: string;
+    allowedComponents?: string[];
+    referencedTypeId?: string;
+    validation?: Record<string, unknown>;
+    [k: string]: unknown;
+};
+export type ModelType = { id: string; name: string; apiId: string; kind: "COLLECTION" | "SINGLE" | "COMPONENT"; fields: ModelField[]; entryCount: number; [k: string]: unknown };
+/** Which half of the model: content types or reusable components. */
+export type ModelGroup = "types" | "components";
+/** `dryRun` returns the result without saving; `confirm` is required for changes that drop stored data. */
+export type ModelWriteOptions = { dryRun?: boolean; confirm?: boolean };
+
 export class FlowError extends Error {
     constructor(
         message: string,
@@ -195,6 +216,39 @@ export function createClient(options: ClientOptions) {
         /** Restore a version as a draft (default) or live now. Needs the content.restore scope. */
         restore(type: string, id: string, v: string | number, body: { mode?: "draft" | "publish"; reason?: string; fields?: string[] } = {}): Promise<Entry> {
             return request(`/agent/${type}/${id}/versions/${v}/restore`, { method: "POST", body: JSON.stringify(body) });
+        },
+
+        // ── Content model — needs the model.read / model.update / model.delete scopes ──
+        model: {
+            list(group: ModelGroup = "types"): Promise<ModelType[]> {
+                return request(`/agent/model/${group}`);
+            },
+            /** One type or component by apiId or id. */
+            get(group: ModelGroup, ref: string): Promise<ModelType> {
+                return request(`/agent/model/${group}/${encodeURIComponent(ref)}`);
+            },
+            create(group: ModelGroup, body: { name: string; apiId?: string; kind?: "COLLECTION" | "SINGLE"; schema: Record<string, unknown> }, o: ModelWriteOptions = {}): Promise<ModelType> {
+                return request(`/agent/model/${group}${params(o)}`, { method: "POST", body: JSON.stringify(body) });
+            },
+            /** Schema keys you send replace the stored ones; `schema.fields` replaces the whole list. */
+            update(group: ModelGroup, ref: string, body: { name?: string; apiId?: string; draftAndPublish?: boolean; schema?: Record<string, unknown> }, o: ModelWriteOptions = {}): Promise<ModelType> {
+                return request(`/agent/model/${group}/${encodeURIComponent(ref)}${params(o)}`, { method: "PATCH", body: JSON.stringify(body) });
+            },
+            addField(group: ModelGroup, ref: string, field: ModelField, o: ModelWriteOptions & { position?: number } = {}): Promise<ModelType> {
+                const { position, ...q } = o;
+                return request(`/agent/model/${group}/${encodeURIComponent(ref)}/fields${params(q)}`, { method: "POST", body: JSON.stringify({ field, position }) });
+            },
+            updateField(group: ModelGroup, ref: string, field: string, changes: Partial<ModelField>, o: ModelWriteOptions = {}): Promise<ModelType> {
+                return request(`/agent/model/${group}/${encodeURIComponent(ref)}/fields/${encodeURIComponent(field)}${params(o)}`, { method: "PATCH", body: JSON.stringify({ changes }) });
+            },
+            /** Needs model.delete and `{ confirm: true }`. */
+            removeField(group: ModelGroup, ref: string, field: string, o: ModelWriteOptions = {}): Promise<ModelType> {
+                return request(`/agent/model/${group}/${encodeURIComponent(ref)}/fields/${encodeURIComponent(field)}${params(o)}`, { method: "DELETE" });
+            },
+            /** Deletes the type and every entry of it. Needs model.delete and `{ confirm: true }`. */
+            remove(group: ModelGroup, ref: string, o: ModelWriteOptions = {}): Promise<{ ok: boolean }> {
+                return request(`/agent/model/${group}/${encodeURIComponent(ref)}${params(o)}`, { method: "DELETE" });
+            },
         },
 
         // ── Media — needs the media.read / media.write / media.delete scopes ──

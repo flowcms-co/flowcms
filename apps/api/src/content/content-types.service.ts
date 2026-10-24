@@ -47,7 +47,7 @@ export class ContentTypesService {
     }
 
     /** Flatten the stored schema JSON into the shape the Schema Builder UI uses. */
-    private shape(t: ContentType & { _count?: { entries: number } }) {
+    shape(t: ContentType & { _count?: { entries: number } }) {
         const s = (t.schema ?? {}) as {
             icon?: string;
             color?: string;
@@ -166,7 +166,7 @@ export class ContentTypesService {
     /** Names of content types that reference a component apiId (via a Component
      *  field's componentApiId or a DynamicZone's allowedComponents). Used to lock a
      *  component's apiId / block deletion while it's in use. */
-    private async componentReferences(workspaceId: string, apiId: string): Promise<string[]> {
+    async componentReferences(workspaceId: string, apiId: string): Promise<string[]> {
         const types = await this.prisma.contentType.findMany({
             where: { workspaceId },
             select: { name: true, apiId: true, schema: true },
@@ -317,6 +317,29 @@ export class ContentTypesService {
 
         const t = await this.prisma.contentType.update({ where: { id }, data });
         return this.shape(t);
+    }
+
+    /** A type or component by apiId or id (the agent model API accepts either). */
+    async findByRef(workspaceId: string, ref: string, component: boolean) {
+        if (component) await this.ensureBuiltinComponents(workspaceId); // as listComponents does
+        const t = await this.prisma.contentType.findFirst({
+            where: { workspaceId, kind: component ? "COMPONENT" : { not: "COMPONENT" }, OR: [{ id: ref }, { apiId: ref }] },
+            include: { _count: { select: { entries: true } } },
+        });
+        if (!t) throw new NotFoundException(`${component ? "Component" : "Content type"} "${ref}" not found.`);
+        return t;
+    }
+
+    /** How many of a type's entries hold a value (published or draft) under each top-level key. */
+    async entriesWithValue(typeId: string, keys: string[]): Promise<Record<string, number>> {
+        const out: Record<string, number> = {};
+        for (const k of new Set(keys)) {
+            const [{ n }] = await this.prisma.$queryRaw<{ n: number }[]>`
+                SELECT count(*)::int AS n FROM "ContentEntry" WHERE "contentTypeId" = ${typeId}
+                AND (coalesce("data" -> ${k}, 'null'::jsonb) <> 'null'::jsonb OR coalesce("draftData" -> ${k}, 'null'::jsonb) <> 'null'::jsonb)`;
+            out[k] = n;
+        }
+        return out;
     }
 
     async remove(workspaceId: string, id: string) {

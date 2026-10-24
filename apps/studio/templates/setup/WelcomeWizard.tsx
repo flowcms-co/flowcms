@@ -232,7 +232,7 @@ export default function WelcomeWizard() {
                             </button>
                         }
                     >
-                        <input type={showPw ? "text" : "password"} required value={password} onChange={(e) => setPassword(e.target.value)} className={cn(inputBase, "pr-11")} placeholder="At least 12 characters" autoComplete="new-password" />
+                        <input type={showPw ? "text" : "password"} required value={password} onChange={(e) => setPassword(e.target.value)} className={cn(inputBase, "pr-11")} placeholder="At least 12 characters" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
                     </Field>
 
                     <Field
@@ -245,7 +245,7 @@ export default function WelcomeWizard() {
                             </button>
                         }
                     >
-                        <input type={showConfirm ? "text" : "password"} required value={confirm} onChange={(e) => setConfirm(e.target.value)} className={cn(inputBase, "pr-11")} placeholder="Re-enter your password" autoComplete="new-password" />
+                        <input type={showConfirm ? "text" : "password"} required value={confirm} onChange={(e) => setConfirm(e.target.value)} className={cn(inputBase, "pr-11")} placeholder="Re-enter your password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
                     </Field>
 
                     <ConsentChecks

@@ -48,6 +48,8 @@ graphify-out/
 docs/*
 !docs/DEPLOY.md
 !docs/SEO-CRAWLER.md
+!docs/RECOVERY.md
+!docs/AGENT-MODEL-API.md
 
 # AI-assistant tooling / config — not part of the product
 CLAUDE.md

@@ -10,6 +10,8 @@ import helmet from "helmet";
 import { AppModule } from "./app.module";
 import { AllExceptionsFilter } from "./common/all-exceptions.filter";
 import { requestContext } from "./common/request-context";
+import { PrismaService } from "./prisma/prisma.service";
+import { applyEnvRecovery } from "./recover";
 
 async function bootstrap() {
     // bodyParser:false so we can register parsers with explicit size limits below
@@ -29,6 +31,9 @@ async function bootstrap() {
             process.exit(1);
         }
     }
+
+    // Operator recovery from env vars (hosts without a shell). No-op unless set.
+    await applyEnvRecovery(app.get(PrismaService), new Logger("Recovery"));
 
     // Behind a reverse proxy (prod), trust X-Forwarded-* so req.ip is the real
     // client (used for rate limiting). OFF by default so a directly-exposed
