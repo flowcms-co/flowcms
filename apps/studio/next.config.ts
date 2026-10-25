@@ -31,6 +31,21 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Security headers on every route. CSP sets only the framing / base / plugin
+        // directives (no script-src allow-list). frame-ancestors 'self': only Studio
+        // may frame Studio (the content preview frames /preview/site-demo). Studio
+        // framing the customer's site for live editing is governed by that site.
+        source: "/:path*",
+        headers: [
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self'; base-uri 'self'; object-src 'none'" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+        ],
+      },
+      {
         // Never cache the HTML shell (or the manifest / data documents). On iOS a
         // home-screen shortcut keeps its own cache that "Clear Website Data" never
         // touches, so a stale shell pins old hashed chunks and the app shows an old
