@@ -64,8 +64,8 @@ try {
             isGlobal: true,
             envFilePath: ["../../.env", ".env"],
         }),
-        // Global rate-limit backstop: 300 requests / 60s per bucket (token, else
-        // session, else IP — see TokenOrIpThrottlerGuard). Sensitive routes
+        // Global rate-limit backstop: 300 requests / 60s per bucket (validated user,
+        // else IP; see TokenOrIpThrottlerGuard). Sensitive routes
         // tighten this with @Throttle; public delivery loosens it. Uses the
         // Redis-backed store when REDIS_URL is set so limits are shared across a
         // multi-instance deploy; falls back to the in-memory store (correct for a
@@ -117,11 +117,13 @@ try {
         ...EE_MODULES,
     ],
     providers: [
-        // Global guards run in order: rate-limit FIRST (so it shields the auth
-        // routes from brute force before any auth work), then authenticate every
-        // request (unless @Public), then check permissions.
-        { provide: APP_GUARD, useClass: TokenOrIpThrottlerGuard },
+        // Global guards run in order: authenticate every request (unless @Public;
+        // the auth routes are public, so they reach the limiter with no auth work),
+        // then rate-limit keyed by the VALIDATED user or the IP, then check
+        // permissions. The limiter must run after AuthGuard: keying by a raw,
+        // unvalidated credential lets random values dodge the per-IP bucket.
         { provide: APP_GUARD, useClass: AuthGuard },
+        { provide: APP_GUARD, useClass: TokenOrIpThrottlerGuard },
         { provide: APP_GUARD, useClass: PermissionsGuard },
     ],
 })
