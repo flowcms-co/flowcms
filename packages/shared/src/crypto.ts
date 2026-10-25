@@ -10,8 +10,8 @@ import {
 
 /* ──────────────────────────── Passwords ──────────────────────────── */
 
-/** Current scrypt cost (OWASP: N=2^17, r=8, p=1, about 128 MiB per hash). */
-const SCRYPT = { N: 2 ** 17, r: 8, p: 1 };
+/** Current scrypt cost (OWASP equivalent of N=2^17,p=1 at half the memory: about 64 MiB per hash, so small hosts survive a burst of sign-ins). */
+const SCRYPT = { N: 2 ** 16, r: 8, p: 2 };
 /** Params of the original format `scrypt$<salt>$<hash>` (Node's scrypt defaults). */
 const LEGACY = { N: 2 ** 14, r: 8, p: 1 };
 

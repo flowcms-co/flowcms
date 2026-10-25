@@ -9,9 +9,9 @@ function legacyHash(pw: string) {
 }
 
 describe("password hashing", () => {
-    it("writes N=2^17 params into the hash and verifies it", async () => {
+    it("writes N=2^16,p=2 params into the hash and verifies it", async () => {
         const h = await hashPassword("correct horse battery");
-        expect(h).toMatch(/^scrypt\$N=131072,r=8,p=1\$[0-9a-f]{32}\$[0-9a-f]{128}$/);
+        expect(h).toMatch(/^scrypt\$N=65536,r=8,p=2\$[0-9a-f]{32}\$[0-9a-f]{128}$/);
         expect(await verifyPassword("correct horse battery", h)).toBe(true);
         expect(await verifyPassword("wrong", h)).toBe(false);
         expect(passwordNeedsRehash(h)).toBe(false);

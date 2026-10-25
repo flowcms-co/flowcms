@@ -107,7 +107,7 @@ describe("sign-in lockout", () => {
     it("rehashes an old-params hash on a good login", async () => {
         const { svc, user } = setup();
         await signin(svc, "right-password");
-        expect(user.passwordHash).toMatch(/^scrypt\$N=131072,r=8,p=1\$/);
+        expect(user.passwordHash).toMatch(/^scrypt\$N=65536,r=8,p=2\$/);
     });
 });
 
