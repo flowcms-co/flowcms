@@ -154,7 +154,8 @@ export class AuthController {
         const cookieToken = (req as Request & { cookies?: Record<string, string> }).cookies?.[SESSION_COOKIE];
         const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null;
         const token = cookieToken ?? bearer;
-        const user = token ? await this.auth.validate(token, req.ip) : null;
+        // AuthGuard already validated a session cookie on this public route.
+        const user = (req as Request & { user?: AuthUser }).user ?? (token && !cookieToken ? await this.auth.validate(token, req.ip) : null);
         return { user };
     }
 

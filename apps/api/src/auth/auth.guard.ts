@@ -23,9 +23,17 @@ export class AuthGuard implements CanActivate {
             ctx.getHandler(),
             ctx.getClass(),
         ]);
-        if (isPublic) return true;
-
         const req = ctx.switchToHttp().getRequest<Request & { user?: unknown }>();
+        if (isPublic) {
+            // Public routes never require auth, but a VALID session cookie still
+            // identifies the user, so the rate limiter (next guard) can key by user
+            // rather than lumping a whole office NAT into one IP bucket (the studio
+            // calls /auth/me on every load). Invalid/random values just fall to IP.
+            const sess = (req as Request & { cookies?: Record<string, string> }).cookies?.[SESSION_COOKIE];
+            if (sess) req.user = (await this.auth.validate(sess, req.ip).catch(() => null)) ?? undefined;
+            return true;
+        }
+
         const cookieToken = (req as Request & { cookies?: Record<string, string> }).cookies?.[SESSION_COOKIE];
         const token = this.extractToken(req);
         if (!token) throw new UnauthorizedException("Not authenticated.");

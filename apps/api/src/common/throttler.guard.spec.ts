@@ -4,6 +4,7 @@ import { Controller, Get, Module } from "@nestjs/common";
 import { APP_GUARD, NestFactory, Reflector } from "@nestjs/core";
 import { Throttle, ThrottlerModule } from "@nestjs/throttler";
 import type { INestApplication } from "@nestjs/common";
+import cookieParser from "cookie-parser";
 import { TokenOrIpThrottlerGuard } from "./throttler.guard";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthService } from "../auth/auth.service";
@@ -23,7 +24,7 @@ class TestController {
     imports: [ThrottlerModule.forRoot({ throttlers: [{ name: "default", ttl: 60_000, limit: 100 }] })],
     controllers: [TestController],
     providers: [
-        { provide: AuthService, useValue: { validate: async () => null } },
+        { provide: AuthService, useValue: { validate: async (t: string) => (t === "good" ? { id: "u1" } : null) } },
         Reflector,
         // Same order as AppModule.
         { provide: APP_GUARD, useClass: AuthGuard },
@@ -37,6 +38,7 @@ describe("TokenOrIpThrottlerGuard", () => {
     let base: string;
     beforeAll(async () => {
         app = await NestFactory.create(TestModule, { logger: false });
+        app.use(cookieParser());
         await app.listen(0, "127.0.0.1");
         base = await app.getUrl();
     });
@@ -49,6 +51,12 @@ describe("TokenOrIpThrottlerGuard", () => {
             codes.push(r.status);
         }
         expect(codes).toEqual([200, 200, 200, 429, 429]);
+    });
+
+    it("a valid session cookie on a public route gets its own user bucket", async () => {
+        // The IP bucket is spent by the test above; a validated user is not in it.
+        const r = await fetch(`${base}/open`, { headers: { cookie: "flow_session=good" } });
+        expect(r.status).toBe(200);
     });
 
     it("keys by validated user, else IP, never by the raw credential", async () => {
