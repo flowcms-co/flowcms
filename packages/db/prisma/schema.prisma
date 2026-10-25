@@ -255,6 +255,7 @@ enum IntegrationType {
   SEO_TOOL // pagespeed, keyword_data — BYO-key SEO data providers
   AUTOMATION // slack, zapier — outbound notification / automation connectors
   HOSTING // railway, render — platform credential for one-click in-app updates
+  STORAGE // s3-compatible media storage (R2, S3, Supabase, MinIO); install-wide
 }
 
 enum IntegrationStatus {

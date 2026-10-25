@@ -7,12 +7,14 @@ import AnalyticsConnect from "@/templates/settings/AnalyticsConnect";
 import SeoConnectors from "@/templates/settings/SeoConnectors";
 import ConnectorsSection from "@/templates/settings/ConnectorsSection";
 import EmailSettings from "@/templates/settings/EmailSettings";
+import StorageSettings from "@/templates/settings/StorageSettings";
 
 const TABS: SubTab[] = [
     { id: "ai", label: "AI" },
     { id: "analytics", label: "Analytics & Search" },
     { id: "automation", label: "Automation" },
     { id: "email", label: "Email" },
+    { id: "storage", label: "Storage" },
 ];
 
 /**
@@ -21,6 +23,7 @@ const TABS: SubTab[] = [
  *  • Analytics & Search: Search Console / GA4 + SEO data providers
  *  • Automation: Slack / Zapier
  *  • Email: SMTP + transactional templates
+ *  • Storage: S3-compatible media storage (R2, S3, Supabase, MinIO)
  */
 const IntegrationsSettings = () => {
     const params = useSearchParams();
@@ -42,6 +45,7 @@ const IntegrationsSettings = () => {
             )}
             {active === "automation" && <ConnectorsSection />}
             {active === "email" && <EmailSettings />}
+            {active === "storage" && <StorageSettings />}
         </div>
     );
 };

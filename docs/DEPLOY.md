@@ -128,7 +128,17 @@ openssl rand -base64 32   # run twice, one value each
 On Railway and Render the container filesystem is **ephemeral**: uploaded media on
 the local disk is lost on every redeploy or restart. For any real use, point media
 at an S3 compatible bucket (Cloudflare R2, Supabase Storage, AWS S3) so the app
-stays stateless:
+stays stateless.
+
+**Recommended:** enter the bucket in Studio under **Settings > Integrations >
+Storage** (Super Admin only). The keys are checked with a test upload, stored
+encrypted with `SECRETS_ENCRYPTION_KEY`, and take effect without a restart. Keeping
+them out of env vars means a leak of the host's environment alone doesn't expose
+the bucket. For R2, use an API token with Object Read & Write on that bucket only.
+
+Env vars still work, and Studio-saved keys take priority over them. If you start
+with env vars, open the Storage tab and save to move them into Studio, then delete
+`S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` from the host:
 
 | Variable | Notes |
 |---|---|
