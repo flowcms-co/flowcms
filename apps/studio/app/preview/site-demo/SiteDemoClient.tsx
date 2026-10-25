@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import Sections, { findSections } from "../Sections";
+import { safeHtml } from "@/lib/safeHtml";
 
 /**
  * Bundled EXAMPLE FRONTEND — a stand-in for a customer's real site, used to
@@ -152,7 +153,7 @@ const SiteDemoClient = () => {
             if (d.type === "revert") {
                 titleEl.textContent = baselineRef.current.title;
                 if (sumEl) sumEl.textContent = baselineRef.current.summary;
-                bodyEl.innerHTML = baselineRef.current.body;
+                bodyEl.innerHTML = safeHtml(baselineRef.current.body);
                 return;
             }
             if (d.type === "edit") {
@@ -238,7 +239,7 @@ const SiteDemoClient = () => {
                     <article
                         ref={articleRef}
                         className="nb-article flow-prose mx-auto max-w-[44rem] px-6 py-16 focus:outline-none"
-                        dangerouslySetInnerHTML={{ __html: body || "<p>Start writing in the editor…</p>" }}
+                        dangerouslySetInnerHTML={{ __html: safeHtml(body) || "<p>Start writing in the editor…</p>" }}
                     />
                     </>
                     )}

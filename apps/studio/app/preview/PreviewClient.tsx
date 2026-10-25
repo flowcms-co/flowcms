@@ -9,6 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
+import { safeHtml } from "@/lib/safeHtml";
 import { fieldLabel, type SchemaField } from "@/mocks/schema";
 import Sections, { findSections, type Section as ViewSection } from "./Sections";
 import SectionEditor, { type ComponentDef, type Section as ZoneSection } from "@/components/editor/SectionEditor";
@@ -636,7 +637,7 @@ const PreviewClient = () => {
         } else {
             if (titleRef.current) titleRef.current.textContent = entry?.title ?? "";
             if (summaryRef.current) summaryRef.current.textContent = summary;
-            if (articleRef.current) articleRef.current.innerHTML = body || "<p>Nothing here yet — start writing in the editor.</p>";
+            if (articleRef.current) articleRef.current.innerHTML = safeHtml(body) || "<p>Nothing here yet — start writing in the editor.</p>";
         }
         setDirty(false);
         setSaveErr(null);
@@ -979,7 +980,7 @@ const PreviewClient = () => {
                                 suppressContentEditableWarning
                                 onInput={() => { setDirty(true); broadcastFromNodes(); }}
                                 className={cn("flow-prose focus:outline-none", editing && "-mx-3 rounded-xl p-3 outline-2 outline-dashed outline-primary/40")}
-                                dangerouslySetInnerHTML={{ __html: body || "<p>Nothing here yet — start writing in the editor.</p>" }}
+                                dangerouslySetInnerHTML={{ __html: safeHtml(body) || "<p>Nothing here yet — start writing in the editor.</p>" }}
                             />
                         </article>
                         )}

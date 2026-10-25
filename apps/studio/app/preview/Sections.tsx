@@ -8,6 +8,7 @@
  */
 
 import Icon from "@/components/ui/Icon";
+import { safeHtml } from "@/lib/safeHtml";
 
 export type Section = Record<string, unknown> & { __component?: string; __uid?: string };
 
@@ -63,7 +64,7 @@ const SectionView = ({ s }: { s: Section }) => {
 
     if (type.includes("rich") || type.includes("text") || type.includes("content")) {
         const body = pick(s, "body", "content", "text");
-        return <div className="flow-prose mx-auto max-w-[44rem] px-6 py-8" dangerouslySetInnerHTML={{ __html: body || "<p>Empty section.</p>" }} />;
+        return <div className="flow-prose mx-auto max-w-[44rem] px-6 py-8" dangerouslySetInnerHTML={{ __html: safeHtml(body) || "<p>Empty section.</p>" }} />;
     }
 
     if (type.includes("testimonial") || type.includes("review")) {
@@ -74,7 +75,7 @@ const SectionView = ({ s }: { s: Section }) => {
             <section className="mx-auto max-w-[44rem] px-6 py-8">
                 <figure className="rounded-3xl border border-grey-light bg-lavender-mist/40 p-8 dark:border-grey-light/10 dark:bg-dark-3/40">
                     <Icon className="mb-3 h-6 w-6 fill-primary/40" name="chat" />
-                    <blockquote className="text-[1.25rem] leading-9 text-black dark:text-white" dangerouslySetInnerHTML={{ __html: quote }} />
+                    <blockquote className="text-[1.25rem] leading-9 text-black dark:text-white" dangerouslySetInnerHTML={{ __html: safeHtml(quote) }} />
                     {(author || role) && (
                         <figcaption className="mt-4 text-caption-1 text-grey">
                             <span className="font-semibold text-black dark:text-white">{author}</span>
@@ -116,7 +117,7 @@ const SectionView = ({ s }: { s: Section }) => {
         const by = pick(s, "attribution", "author");
         return (
             <blockquote className="mx-auto max-w-[44rem] border-l-4 border-primary px-6 py-4 text-[1.25rem] italic text-black dark:text-white">
-                <span dangerouslySetInnerHTML={{ __html: quote }} />
+                <span dangerouslySetInnerHTML={{ __html: safeHtml(quote) }} />
                 {by && <span className="mt-2 block text-caption-1 not-italic text-grey">— {by}</span>}
             </blockquote>
         );
@@ -128,7 +129,7 @@ const SectionView = ({ s }: { s: Section }) => {
         return (
             <section className="mx-auto max-w-[44rem] px-6 py-3">
                 {q && <h3 className="text-title font-semibold text-black dark:text-white">{q}</h3>}
-                {a && <div className="mt-1 text-grey" dangerouslySetInnerHTML={{ __html: a }} />}
+                {a && <div className="mt-1 text-grey" dangerouslySetInnerHTML={{ __html: safeHtml(a) }} />}
             </section>
         );
     }
