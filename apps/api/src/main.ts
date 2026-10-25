@@ -8,6 +8,7 @@ import type { NextFunction, Request, Response } from "express";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
+import { mediaHeaders } from "./assets/assets.service";
 import { AllExceptionsFilter } from "./common/all-exceptions.filter";
 import { requestContext } from "./common/request-context";
 import { PrismaService } from "./prisma/prisma.service";
@@ -93,7 +94,12 @@ async function bootstrap() {
     // MEDIA_DIR at a mounted volume / object-storage gateway in production).
     const mediaDir = process.env.MEDIA_DIR || join(process.cwd(), "storage", "media");
     if (!existsSync(mediaDir)) mkdirSync(mediaDir, { recursive: true });
-    app.useStaticAssets(mediaDir, { prefix: "/media/" });
+    app.useStaticAssets(mediaDir, {
+        prefix: "/media/",
+        setHeaders: (res, path) => {
+            for (const [k, v] of Object.entries(mediaHeaders(path))) res.setHeader(k, v);
+        },
+    });
 
     // All routes live under /api (the "serving window" the studio + sites call).
     app.setGlobalPrefix("api");

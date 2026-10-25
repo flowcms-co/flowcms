@@ -46,7 +46,23 @@ const EXT_OF_MIME: Record<string, string> = {
     "application/msword": "doc",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
 };
+/** Extension for a stored key, from the validated mimetype only. The client's
+ *  filename never picks it: a text/plain upload named x.html must not be served
+ *  back as HTML from /media. */
+export const storedExt = (mimetype: string) => EXT_OF_MIME[mimetype] ?? "bin";
 const MIME_OF_EXT: Record<string, string> = { ...Object.fromEntries(Object.entries(EXT_OF_MIME).map(([m, e]) => [e, m])), jpeg: "image/jpeg", markdown: "text/markdown" };
+
+/** Response headers for a file served from /media (main.ts). Only media that
+ *  browsers render passively stays inline; anything else (text, html from an
+ *  older upload, unknown) downloads, sandboxed, so it can't run in the API origin. */
+export function mediaHeaders(path: string): Record<string, string> {
+    const mime = MIME_OF_EXT[extname(path).slice(1).toLowerCase()] ?? "";
+    const inline = /^(image|video|audio)\//.test(mime) || mime === "application/pdf";
+    return {
+        "X-Content-Type-Options": "nosniff",
+        ...(inline ? {} : { "Content-Disposition": "attachment", "Content-Security-Policy": "sandbox" }),
+    };
+}
 
 /** Fields an asset can be edited by (studio, agent API, bulk). */
 export type AssetEdit = { alt?: string; caption?: string | null; filename?: string; folder?: string | null; tags?: string[] };
@@ -362,8 +378,7 @@ export class AssetsService implements OnModuleInit, OnModuleDestroy {
 
         // Gate the CPU/RAM-heavy decode so concurrent uploads can't OOM the API.
         const opt = await imageGate.run(() => this.optimizeImage(file));
-        const ext = (extname(opt.filename) || `.${opt.mimetype.split("/")[1] ?? "bin"}`).toLowerCase();
-        const stored = `${randomUUID()}${ext}`;
+        const stored = `${randomUUID()}.${storedExt(opt.mimetype)}`;
         await this.storage.put(stored, opt.buffer, opt.mimetype);
         const duplicate = !!(await this.prisma.media.findFirst({
             where: { workspaceId, OR: [{ hash }, { filename: { equals: opt.filename, mode: "insensitive" } }] },
@@ -496,8 +511,7 @@ export class AssetsService implements OnModuleInit, OnModuleDestroy {
         await this.assertAcceptable(workspaceId, file);
         const hash = createHash("sha256").update(file.buffer).digest("hex");
         const opt = await imageGate.run(() => this.optimizeImage(file));
-        const ext = (extname(opt.filename) || `.${opt.mimetype.split("/")[1] ?? "bin"}`).toLowerCase();
-        const stored = `${randomUUID()}${ext}`;
+        const stored = `${randomUUID()}.${storedExt(opt.mimetype)}`;
         await this.storage.put(stored, opt.buffer, opt.mimetype);
         if (opt.mimetype.startsWith("image/")) {
             try {
@@ -521,7 +535,7 @@ export class AssetsService implements OnModuleInit, OnModuleDestroy {
                     height: opt.height,
                     hash,
                     // A renamed extension follows the new file; the name stays the person's.
-                    filename: `${basename(existing.filename, extname(existing.filename))}${extname(opt.filename) || extname(existing.filename)}`,
+                    filename: `${basename(existing.filename, extname(existing.filename))}.${storedExt(opt.mimetype)}`,
                 },
             }),
             this.prisma.$executeRaw`
