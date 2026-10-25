@@ -51,7 +51,7 @@ export function useWorkspaces() {
 export async function switchWorkspace(id: string): Promise<void> {
     await api("/workspaces/switch", { method: "POST", body: JSON.stringify({ workspaceId: id }) });
     cache = null;
-    window.location.assign("/");
+    window.location.assign(new URL("/", window.location.origin));
 }
 
 export function clearWorkspacesCache() {

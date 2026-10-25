@@ -24,7 +24,7 @@ export default function StudioError({ error, reset }: { error: Error & { digest?
                 <button className="btn-primary" onClick={() => reset()}>
                     Try again
                 </button>
-                <button className="btn-secondary" onClick={() => (window.location.href = "/")}>
+                <button className="btn-secondary" onClick={() => window.location.assign(new URL("/", window.location.origin))}>
                     Back to dashboard
                 </button>
             </div>
