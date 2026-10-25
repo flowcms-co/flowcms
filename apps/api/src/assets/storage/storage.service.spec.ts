@@ -10,6 +10,7 @@ vi.mock("./s3.driver", () => ({
         }
         private b() {
             if (this.opts.accessKeyId === "bad") throw Object.assign(new Error("Access Denied"), { name: "AccessDenied" });
+            if (this.opts.accessKeyId === "leaky") throw new Error("<html>internal admin panel body</html>");
             if (!buckets.has(this.opts.accessKeyId)) buckets.set(this.opts.accessKeyId, new Map());
             return buckets.get(this.opts.accessKeyId)!;
         }
@@ -78,6 +79,21 @@ describe("StorageService", () => {
         await expect(svc.save(owner, { bucket: "media", accessKeyId: "bad", secretAccessKey: "x" })).rejects.toThrow(/AccessDenied.*Nothing was saved/);
         await expect(svc.save(admin, { bucket: "media", accessKeyId: "AKIAgood", secretAccessKey: "x" })).rejects.toThrow(/Super Admin/);
         expect(row()).toBeNull();
+    });
+
+    it("refuses an endpoint on a private or internal address, naming ALLOW_PRIVATE_FETCH", async () => {
+        const { svc, row } = setup();
+        for (const endpoint of ["http://127.0.0.1:9000", "http://169.254.169.254", "http://[::1]:9000", "http://localhost:9000"]) {
+            await expect(svc.save(owner, { endpoint, bucket: "media", accessKeyId: "AKIAgood", secretAccessKey: "x" })).rejects.toThrow(/ALLOW_PRIVATE_FETCH/);
+        }
+        expect(row()).toBeNull();
+    });
+
+    it("never echoes the driver's error message", async () => {
+        const { svc } = setup();
+        const err = await svc.save(owner, { bucket: "media", accessKeyId: "leaky", secretAccessKey: "x" }).catch((e: Error) => e);
+        expect((err as Error).message).toMatch(/could not reach the endpoint or access was denied/);
+        expect((err as Error).message).not.toContain("admin panel");
     });
 
     it("keeps the stored keys when re-saved blank, and falls back on remove", async () => {

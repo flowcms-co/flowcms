@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertPublicUrl, isPrivateIp } from "./ssrf";
+import { assertPublicEndpoint, assertPublicUrl, isPrivateIp } from "./ssrf";
 
 describe("isPrivateIp()", () => {
     it("flags IPv4 loopback / private / link-local / cloud-metadata as private", () => {
@@ -65,5 +65,16 @@ describe("assertPublicUrl()", () => {
     it("allows a public literal IP (no DNS needed)", async () => {
         const url = await assertPublicUrl("https://8.8.8.8/path");
         expect(url.hostname).toBe("8.8.8.8");
+    });
+});
+
+describe("assertPublicEndpoint", () => {
+    it("accepts a public IP host or URL", async () => {
+        await expect(assertPublicEndpoint("8.8.8.8", "SMTP host")).resolves.toBeUndefined();
+        await expect(assertPublicEndpoint("https://1.1.1.1", "storage endpoint")).resolves.toBeUndefined();
+    });
+    it("refuses internal hosts with the ALLOW_PRIVATE_FETCH hint", async () => {
+        await expect(assertPublicEndpoint("192.168.1.2", "SMTP host")).rejects.toThrow(/SMTP host.*ALLOW_PRIVATE_FETCH/);
+        await expect(assertPublicEndpoint("http://metadata.google.internal", "storage endpoint")).rejects.toThrow(/ALLOW_PRIVATE_FETCH/);
     });
 });

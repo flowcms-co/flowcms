@@ -143,6 +143,27 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
 }
 
 /**
+ * Validate a server address saved in settings (an S3 endpoint URL, an SMTP host)
+ * that a driver connects to later. Same rules as assertPublicUrl; the refusal
+ * names ALLOW_PRIVATE_FETCH, since a self-hosted MinIO or mail relay on a private
+ * network is a legitimate setup.
+ */
+export async function assertPublicEndpoint(raw: string, what: string): Promise<void> {
+    const h = raw.trim();
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(h) ? h : `http://${isIP(h) === 6 ? `[${h}]` : h}/`;
+    try {
+        await resolveValidated(url);
+    } catch (e) {
+        if (e instanceof ForbiddenException) {
+            throw new ForbiddenException(
+                `The ${what} points at a private or internal address, which is blocked. If it's your own server on a private network (for example MinIO), set ALLOW_PRIVATE_FETCH=true on the API and try again.`,
+            );
+        }
+        throw e;
+    }
+}
+
+/**
  * fetch() hardened against SSRF: validates the URL, PINS the connection to the
  * already-validated IP (no re-resolution → no DNS rebinding), enforces a timeout,
  * and re-validates every redirect hop. `maxRedirects` defaults to 0.

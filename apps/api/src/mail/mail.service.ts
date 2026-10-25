@@ -3,6 +3,7 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { IntegrationType } from "@flowcms/db";
 import { decryptSecret, encryptSecret } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
+import { assertPublicEndpoint } from "../common/ssrf";
 import { DEFAULT_TEMPLATES, testEmailHtml } from "./email-templates";
 
 export type EmailProvider = "smtp" | "resend" | "sendgrid";
@@ -62,6 +63,7 @@ export class MailService {
     async connect(workspaceId: string, input: ConnectInput) {
         const isApi = input.provider === "resend" || input.provider === "sendgrid";
         const provider: EmailProvider = isApi ? input.provider : "smtp";
+        if (input.provider === "smtp") await assertPublicEndpoint(input.host, "SMTP host");
         const existing = await this.integration(workspaceId);
 
         // A blank secret on an update keeps the stored one (same provider); otherwise it's required.

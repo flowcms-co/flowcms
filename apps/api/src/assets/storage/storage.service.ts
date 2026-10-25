@@ -5,6 +5,7 @@ import { decryptSecret, encryptSecret } from "@flowcms/shared";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../../audit/audit.service";
 import type { AuthUser } from "../../auth/types";
+import { assertPublicEndpoint } from "../../common/ssrf";
 import { MEDIA_DIR, createStorage, s3Configured } from "./env";
 import { LocalStorageDriver } from "./local.driver";
 import { S3StorageDriver, type S3Options } from "./s3.driver";
@@ -160,6 +161,7 @@ export class StorageService implements StorageDriver, OnModuleInit, OnModuleDest
             forcePathStyle: input.forcePathStyle !== false,
             accessKeyHint: hint(keys.accessKeyId),
         };
+        if (config.endpoint) await assertPublicEndpoint(config.endpoint, "storage endpoint");
         await this.check(new S3StorageDriver({ ...config, ...keys }));
 
         const data = { type: IntegrationType.STORAGE, provider: "s3", label: bucket, config: config as object, encryptedSecret: encryptSecret(JSON.stringify(keys)), status: "CONNECTED" as const, lastCheckedAt: new Date(), createdById: user.id };
@@ -187,11 +189,14 @@ export class StorageService implements StorageDriver, OnModuleInit, OnModuleDest
             if ((await driver.read(key)).toString() !== "ok") throw new Error("read back the wrong bytes");
             await driver.delete(key);
         } catch (err) {
+            // Only an error code goes back (AccessDenied, NoSuchBucket, ECONNREFUSED...),
+            // never the driver's message: that can echo what the endpoint answered,
+            // which turns this form into a probe of whatever host it points at.
             // Network failures arrive as an AggregateError with no message, only a code.
-            const e = err as { name?: string; message?: string; code?: string; errors?: { code?: string }[] };
-            const detail = e.message || e.code || e.errors?.[0]?.code || "could not reach the endpoint";
-            const name = e.name && !["Error", "AggregateError"].includes(e.name) ? `${e.name}: ` : "";
-            throw new BadRequestException(`Storage check failed: ${name}${detail}. Nothing was saved.`);
+            const e = err as { name?: string; code?: string; errors?: { code?: string }[] };
+            const code = [e.name, e.code, e.errors?.[0]?.code].find((c) => c && !["Error", "AggregateError", "TypeError"].includes(c) && /^[A-Za-z_][\w.]{0,63}$/.test(c));
+            const reason = code ? `access denied or unreachable (${code})` : "could not reach the endpoint or access was denied";
+            throw new BadRequestException(`Storage check failed: ${reason}. Nothing was saved.`);
         }
     }
 }
