@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
+import { decryptSecret, encryptSecret } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { LicenseService } from "../license/license.service";
 
@@ -17,7 +18,7 @@ const adminUrl = () => (process.env.FLOWCMS_ADMIN_URL || "https://admin.flowcms.
 const appVersion = () => (process.env.FLOWCMS_VERSION || "0.1.0").replace(/^v/, "");
 const siteUrl = () => (process.env.STUDIO_URL || "").replace(/\/+$/, ""); // this install's public origin
 
-type HeartbeatResponse = { ok: true; latestVersion?: string; license?: { status: string; token?: string } };
+type HeartbeatResponse = { ok: true; latestVersion?: string; license?: { status: string; token?: string }; installKey?: string };
 
 @Injectable()
 export class TelemetryService implements OnModuleInit, OnModuleDestroy {
@@ -56,6 +57,27 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
             update: {},
         });
         return row.instanceId;
+    }
+
+    /** The vendor-issued install key, or undefined (none yet, or it can't be decrypted). Never throws. */
+    private async installKey(): Promise<string | undefined> {
+        try {
+            const row = await this.prisma.serverInstance.findUnique({ where: { id: "singleton" }, select: { installKeyEnc: true } });
+            return row?.installKeyEnc ? decryptSecret(row.installKeyEnc) : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /** Store a key the console sent. It only sends one when it has none on file for
+     *  this install, so a key in the response replaces whatever was stored. */
+    private async saveInstallKey(key: unknown) {
+        if (typeof key !== "string" || !key.trim() || key.length > 4096) return;
+        try {
+            await this.prisma.serverInstance.update({ where: { id: "singleton" }, data: { installKeyEnc: encryptSecret(key.trim()) } });
+        } catch (e) {
+            this.log.warn(`Could not store the install key: ${(e as Error).message}`);
+        }
     }
 
     private async rawToken(): Promise<string | null> {
@@ -144,6 +166,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
                 edition,
                 version: appVersion(),
                 licenseToken: (await this.rawToken()) ?? undefined,
+                installKey: await this.installKey(),
                 metrics: await this.metrics(),
                 ...(await this.profile()),
             };
@@ -158,6 +181,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
                 return { ok: false };
             }
             const data = (await res.json().catch(() => null)) as HeartbeatResponse | null;
+            if (data?.installKey) await this.saveInstallKey(data.installKey);
 
             // Apply the license verdict (DB-stored installs only; an env-pinned token is managed by hand).
             if (!process.env.FLOWCMS_LICENSE_KEY && data?.license) {
