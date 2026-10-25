@@ -22,14 +22,14 @@ export class UsersController {
 
     @Post()
     async create(@CurrentUser() user: AuthUser, @Body() dto: CreateUserDto, @Req() req: Request) {
-        const created = await this.users.create(user.workspaceId, dto, user.id);
+        const created = await this.users.create(user.workspaceId, dto, user.id, user.role.key);
         this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: "user.create", resource: "User", resourceId: (created as { id?: string })?.id, metadata: { email: dto.email }, ip: req.ip });
         return created;
     }
 
     @Patch(":id")
     async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateUserDto, @Req() req: Request) {
-        const updated = await this.users.update(user.workspaceId, user.id, id, dto);
+        const updated = await this.users.update(user.workspaceId, user.id, id, dto, user.role.key);
         // A role change is its own action, so it can raise an alert.
         const roleChange = dto.roleKey !== undefined;
         this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: roleChange ? "user.role_change" : "user.update", resource: "User", resourceId: id, metadata: { fields: Object.keys(dto), ...(roleChange ? { role: dto.roleKey } : {}) }, ip: req.ip });
@@ -38,7 +38,7 @@ export class UsersController {
 
     @Delete(":id")
     async remove(@CurrentUser() user: AuthUser, @Param("id") id: string, @Req() req: Request) {
-        const res = await this.users.remove(user.workspaceId, user.id, id);
+        const res = await this.users.remove(user.workspaceId, user.id, id, user.role.key);
         this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: "user.delete", resource: "User", resourceId: id, ip: req.ip });
         return res;
     }

@@ -13,6 +13,12 @@ import { LicenseService } from "../license/license.service";
 import { CreateUserDto, UpdateUserDto } from "./dto";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
+const SUPER = "super_admin";
+
+/** Only a Super Admin may grant or take away Super Admin (their own included). */
+function assertCanTouchSuper(actorRoleKey: string) {
+    if (actorRoleKey !== SUPER) throw new ForbiddenException("Only a Super Admin can grant or remove the Super Admin role.");
+}
 
 @Injectable()
 export class UsersService {
@@ -67,7 +73,8 @@ export class UsersService {
         return role;
     }
 
-    async create(workspaceId: string, dto: CreateUserDto, inviterId?: string) {
+    async create(workspaceId: string, dto: CreateUserDto, inviterId: string | undefined, actorRoleKey: string) {
+        if (dto.roleKey === SUPER) assertCanTouchSuper(actorRoleKey);
         const email = dto.email.toLowerCase().trim();
         if (await this.prisma.user.findUnique({ where: { email } })) {
             throw new ConflictException("An account with this email already exists.");
@@ -101,12 +108,15 @@ export class UsersService {
         return { id: user.id, email: user.email };
     }
 
-    async update(workspaceId: string, actingUserId: string, userId: string, dto: UpdateUserDto) {
+    async update(workspaceId: string, actingUserId: string, userId: string, dto: UpdateUserDto, actorRoleKey: string) {
         const membership = await this.prisma.membership.findUnique({
             where: { userId_workspaceId: { userId, workspaceId } },
             include: { role: true },
         });
         if (!membership) throw new NotFoundException("User not found in this workspace.");
+        const roleChanges = !!dto.roleKey && dto.roleKey !== membership.role.key;
+        if (roleChanges && (dto.roleKey === SUPER || membership.role.key === SUPER)) assertCanTouchSuper(actorRoleKey);
+        if (dto.isActive === false && membership.role.key === SUPER) assertCanTouchSuper(actorRoleKey);
 
         // Don't let the last super admin be demoted or deactivated out of existence.
         if (membership.role.key === "super_admin" && (dto.roleKey || dto.isActive === false)) {
@@ -125,6 +135,8 @@ export class UsersService {
         if (Object.keys(data).length) {
             await this.prisma.user.update({ where: { id: userId }, data });
         }
+        // A deactivated account is signed out everywhere, now.
+        if (dto.isActive === false) await this.prisma.session.deleteMany({ where: { userId } });
         const membershipData: Record<string, unknown> = {};
         if (dto.roleKey) membershipData.roleId = (await this.roleByKey(workspaceId, dto.roleKey)).id;
         if (dto.weeklyGoal !== undefined) membershipData.weeklyGoal = dto.weeklyGoal === null || dto.weeklyGoal === 0 ? null : dto.weeklyGoal;
@@ -155,7 +167,7 @@ export class UsersService {
         return { ok: true };
     }
 
-    async remove(workspaceId: string, actingUserId: string, userId: string) {
+    async remove(workspaceId: string, actingUserId: string, userId: string, actorRoleKey: string) {
         if (userId === actingUserId) {
             throw new BadRequestException("You can't remove your own account.");
         }
@@ -164,7 +176,8 @@ export class UsersService {
             include: { role: true },
         });
         if (!membership) throw new NotFoundException("User not found in this workspace.");
-        if (membership.role.key === "super_admin") {
+        if (membership.role.key === SUPER) {
+            assertCanTouchSuper(actorRoleKey);
             const superAdmins = await this.prisma.membership.count({
                 where: { workspaceId, role: { key: "super_admin" } },
             });

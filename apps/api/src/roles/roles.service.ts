@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PERMISSIONS } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateRoleDto, UpdateRoleDto } from "./dto";
@@ -47,6 +47,19 @@ const PERMISSION_CATALOG = [
     },
 ];
 
+const KNOWN_PERMISSIONS = new Set<string>(Object.values(PERMISSIONS));
+
+/** Only real permission keys are stored, and only a Super Admin may grant "*".
+ *  Keys the role already holds pass through unchanged, so editing an older role
+ *  doesn't fail on a key that has since left the catalog. */
+export function checkPermissions(perms: string[], actorRoleKey: string, existing: string[] = []): string[] {
+    const had = new Set(existing);
+    const unknown = perms.filter((p) => p !== "*" && !KNOWN_PERMISSIONS.has(p) && !had.has(p));
+    if (unknown.length) throw new BadRequestException(`Unknown permission: ${unknown.join(", ")}.`);
+    if (perms.includes("*") && !had.has("*") && actorRoleKey !== "super_admin") throw new ForbiddenException("Only a Super Admin can grant full access (*).");
+    return [...new Set(perms)];
+}
+
 @Injectable()
 export class RolesService {
     constructor(private readonly prisma: PrismaService) {}
@@ -93,7 +106,8 @@ export class RolesService {
         return key;
     }
 
-    async create(workspaceId: string, dto: CreateRoleDto) {
+    async create(workspaceId: string, dto: CreateRoleDto, actorRoleKey: string) {
+        const permissions = checkPermissions(dto.permissions, actorRoleKey);
         const key = await this.uniqueKey(workspaceId, dto.name);
         const role = await this.prisma.role.create({
             data: {
@@ -101,7 +115,7 @@ export class RolesService {
                 key,
                 name: dto.name,
                 description: dto.description ?? null,
-                permissions: dto.permissions,
+                permissions,
                 dashboard: dto.dashboard ?? "editor",
                 lockSeoMeta: dto.lockSeoMeta ?? false,
                 allowedTypeIds: dto.allowedTypeIds ?? [],
@@ -111,13 +125,13 @@ export class RolesService {
         return { id: role.id, key: role.key };
     }
 
-    async update(workspaceId: string, roleId: string, dto: UpdateRoleDto) {
+    async update(workspaceId: string, roleId: string, dto: UpdateRoleDto, actorRoleKey: string) {
         const role = await this.prisma.role.findFirst({ where: { id: roleId, workspaceId } });
         if (!role) throw new NotFoundException("Role not found.");
 
         // The Super Admin role always keeps full power.
         const permissions =
-            role.key === "super_admin" ? ["*"] : (dto.permissions ?? (role.permissions as string[]));
+            role.key === "super_admin" ? ["*"] : dto.permissions ? checkPermissions(dto.permissions, actorRoleKey, role.permissions as string[]) : (role.permissions as string[]);
 
         await this.prisma.role.update({
             where: { id: roleId },

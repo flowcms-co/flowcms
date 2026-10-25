@@ -29,7 +29,7 @@ export class RolesController {
     @Post()
     @RequirePermissions(PERMISSIONS.ROLES_MANAGE)
     async create(@CurrentUser() user: AuthUser, @Body() dto: CreateRoleDto, @Req() req: Request) {
-        const created = await this.roles.create(user.workspaceId, dto);
+        const created = await this.roles.create(user.workspaceId, dto, user.role.key);
         this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: "role.create", resource: "Role", resourceId: (created as { id?: string })?.id, metadata: { name: dto.name }, ip: req.ip });
         return created;
     }
@@ -37,7 +37,7 @@ export class RolesController {
     @Patch(":id")
     @RequirePermissions(PERMISSIONS.ROLES_MANAGE)
     async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateRoleDto, @Req() req: Request) {
-        const updated = await this.roles.update(user.workspaceId, id, dto);
+        const updated = await this.roles.update(user.workspaceId, id, dto, user.role.key);
         // Permission changes are high-signal for audit: record which keys changed.
         this.audit.record({ workspaceId: user.workspaceId, userId: user.id, action: "role.update", resource: "Role", resourceId: id, metadata: { fields: Object.keys(dto) }, ip: req.ip });
         return updated;
