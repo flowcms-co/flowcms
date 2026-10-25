@@ -49,7 +49,7 @@ export async function issueRecoveryLink(prisma: PrismaClient, email: string): Pr
 export async function setRecoveryPassword(prisma: PrismaClient, email: string, password: string, via: Via, metadata: Record<string, unknown> = {}) {
     if (password.length < MIN_PASSWORD) throw new Error(`Password must be at least ${MIN_PASSWORD} characters.`);
     const user = await findUser(prisma, email);
-    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } });
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(password) } });
     await prisma.session.deleteMany({ where: { userId: user.id } });
     await audit(prisma, user, via, { method: "password", ...metadata });
     return user.email;

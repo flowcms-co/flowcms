@@ -79,7 +79,7 @@ export class UsersService {
                 email,
                 name: dto.name ?? null,
                 title: dto.title ?? null,
-                passwordHash: hashPassword(dto.password),
+                passwordHash: await hashPassword(dto.password),
                 emailVerifiedAt: new Date(),
                 memberships: { create: { workspaceId, roleId: role.id } },
             },

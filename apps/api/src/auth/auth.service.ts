@@ -10,7 +10,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { authenticator } from "otplib";
 import * as QRCode from "qrcode";
-import { decryptSecret, encryptSecret, generateToken, hashPassword, hashToken, verifyPassword } from "@flowcms/shared";
+import { decryptSecret, dummyPasswordHash, encryptSecret, generateToken, hashPassword, hashToken, passwordNeedsRehash, verifyPassword } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { MailService } from "../mail/mail.service";
 import { AvatarsService } from "../avatars/avatars.service";
@@ -26,6 +26,28 @@ const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 // Accept the previous/current/next TOTP step (±30s) to tolerate clock skew and
 // the few seconds between reading a code and submitting it.
 authenticator.options = { window: 1 };
+
+/** Per-account lockout: this many consecutive failed sign-ins (password or 2FA)
+ *  lock the account for LOCK_MS. Complements the per-IP throttle, which a
+ *  distributed attack spreads across many addresses. */
+export const MAX_FAILED_LOGINS = 10;
+export const LOCK_MS = 15 * 60_000;
+/** The one sign-in failure message: never says whether the email exists or is locked. */
+const BAD_CREDENTIALS = "Invalid email or password.";
+
+/** j***@domain.com: enough for an operator to recognise, not a plain address in the log. */
+export function maskEmail(email: string): string {
+    const at = email.lastIndexOf("@");
+    if (at < 1) return "***";
+    return `${email[0]}***${email.slice(at)}`;
+}
+
+/** The TOTP time step `code` is valid for (within the ±1 window), or null. */
+function totpStep(code: string, secret: string): number | null {
+    const delta = authenticator.checkDelta(code, secret);
+    if (delta === null) return null;
+    return Math.floor(Date.now() / 1000 / 30) + delta;
+}
 
 @Injectable()
 export class AuthService {
@@ -128,13 +150,17 @@ export class AuthService {
     }
 
     /** Change the signed-in user's password, verifying the current one first. */
-    async changePassword(userId: string, current: string, next: string, ip?: string) {
+    async changePassword(userId: string, current: string, next: string, ip?: string, currentToken?: string) {
         if (!next || next.length < 12) throw new BadRequestException("New password must be at least 12 characters.");
         const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
-        if (!user?.passwordHash || !verifyPassword(current, user.passwordHash)) {
+        if (!user?.passwordHash || !(await verifyPassword(current, user.passwordHash))) {
             throw new BadRequestException("Your current password is incorrect.");
         }
-        await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hashPassword(next) } });
+        await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(next) } });
+        // Sign out every other session (a stolen one included); keep the one making the change.
+        await this.prisma.session.deleteMany({
+            where: { userId, ...(currentToken ? { NOT: { tokenHash: hashToken(currentToken) } } : {}) },
+        });
         await this.auditAuth(userId, "auth.password_changed", ip);
         return { ok: true };
     }
@@ -161,7 +187,7 @@ export class AuthService {
      *  they're the last owner of a workspace, so nothing is orphaned. */
     async deleteAccount(userId: string, password: string) {
         const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
-        if (!user?.passwordHash || !verifyPassword(password, user.passwordHash)) {
+        if (!user?.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
             throw new BadRequestException("Password is incorrect.");
         }
         const owned = await this.prisma.membership.findMany({ where: { userId, role: { key: "super_admin" } }, select: { workspaceId: true } });
@@ -200,9 +226,17 @@ export class AuthService {
     ): Promise<{ token: string; user: AuthUser } | { twoFactorRequired: true }> {
         const email = dto.email.toLowerCase().trim();
         const user = await this.prisma.user.findUnique({ where: { email } });
-        if (!user || !user.passwordHash || !verifyPassword(dto.password, user.passwordHash)) {
-            if (user) await this.auditAuth(user.id, "auth.signin_failed", meta?.ip, { reason: "bad_password" });
-            throw new UnauthorizedException("Invalid email or password.");
+        const locked = !!user?.lockedUntil && user.lockedUntil > new Date();
+        if (!user || !user.passwordHash || locked) {
+            // Same scrypt cost as a real check, so timing doesn't reveal which emails exist.
+            await verifyPassword(dto.password, await dummyPasswordHash());
+            if (locked) await this.auditAuth(user!.id, "auth.signin_failed", meta?.ip, { reason: "locked" });
+            throw new UnauthorizedException(BAD_CREDENTIALS);
+        }
+        if (!(await verifyPassword(dto.password, user.passwordHash))) {
+            await this.recordFailedLogin(user.id);
+            await this.auditAuth(user.id, "auth.signin_failed", meta?.ip, { reason: "bad_password" });
+            throw new UnauthorizedException(BAD_CREDENTIALS);
         }
         if (!user.isActive) {
             await this.auditAuth(user.id, "auth.signin_failed", meta?.ip, { reason: "disabled" });
@@ -218,13 +252,35 @@ export class AuthService {
         if (user.twoFactorEnabled) {
             if (!dto.code) return { twoFactorRequired: true };
             if (!(await this.verifyTwoFactor(user, dto.code))) {
+                await this.recordFailedLogin(user.id);
                 await this.auditAuth(user.id, "auth.signin_failed", meta?.ip, { reason: "bad_2fa" });
                 throw new UnauthorizedException("Invalid verification code.");
             }
         }
+        // Good sign-in: clear the failure count, and upgrade an old-params hash now
+        // that we hold the plaintext.
+        const rehash = passwordNeedsRehash(user.passwordHash);
+        if (user.failedLoginCount || user.lockedUntil || rehash) {
+            await this.prisma.user.update({
+                where: { id: user.id },
+                data: { failedLoginCount: 0, lockedUntil: null, ...(rehash ? { passwordHash: await hashPassword(dto.password) } : {}) },
+            });
+        }
         const token = await this.createSession(user.id, meta);
         await this.auditAuth(user.id, "auth.signin", meta?.ip, user.twoFactorEnabled ? { mfa: true } : undefined);
         return { token, user: await this.buildAuthUser(user.id) };
+    }
+
+    /** Count a failed sign-in; the MAX_FAILED_LOGINS-th in a row locks the account for LOCK_MS. */
+    private async recordFailedLogin(userId: string) {
+        const { failedLoginCount } = await this.prisma.user.update({
+            where: { id: userId },
+            data: { failedLoginCount: { increment: 1 } },
+            select: { failedLoginCount: true },
+        });
+        if (failedLoginCount >= MAX_FAILED_LOGINS) {
+            await this.prisma.user.update({ where: { id: userId }, data: { failedLoginCount: 0, lockedUntil: new Date(Date.now() + LOCK_MS) } });
+        }
     }
 
     /** Build the public AuthUser shape for a user id. Thin public wrapper around
@@ -307,9 +363,10 @@ export class AuthService {
             // The response stays "ok" either way (no account enumeration), so the
             // server log is the only place an operator can see the email never left.
             if (!r.sent) {
+                // Masked: logs get shipped and shared; the operator knows their own address.
                 this.logger.warn(
-                    `Password reset email NOT sent to ${e} (${r.reason ?? r.error ?? "unknown"}). ` +
-                        `Recover from a shell on the server: node apps/api/dist/recover.js reset-password --email ${e} (see docs/RECOVERY.md).`,
+                    `Password reset email NOT sent to ${maskEmail(e)} (${r.reason ?? r.error ?? "unknown"}). ` +
+                        `Recover from a shell on the server: node apps/api/dist/recover.js reset-password --email <the address> (see docs/RECOVERY.md).`,
                 );
             }
         }
@@ -332,7 +389,8 @@ export class AuthService {
         if ((payload.fp ?? "") !== resetFingerprint(target?.passwordHash)) {
             throw new BadRequestException("This reset link has already been used or expired. Request a new one.");
         }
-        await this.prisma.user.update({ where: { id: payload.uid }, data: { passwordHash: hashPassword(newPassword) } });
+        // A reset proves control of the inbox, so it also lifts any lockout.
+        await this.prisma.user.update({ where: { id: payload.uid }, data: { passwordHash: await hashPassword(newPassword), failedLoginCount: 0, lockedUntil: null } });
         await this.prisma.session.deleteMany({ where: { userId: payload.uid } });
         await this.auditAuth(payload.uid, "auth.password_reset");
         return { ok: true };
@@ -357,11 +415,12 @@ export class AuthService {
         if (!user?.twoFactorSecret) throw new BadRequestException("Start 2FA setup first.");
         if (user.twoFactorEnabled) throw new BadRequestException("Two-factor is already enabled.");
         const secret = decryptSecret(user.twoFactorSecret);
-        if (!authenticator.verify({ token: code.replace(/\D/g, ""), secret })) {
+        const step = totpStep(code.replace(/\D/g, ""), secret);
+        if (step === null) {
             throw new BadRequestException("That code didn't match. Check your authenticator app and try again.");
         }
         const { plain, hashed } = this.makeBackupCodes();
-        await this.prisma.user.update({ where: { id: userId }, data: { twoFactorEnabled: true, twoFactorBackupCodes: hashed } });
+        await this.prisma.user.update({ where: { id: userId }, data: { twoFactorEnabled: true, twoFactorBackupCodes: hashed, totpLastStep: step } });
         await this.auditAuth(userId, "auth.2fa_enabled", ip);
         return { enabled: true, backupCodes: plain };
     }
@@ -401,10 +460,20 @@ export class AuthService {
     ): Promise<boolean> {
         const cleaned = code.replace(/[^a-zA-Z0-9]/g, "");
         if (user.twoFactorSecret) {
+            let step: number | null = null;
             try {
-                if (authenticator.verify({ token: cleaned.replace(/\D/g, ""), secret: decryptSecret(user.twoFactorSecret) })) return true;
+                step = totpStep(cleaned.replace(/\D/g, ""), decryptSecret(user.twoFactorSecret));
             } catch {
                 /* fall through to backup codes */
+            }
+            if (step !== null) {
+                // Replay guard: claim this step atomically; a code from the same or an
+                // earlier step (already used, or older than the last one) is refused.
+                const { count } = await this.prisma.user.updateMany({
+                    where: { id: user.id, OR: [{ totpLastStep: null }, { totpLastStep: { lt: step } }] },
+                    data: { totpLastStep: step },
+                });
+                return count === 1;
             }
         }
         // Backup code: consume atomically so two concurrent logins can't both
@@ -453,6 +522,7 @@ export class AuthService {
             }));
         if (!membership) throw new UnauthorizedException("No workspace membership.");
         const { user, role } = membership;
+        if (!user.isActive) throw new UnauthorizedException("This account is disabled.");
         return {
             id: user.id,
             email: user.email,

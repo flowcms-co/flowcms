@@ -86,7 +86,7 @@ export async function bootstrap(prisma: PrismaClient) {
 
     const existing = await prisma.user.findUnique({ where: { email } });
     const admin = existing ?? (await prisma.user.create({
-        data: { email, name: "Administrator", passwordHash: hashPassword(password), emailVerifiedAt: new Date() },
+        data: { email, name: "Administrator", passwordHash: await hashPassword(password), emailVerifiedAt: new Date() },
     }));
 
     await prisma.membership.upsert({

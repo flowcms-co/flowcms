@@ -39,6 +39,7 @@ export class SetupService {
      *  to mint a second super admin after the first. */
     async claim(dto: ClaimDto, meta?: { userAgent?: string; ip?: string }) {
         const email = dto.email.toLowerCase().trim();
+        const passwordHash = await hashPassword(dto.password); // outside the txn: scrypt takes a moment
 
         const userId = await this.prisma
             .$transaction(
@@ -61,7 +62,7 @@ export class SetupService {
                         data: {
                             email,
                             name: dto.name?.trim() || "Administrator",
-                            passwordHash: hashPassword(dto.password),
+                            passwordHash,
                             emailVerifiedAt: new Date(),
                             // Consent is validated as required on the DTO.
                             termsAcceptedAt: new Date(),

@@ -296,7 +296,7 @@ async function main() {
         const user = await prisma.user.upsert({
             where: { email: m.email },
             update: { name: m.name, title: m.title, avatarUrl: m.avatar },
-            create: { email: m.email, name: m.name, title: m.title, avatarUrl: m.avatar, passwordHash: hashPassword(m.pw), emailVerifiedAt: new Date() },
+            create: { email: m.email, name: m.name, title: m.title, avatarUrl: m.avatar, passwordHash: await hashPassword(m.pw), emailVerifiedAt: new Date() },
         });
         userByEmail[m.email] = user.id;
         await prisma.membership.upsert({

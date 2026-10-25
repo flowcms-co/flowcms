@@ -6,7 +6,7 @@ import { applyEnvRecovery, issueRecoveryLink, setRecoveryPassword } from "./reco
 
 /** Just enough Prisma for the recovery path and AuthService.resetPassword. */
 function fakeDb() {
-    const user = { id: "u1", email: "admin@x.com", isActive: true, passwordHash: hashPassword("old-password-123"), memberships: [{ workspaceId: "w1" }] };
+    const user = { id: "u1", email: "admin@x.com", isActive: true, passwordHash: "scrypt$aa$bb", memberships: [{ workspaceId: "w1" }] };
     const audits: { action: string; actorName?: string; metadata: Record<string, unknown> }[] = [];
     let sessions = 2;
     const db = {
@@ -32,7 +32,7 @@ describe("admin recovery", () => {
         // A drift from signResetToken's format makes this reset fail.
         const auth = new AuthService(prisma as never, {} as never, {} as never, { record: () => {} } as never);
         await expect(auth.resetPassword(token, "brand-new-password-1")).resolves.toEqual({ ok: true });
-        expect(verifyPassword("brand-new-password-1", user.passwordHash)).toBe(true);
+        expect(await verifyPassword("brand-new-password-1", user.passwordHash)).toBe(true);
         expect(sessions()).toBe(0);
         expect(audits[0]).toMatchObject({ action: "auth.password_reset_cli", actorName: "Server recovery (CLI)" });
         await expect(auth.resetPassword(token, "another-password-12")).rejects.toThrow(/already been used/);
@@ -43,7 +43,7 @@ describe("admin recovery", () => {
         await expect(setRecoveryPassword(prisma, "admin@x.com", "short", "cli")).rejects.toThrow(/12 characters/);
         await expect(setRecoveryPassword(prisma, "nobody@x.com", "long-enough-pass", "cli")).rejects.toThrow(/No user/);
         await setRecoveryPassword(prisma, "admin@x.com", "long-enough-pass", "cli");
-        expect(verifyPassword("long-enough-pass", user.passwordHash)).toBe(true);
+        expect(await verifyPassword("long-enough-pass", user.passwordHash)).toBe(true);
     });
 
     it("applies the env fallback once per password", async () => {
@@ -53,10 +53,10 @@ describe("admin recovery", () => {
         process.env.FLOWCMS_RECOVERY_PASSWORD = "env-password-1234";
         try {
             await applyEnvRecovery(prisma, log);
-            expect(verifyPassword("env-password-1234", user.passwordHash)).toBe(true);
-            user.passwordHash = hashPassword("changed-after-login"); // the admin changes it in Studio
+            expect(await verifyPassword("env-password-1234", user.passwordHash)).toBe(true);
+            user.passwordHash = await hashPassword("changed-after-login"); // the admin changes it in Studio
             await applyEnvRecovery(prisma, log); // a restart with the vars still set
-            expect(verifyPassword("changed-after-login", user.passwordHash)).toBe(true);
+            expect(await verifyPassword("changed-after-login", user.passwordHash)).toBe(true);
             expect(audits).toHaveLength(1);
         } finally {
             delete process.env.FLOWCMS_RECOVERY_EMAIL;

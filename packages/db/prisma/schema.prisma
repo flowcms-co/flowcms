@@ -118,6 +118,12 @@ model User {
   twoFactorEnabled Boolean   @default(false)
   twoFactorBackupCodes Json   @default("[]") // hashed one-time recovery codes
   isActive         Boolean   @default(true)
+  // Per-account sign-in lockout: consecutive password/2FA failures, and the time
+  // the account unlocks after too many. Reset on a successful sign-in.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  // Last accepted TOTP time step; a code at or before it is a replay.
+  totpLastStep     Int?
   // Email digest of unread notifications: "off" | "daily" | "weekly".
   digestFrequency  String    @default("off")
   notificationPrefs Json     @default("{}") // per-event email toggles (e.g. {"review":true,"published":false})
@@ -732,6 +738,9 @@ model License {
 model ServerInstance {
   id         String   @id @default("singleton")
   instanceId String   @unique
+  // Install key the vendor console issues once (heartbeat response), encrypted
+  // with encryptSecret. Sent back on every later heartbeat.
+  installKeyEnc String?
   createdAt  DateTime @default(now())
 }
 

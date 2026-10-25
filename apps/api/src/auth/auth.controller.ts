@@ -39,7 +39,7 @@ export class AuthController {
     @Patch("password")
     @Throttle({ default: { limit: 10, ttl: 60_000 } })
     changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto, @Req() req: Request) {
-        return this.auth.changePassword(user.id, dto.currentPassword, dto.newPassword, req.ip);
+        return this.auth.changePassword(user.id, dto.currentPassword, dto.newPassword, req.ip, this.token(req));
     }
 
     /** Read / update the signed-in user's email-notification preferences. */
@@ -156,6 +156,13 @@ export class AuthController {
         const token = cookieToken ?? bearer;
         const user = token ? await this.auth.validate(token, req.ip) : null;
         return { user };
+    }
+
+    /** The caller's own session/bearer token, as AuthGuard read it. */
+    private token(req: Request): string | undefined {
+        const cookie = (req as Request & { cookies?: Record<string, string> }).cookies?.[SESSION_COOKIE];
+        const auth = req.headers.authorization;
+        return cookie || (auth?.startsWith("Bearer ") ? auth.slice(7) : undefined);
     }
 
     private meta(req: Request) {
