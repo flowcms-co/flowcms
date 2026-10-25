@@ -121,7 +121,7 @@ ENV NODE_ENV=production \
     FLOWCMS_VERSION=${FLOWCMS_VERSION} \
     FLOWCMS_DEPLOYMENT=aio
 # Caddy binary (single static Go binary) for the in-container reverse proxy.
-COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
+COPY --from=caddy:2.11.7-alpine /usr/bin/caddy /usr/bin/caddy
 # API runtime (full node_modules: Prisma CLI + tsx for the boot migrate/seed).
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json

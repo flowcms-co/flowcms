@@ -3,7 +3,7 @@
 # (pg_dump/psql). The DB backup/restore connect to Postgres directly over the
 # network rather than via `docker exec`, so they work even when the updater has no
 # direct Docker socket (the scoped socket-proxy can't forward exec/attach streams).
-FROM docker:27-cli
+FROM docker:27.5.1-cli
 
 RUN apk add --no-cache nodejs tar gzip postgresql16-client
 
