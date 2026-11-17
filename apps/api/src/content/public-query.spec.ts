@@ -29,6 +29,13 @@ describe("delivery fills empty alt text from the asset library", () => {
     });
 });
 
+describe("delivery slug", () => {
+    it("keeps the entry slug when the content data carries a stale slug key", async () => {
+        const { data } = await service([], { slug: "copied-from-another-entry", title: "T" }).oneForType(ct, "home", {});
+        expect(data.slug).toBe("home");
+    });
+});
+
 describe("delivery of references: projection and populate", () => {
     const guide = (id: string) => ({ id, slug: `guide-${id}`, locale: "en", status: "PUBLISHED", data: { title: `Guide ${id}`, thumbnailImage: `/media/${id}.webp`, body: "<p>" + "long ".repeat(2000) + "</p>" }, publishedAt: null, createdAt: new Date(0), updatedAt: new Date(0), contentType: { apiId: "resource", schema: { fields: [] } } });
     const guides = [guide("g1"), guide("g2")];

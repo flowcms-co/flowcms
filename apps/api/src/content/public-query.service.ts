@@ -149,14 +149,16 @@ export class PublicQueryService {
         if (alt && schema) data = { ...data, ...altBackfillPatch(fieldsOf(schema), data, alt.components, alt.altFor) };
         const projected =
             fields && fields.length ? Object.fromEntries(fields.filter((f) => f in data).map((f) => [f, data[f]])) : data;
+        // Entry columns go last: a stray data.slug (e.g. carried over by Duplicate)
+        // must never override the entry's real slug, or links point at another page.
         const base: Record<string, unknown> = {
+            ...projected,
             id: e.id,
             slug: e.slug,
             locale: e.locale,
             publishedAt: e.publishedAt,
             createdAt: e.createdAt,
             updatedAt: e.updatedAt,
-            ...projected,
         };
         // AEO: attach schema.org JSON-LD derived from component/section structured
         // data (merged with any manually-set data.jsonLd). Skipped when projecting a
