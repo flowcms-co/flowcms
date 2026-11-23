@@ -25,6 +25,14 @@
       "types": "./dist/time.d.ts",
       "default": "./dist/time.js"
     },
+    "./content-rules": {
+      "types": "./dist/content-rules.d.ts",
+      "default": "./dist/content-rules.js"
+    },
+    "./tidy": {
+      "types": "./dist/tidy.d.ts",
+      "default": "./dist/tidy.js"
+    },
     "./html": {
       "types": "./dist/html.d.ts",
       "default": "./dist/html.js"

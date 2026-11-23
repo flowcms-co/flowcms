@@ -1,0 +1,586 @@
+{
+  "version": 1,
+  "guide": {
+    "label": "Guide",
+    "url": "https://example.com/guide"
+  },
+  "tidy": true,
+  "fields": {
+    "title": {
+      "notEmpty": {
+        "value": true,
+        "message": "This box is empty. The page cannot be shown without it. Fill it in."
+      },
+      "plainText": true,
+      "cityTokens": true,
+      "endsWith": {
+        "value": [
+          "{City:Near You}"
+        ],
+        "level": "warn",
+        "message": "This box does not follow the service page pattern. Expected: it ends with {City:Near You}. For example “Pest Control {City:Near You}”."
+      }
+    },
+    "metaTitle": {
+      "endsWith": {
+        "value": [
+          "{City:Near You}"
+        ],
+        "level": "warn",
+        "message": "This box does not follow the service page pattern. Expected: it ends with {City:Near You}."
+      },
+      "maxChars": {
+        "value": 47,
+        "level": "warn",
+        "message": "The meta title is {n} characters. Keep it to 47 or fewer and do not type “Acme Home”: the site adds it."
+      },
+      "notContains": {
+        "value": [
+          "Acme Home"
+        ],
+        "level": "warn",
+        "message": "The meta title contains “Acme Home”. Take it out: the site adds it."
+      },
+      "cityTokens": true
+    },
+    "metaDescription": {
+      "minChars": {
+        "value": 140,
+        "level": "warn",
+        "message": "The meta description is {n} characters. Aim for 140 to 160, with no placeholders."
+      },
+      "maxChars": {
+        "value": 160,
+        "level": "warn",
+        "message": "The meta description is {n} characters. Aim for 140 to 160, with no placeholders."
+      },
+      "notContains": {
+        "value": [
+          "{"
+        ],
+        "level": "warn",
+        "message": "The meta description has a placeholder in it. Write it without curly brackets."
+      }
+    },
+    "focusKeyword": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "The focus keyword is empty."
+      }
+    },
+    "trackdriveCategory": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "No category is chosen. The page may show no phone number and hide its call buttons. Pick the category for this service."
+      }
+    },
+    "heroSection": {
+      "notEmpty": true
+    },
+    "heroSection.headline": {
+      "notEmpty": {
+        "value": true,
+        "message": "This box is empty. The page cannot be shown without it. Fill it in."
+      },
+      "plainText": true,
+      "cityTokens": true,
+      "endsWith": {
+        "value": [
+          "{City:Near You}"
+        ],
+        "level": "warn",
+        "message": "This box does not follow the service page pattern. Expected: it ends with {City:Near You}."
+      }
+    },
+    "heroSection.subheadline": {
+      "plainText": true,
+      "cityTokens": "allowCount",
+      "pattern": {
+        "value": "^Serving \\{CityCount\\} cities\\.$",
+        "level": "warn",
+        "message": "This box does not follow the service page pattern. Expected: Serving {CityCount} cities."
+      }
+    },
+    "heroSection.ctaLabel": {
+      "minWords": {
+        "value": 3,
+        "level": "warn",
+        "message": "The hero call line is {n} words. Use 3 to 6, for example “Call Now For Free Inspection”."
+      },
+      "maxWords": {
+        "value": 6,
+        "level": "warn",
+        "message": "The hero call line is {n} words. Use 3 to 6, for example “Call Now For Free Inspection”."
+      }
+    },
+    "heroSection.backgroundImage": {
+      "notEmpty": {
+        "value": true,
+        "message": "This image is missing. Add it."
+      },
+      "startsWith": {
+        "value": [
+          "https://media.example.com/",
+          "https://cms.example.com/"
+        ],
+        "message": "This hero image is not from the Acme Home media library and will not load. Upload it to the media library and pick it from there."
+      }
+    },
+    "heroSection.backgroundImageAlt": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no description (alt text). Describe the picture in one short sentence."
+      },
+      "noBraces": {
+        "value": true
+      }
+    },
+    "servicePageContent": {
+      "notEmpty": true
+    },
+    "servicePageContent.heading": {
+      "notEmpty": {
+        "value": true,
+        "message": "This box is empty. The page cannot be shown without it. Fill it in."
+      },
+      "plainText": true,
+      "cityTokens": true,
+      "containsAny": {
+        "value": [
+          "{City"
+        ],
+        "level": "warn",
+        "message": "This box does not follow the service page pattern. Expected: it has a city placeholder such as {City:Near You}."
+      }
+    },
+    "servicePageContent.introText": {
+      "listMustBeLast": true,
+      "maxLists": 1,
+      "noOrderedLists": true,
+      "noNestedLists": true,
+      "noLinks": {
+        "value": "listItem"
+      },
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn"
+      },
+      "minWords": {
+        "value": 35,
+        "level": "warn",
+        "message": "The intro should be one paragraph of 35 to 75 words. It is {n} words. Lists and extra paragraphs belong in the sections below."
+      },
+      "maxWords": {
+        "value": 75,
+        "level": "warn",
+        "message": "The intro should be one paragraph of 35 to 75 words. It is {n} words. Lists and extra paragraphs belong in the sections below."
+      }
+    },
+    "servicePageContent.desktopImage.Image": {
+      "notEmpty": {
+        "value": true,
+        "message": "This image is missing. Add it. Without a desktop image the mobile image is hidden too."
+      }
+    },
+    "servicePageContent.desktopImage.Alt text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no description (alt text). Describe the picture in one short sentence."
+      },
+      "noBraces": true
+    },
+    "servicePageContent.mobileImage.Alt text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no description (alt text). Describe the picture in one short sentence."
+      },
+      "noBraces": true
+    },
+    "faqSection.images[].Image": {
+      "notEmpty": {
+        "value": true,
+        "message": "This image is missing. Add it."
+      },
+      "startsWith": {
+        "value": [
+          "https://media.example.com/",
+          "https://cms.example.com/"
+        ],
+        "message": "This FAQ image is not from the Acme Home media library and will not load. Upload it to the media library and pick it from there."
+      }
+    },
+    "faqSection.images[].Alt text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no description (alt text). Describe the picture in one short sentence."
+      },
+      "cityTokens": true
+    },
+    "servicePageContent.keyBenefits": {
+      "noEmptyItems": {
+        "value": [
+          "heading",
+          "content"
+        ],
+        "message": "This benefit is empty, so the page shows a tick with nothing beside it. Fill it in, or delete it with the bin icon."
+      },
+      "soft": {
+        "exactItems": {
+          "value": 3,
+          "message": "This block has {n} benefits. Use exactly 3."
+        }
+      }
+    },
+    "servicePageContent.keyBenefits[].content": {
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn",
+        "message": "This benefit should be one short paragraph of 10 to 45 words."
+      },
+      "minWords": {
+        "value": 10,
+        "level": "warn",
+        "message": "This benefit should be one short paragraph of 10 to 45 words."
+      },
+      "maxWords": {
+        "value": 45,
+        "level": "warn",
+        "message": "This benefit should be one short paragraph of 10 to 45 words."
+      }
+    },
+    "servicePageContent.keyBenefits[].heading": {
+      "plainText": true,
+      "cityTokens": true
+    },
+    "servicePageContent.howItWorksSteps": {
+      "exactItems": {
+        "value": 3,
+        "message": "This block needs exactly 3 steps and has {n}. The page has three fixed icons (phone, calendar, worker) and shows only the first 3 steps. Add or remove steps so there are 3."
+      },
+      "itemRules": [
+        {
+          "index": "all",
+          "rules": {
+            "heading": {
+              "notEmpty": {
+                "value": true,
+                "message": "This step has no heading. Fill it in."
+              }
+            },
+            "content": {
+              "notEmpty": {
+                "value": true,
+                "message": "This step has no text. Fill it in."
+              }
+            }
+          }
+        },
+        {
+          "index": 1,
+          "rules": {
+            "heading": {
+              "startsWith": {
+                "value": [
+                  "Call Us 24/7"
+                ],
+                "level": "warn",
+                "message": "Step 1 is “Call Us 24/7” on every service page. Use the same heading."
+              }
+            }
+          }
+        }
+      ]
+    },
+    "servicePageContent.howItWorksSteps[].heading": {
+      "plainText": true,
+      "cityTokens": true
+    },
+    "servicePageContent.howItWorksSteps[].content": {
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn",
+        "message": "This step should be one short paragraph of 10 to 30 words."
+      },
+      "minWords": {
+        "value": 10,
+        "level": "warn",
+        "message": "This step should be one short paragraph of 10 to 30 words."
+      },
+      "maxWords": {
+        "value": 30,
+        "level": "warn",
+        "message": "This step should be one short paragraph of 10 to 30 words."
+      }
+    },
+    "servicePageContent.sections": {
+      "noEmptyItems": [
+        "heading",
+        "content"
+      ],
+      "uniqueItems": {
+        "value": [
+          "heading"
+        ],
+        "message": "Two sections have the same heading (“{text}”). The contents links on the page would both jump to the first one. Change one of them."
+      },
+      "lastItemIs": {
+        "value": [
+          "heading",
+          "How can we help?",
+          "ifPresent"
+        ],
+        "level": "warn",
+        "message": "“How can we help?” should be the last section and one paragraph."
+      },
+      "soft": {
+        "minItems": {
+          "value": 4,
+          "message": "This page has {n} sections. Use 4 or 5."
+        },
+        "maxItems": {
+          "value": 5,
+          "message": "This page has {n} sections. Use 4 or 5."
+        }
+      }
+    },
+    "servicePageContent.sections[].heading": {
+      "notEmpty": {
+        "value": true,
+        "message": "This section has no heading. Fill it in, or delete the section."
+      },
+      "plainText": true,
+      "cityTokens": true
+    },
+    "servicePageContent.sections[].content": {
+      "notEmpty": {
+        "value": true,
+        "message": "This section has no text. Fill it in, or delete the section."
+      },
+      "listMustBeLast": {
+        "value": true,
+        "message": "There is text after the bullet list. The page always shows the list last, so that text would jump above it. Move it above the list."
+      },
+      "maxLists": {
+        "value": 1,
+        "message": "This box has {n} bullet lists. The page joins them into one. Keep one list, or put the second in its own section."
+      },
+      "noOrderedLists": {
+        "value": true,
+        "message": "This box has a numbered list. Use one plain bullet list."
+      },
+      "noNestedLists": {
+        "value": true,
+        "message": "This box has a list inside a list. Use one plain bullet list."
+      },
+      "noLinks": {
+        "value": "listItem",
+        "message": "A bullet point has a link in it (“{text}”). Links inside bullet points are removed on the page. Move the link into the paragraph above the list."
+      },
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn",
+        "message": "This section should be one paragraph, then at most one bullet list."
+      },
+      "linksRelative": {
+        "value": true,
+        "level": "warn"
+      }
+    },
+    "servicePageContent.sections[].ctaLabel": {
+      "plainText": true,
+      "pattern": {
+        "value": "^[a-z].*\\.$",
+        "level": "warn",
+        "message": "This text prints straight after “Call” and the phone number, so it must finish that sentence. Start with a small letter and end with a full stop, for example “to get connected with a local pro today.”"
+      }
+    },
+    "servicePageContent.bottomCtaText": {
+      "plainText": true,
+      "cityTokens": true,
+      "pattern": {
+        "value": "^Connect with a local .+ pro \\{City:near you\\} today\\.$",
+        "level": "warn",
+        "message": "This box does not follow the service page pattern. Expected: Connect with a local ... pro {City:near you} today."
+      }
+    },
+    "servicesOffered": {
+      "notEmpty": true
+    },
+    "servicesOffered.heading": {
+      "notEmpty": {
+        "value": true,
+        "message": "This block has no heading. Fill it in."
+      },
+      "plainText": true,
+      "cityTokens": true
+    },
+    "servicesOffered.text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "The intro line is empty."
+      }
+    },
+    "servicesOffered.serviceList": {
+      "minItems": {
+        "value": 1,
+        "message": "This block has no cards. Add at least one."
+      },
+      "itemRules": [
+        {
+          "index": "all",
+          "rules": {
+            "name": {
+              "notEmpty": {
+                "value": true,
+                "message": "This card has no name. Fill it in."
+              }
+            },
+            "icon": {
+              "notEmpty": {
+                "value": true,
+                "message": "This card has no icon name. Pick one from the icon list, for example WaterIcon or FireIcon, spelled exactly."
+              }
+            }
+          }
+        }
+      ],
+      "soft": {
+        "minItems": {
+          "value": 3,
+          "message": "Add at least 3 cards."
+        }
+      }
+    },
+    "servicesOffered.serviceList[].name": {
+      "plainText": true,
+      "cityTokens": true
+    },
+    "servicesOffered.serviceList[].description": {
+      "plainText": true,
+      "cityTokens": true,
+      "minWords": {
+        "value": 6,
+        "level": "warn",
+        "message": "Card description should be 6 to 14 words."
+      },
+      "maxWords": {
+        "value": 14,
+        "level": "warn",
+        "message": "Card description should be 6 to 14 words."
+      }
+    },
+    "servicesOffered.serviceList[].link": {
+      "linksRelative": {
+        "value": true,
+        "level": "warn"
+      }
+    },
+    "faqSection.faqs": {
+      "minItems": {
+        "value": 1,
+        "message": "This page has no FAQs. Add at least one."
+      },
+      "onlyKeys": [
+        "question",
+        "answer"
+      ],
+      "itemRules": [
+        {
+          "index": "all",
+          "rules": {
+            "question": {
+              "notEmpty": {
+                "value": true,
+                "message": "This FAQ has no question. Fill it in, or delete the row."
+              }
+            },
+            "answer": {
+              "notEmpty": {
+                "value": true,
+                "message": "This FAQ has no answer. Fill it in, or delete the row."
+              }
+            }
+          }
+        }
+      ],
+      "soft": {
+        "minItems": {
+          "value": 8,
+          "message": "This page has {n} FAQs. Use 8 to 10."
+        },
+        "maxItems": {
+          "value": 10,
+          "message": "This page has {n} FAQs. Use 8 to 10."
+        }
+      }
+    },
+    "faqSection.faqs[].question": {
+      "plainText": true,
+      "cityTokens": true,
+      "endsWith": {
+        "value": [
+          "?"
+        ],
+        "level": "warn",
+        "message": "End the question with a question mark."
+      }
+    },
+    "faqSection.faqs[].answer": {
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn",
+        "message": "Keep the answer to one paragraph of 20 to 80 words."
+      },
+      "minWords": {
+        "value": 20,
+        "level": "warn",
+        "message": "Keep the answer to one paragraph of 20 to 80 words."
+      },
+      "maxWords": {
+        "value": 80,
+        "level": "warn",
+        "message": "Keep the answer to one paragraph of 20 to 80 words."
+      },
+      "linksRelative": {
+        "value": true,
+        "level": "warn"
+      }
+    },
+    "faqSection.images": {
+      "exactItems": {
+        "value": 4,
+        "level": "warn",
+        "message": "Add 4 FAQ photos, each with a description."
+      }
+    },
+    "guides": {
+      "maxItems": {
+        "value": 6,
+        "level": "warn",
+        "message": "{n} guides are picked and only the first 6 show. Pick 3 or 6 so the rows are full, or none to let the site choose."
+      }
+    },
+    "seo.shareImage": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "The share image is missing."
+      }
+    },
+    "seo.shareImageAlt": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no description (alt text). Describe the picture in one short sentence."
+      },
+      "cityTokens": true
+    }
+  }
+}
