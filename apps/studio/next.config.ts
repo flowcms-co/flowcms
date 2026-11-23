@@ -15,6 +15,8 @@ const BUILD_ID =
   `build-${Date.now()}`;
 
 const nextConfig: NextConfig = {
+  // Next writes an AGENTS.md on every dev start; this repo keeps its own at the root
+  agentRules: false,
   env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
   // Lean, self-contained server bundle for the production Docker image
   // (`.next/standalone/apps/studio/server.js`) — no node_modules needed at runtime.
