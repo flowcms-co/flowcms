@@ -9,11 +9,15 @@ import Select from "@/components/ui/Select";
 import Pagination from "@/components/ui/Pagination";
 import { checkGrammar, readabilityScore, findDuplicatePassages, type CorpusPage, type TextIssue, type OriginalityNote } from "@/lib/textTools";
 import { fetchEntryBodies } from "@/lib/entries";
+import { api, ApiError } from "@/lib/api";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
+import { blocking, checkContentRules, type ContentRules, type RuleComponents, type RuleField } from "@flowcms/shared/content-rules";
+import { usePlan } from "@/components/providers/LicenseProvider";
 import { cn } from "@/lib/cn";
 
 type Entry = { id: string; title: string; slug?: string | null; status: string; updatedAt?: string; data: Record<string, unknown> | null; contentType?: { name: string } };
-type IssueKind = "all" | "grammar" | "duplicates" | "readability";
-type Kind = "grammar" | "duplicates" | "readability";
+type IssueKind = "all" | "formatting" | "grammar" | "duplicates" | "readability";
+type Kind = "formatting" | "grammar" | "duplicates" | "readability";
 type PageResult = {
     id: string;
     title: string;
@@ -102,6 +106,7 @@ function dupSummary(notes: OriginalityNote[]): { pages: number; similarity: numb
 
 const FILTERS: { id: IssueKind; label: string }[] = [
     { id: "all", label: "All issues" },
+    { id: "formatting", label: "Formatting" },
     { id: "grammar", label: "Grammar & spelling" },
     { id: "duplicates", label: "Duplicate passages" },
     { id: "readability", label: "Readability" },
@@ -115,6 +120,7 @@ const SORTS = [
 
 /* Per-kind visual identity (brand palette). */
 const KIND: Record<Kind, { label: string; color: string; pill: boolean }> = {
+    formatting: { label: "Formatting", color: "#D9480F", pill: false },
     grammar: { label: "Grammar", color: "#E0473E", pill: false },
     readability: { label: "Readability", color: "#C77E00", pill: false },
     duplicates: { label: "Duplicate content", color: "#6C5CE7", pill: true },
@@ -146,7 +152,7 @@ const KindIcon = ({ kind }: { kind: Kind }) => {
             {kind === "readability" ? (
                 <span className="font-poppins text-[1.05rem] font-bold leading-none" style={{ color }}>Aa</span>
             ) : (
-                <Stroke d={kind === "grammar" ? PATHS.pen : PATHS.copy} color={color} className="h-5 w-5" />
+                <Stroke d={kind === "grammar" ? PATHS.pen : kind === "formatting" ? PATHS.wand : PATHS.copy} color={color} className="h-5 w-5" />
             )}
         </span>
     );
@@ -158,6 +164,8 @@ const KindIcon = ({ kind }: { kind: Kind }) => {
  * direct path to fix it in the editor. The ?issue= query pre-selects a category.
  */
 const ContentQuality = () => {
+    const { has } = usePlan();
+    const rulesLicensed = has("content_rules"); // Enterprise: the Formatting list and Tidy are off without it
     const params = useSearchParams();
     const requested = params.get("issue") as IssueKind | null;
     const [filter, setFilter] = useState<IssueKind>(requested && FILTERS.some((f) => f.id === requested) ? requested : "all");
@@ -166,6 +174,11 @@ const ContentQuality = () => {
     const [scanning, setScanning] = useState(true);
     const [results, setResults] = useState<PageResult[]>([]);
     const [progress, setProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+    // Formatting rules are set per content type and checked on drafts as well as live pages:
+    // the point is to find articles that could not be published as they are.
+    const [formatting, setFormatting] = useState<{ id: string; title: string; slug: string; updatedAt: number; hard: number; soft: number }[]>([]);
+    const [tidyNotes, setTidyNotes] = useState<Record<string, string>>({});
+    const [tidying, setTidying] = useState<string | null>(null);
     const [covered, setCovered] = useState<{ scanned: number; total: number }>({ scanned: 0, total: 0 });
 
     useEffect(() => {
@@ -204,9 +217,70 @@ const ContentQuality = () => {
         };
     }, []);
 
+    useEffect(() => {
+        if (!rulesLicensed) return;
+        let off = false;
+        (async () => {
+            const [types, comps] = await Promise.all([
+                api<{ id: string; fields: RuleField[]; contentRules?: ContentRules | null }[]>("/content-types").catch(() => []),
+                api<{ apiId: string; fields: RuleField[] }[]>("/content-types/components").catch(() => []),
+            ]);
+            const components: RuleComponents = Object.fromEntries(comps.map((c) => [c.apiId, c.fields]));
+            const rows: typeof formatting = [];
+            for (const ty of types.filter((x) => x.contentRules)) {
+                const { items } = await fetchEntryBodies<Entry>({ typeId: ty.id }, 2000).catch(() => ({ items: [] as Entry[] }));
+                for (const e of items) {
+                    const found = checkContentRules(ty.contentRules, ty.fields, components, (e.data ?? {}) as Record<string, unknown>);
+                    if (!found.length) continue;
+                    const hard = blocking(found).length;
+                    rows.push({ id: e.id, title: e.title || "Untitled", slug: e.slug ?? "", updatedAt: e.updatedAt ? +new Date(e.updatedAt) : 0, hard, soft: found.length - hard });
+                }
+            }
+            if (!off) setFormatting(rows);
+        })();
+        return () => {
+            off = true;
+        };
+    }, [rulesLicensed]);
+
+    /** Tidy one page: the save-time clean-up as a normal edit. A live page gets a draft; nothing is published. */
+    const tidyOne = async (id: string) => {
+        setTidying(id);
+        try {
+            const r = await api<{ changed: boolean; note: string | null }>(`/entries/${id}/tidy`, { method: "POST" });
+            setTidyNotes((n) => ({ ...n, [id]: r.changed && r.note ? `${r.note}. Saved as a draft, nothing was published.` : "Nothing to tidy automatically. The rest needs a person." }));
+        } catch (e) {
+            void notice({ title: "Could not tidy this page", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
+        } finally {
+            setTidying(null);
+        }
+    };
+
+    /** Tidy every flagged page at once, after asking. Runs as a background job. */
+    const tidyAll = async () => {
+        const ids = formatting.map((f) => f.id);
+        if (!ids.length) return;
+        const ok = await confirm({
+            title: `Tidy ${ids.length} page${ids.length === 1 ? "" : "s"}?`,
+            message: "Extra spaces, empty paragraphs, trailing colons and pasted styles are cleaned. Words are never changed. Each page is saved as a normal edit, and a live page gets a draft. Nothing is published.",
+            confirmLabel: "Tidy all",
+        });
+        if (!ok) return;
+        try {
+            await api("/entries/bulk/tidy", { method: "POST", body: JSON.stringify({ ids }) });
+            void notice({ title: "Tidying started", message: `${ids.length} page${ids.length === 1 ? "" : "s"} are being tidied in the background. Nothing is published. Check Jobs for the result, then reload this list.` });
+        } catch (e) {
+            void notice({ title: "Could not start", message: e instanceof ApiError ? e.message : "Please try again.", tone: "danger" });
+        }
+    };
+
     // Flatten pages into one row per (page × issue kind).
     const allItems = useMemo<Item[]>(() => {
         const items: Item[] = [];
+        for (const f of formatting) {
+            const detail = [f.hard ? `${f.hard} to fix before publishing` : "", f.soft ? `${f.soft} worth a look` : ""].filter(Boolean).join(", ");
+            items.push({ key: `${f.id}-f`, id: f.id, title: f.title, slug: f.slug, updatedAt: f.updatedAt, kind: "formatting", issues: f.hard + f.soft, detail, href: `/content/editor?id=${f.id}` });
+        }
         for (const r of results) {
             const fix = (snippet?: string) => `/content/editor?id=${r.id}${snippet ? `&highlight=${encodeURIComponent(snippet)}` : ""}`;
             if (r.grammar.length) {
@@ -222,7 +296,7 @@ const ContentQuality = () => {
             }
         }
         return items;
-    }, [results]);
+    }, [results, formatting]);
 
     const countFor = (k: IssueKind) => (k === "all" ? allItems.length : allItems.filter((i) => i.kind === k).length);
 
@@ -259,9 +333,17 @@ const ContentQuality = () => {
                     Scanned the {covered.scanned.toLocaleString()} most recently updated of your {covered.total.toLocaleString()} published pages.
                 </p>
             )}
+            {formatting.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-primary/[0.06] px-4 py-3 dark:bg-primary/10">
+                    <p className="text-caption-1 text-grey">
+                        <span className="font-semibold text-black dark:text-white">{formatting.length} page{formatting.length === 1 ? "" : "s"} with formatting problems.</span> Tidy fixes spaces, empty paragraphs, trailing colons and pasted styles without changing a word. It saves a draft and never publishes.
+                    </p>
+                    <button type="button" onClick={() => void tidyAll()} className="btn-primary btn-sm shrink-0">Tidy all flagged</button>
+                </div>
+            )}
             {/* Filter pills (kept from before) */}
             <div className="flex flex-wrap gap-2">
-                {FILTERS.map((f) => {
+                {FILTERS.filter((f) => f.id !== "formatting" || rulesLicensed).map((f) => {
                     const n = countFor(f.id);
                     const active = filter === f.id;
                     return (
@@ -303,7 +385,7 @@ const ContentQuality = () => {
                     <Card className="!p-0">
                         <div className="divide-y divide-grey-light dark:divide-grey-light/10">
                             {paged.map((item) => (
-                                <Row key={item.key} item={item} />
+                                <Row key={item.key} item={item} note={tidyNotes[item.id]} busy={tidying === item.id} onTidy={item.kind === "formatting" ? () => void tidyOne(item.id) : undefined} />
                             ))}
                         </div>
                     </Card>
@@ -331,7 +413,7 @@ const ContentQuality = () => {
     );
 };
 
-const Row = ({ item }: { item: Item }) => {
+const Row = ({ item, note, busy, onTidy }: { item: Item; note?: string; busy?: boolean; onTidy?: () => void }) => {
     const k = KIND[item.kind];
     return (
         <div className="group flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4 transition-colors hover:bg-lavender-mist/40 dark:hover:bg-dark-3/30">
@@ -355,7 +437,15 @@ const Row = ({ item }: { item: Item }) => {
             </div>
 
             {/* detail */}
-            <div className="w-44 shrink-0 text-caption-1 text-grey">{item.detail}</div>
+            <div className="w-44 shrink-0 text-caption-1 text-grey">
+                {item.detail}
+                {note && <p role="status" className="mt-1 text-caption-2 text-success">{note}</p>}
+            </div>
+            {onTidy && (
+                <button type="button" onClick={onTidy} disabled={busy} className="btn-ghost btn-sm shrink-0 disabled:opacity-60">
+                    {busy ? "Tidying…" : "Tidy"}
+                </button>
+            )}
 
             {/* actions */}
             <Link href={item.href} className="btn-secondary btn-sm shrink-0">

@@ -9,7 +9,7 @@
  * "title" field by the editor's title input; those three are skipped here.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import Icon from "@/components/ui/Icon";
@@ -23,6 +23,10 @@ import { fieldLabel, fieldDescription, type SchemaField } from "@/mocks/schema";
 import { slugify, stripTags as stripHtml } from "@flowcms/shared/strings";
 import { enterChoice, filterOptions, offerCreate, quickCreateData, refPlaceholder, selectionLabel, showSlugLine } from "@flowcms/shared/editor";
 import { moveItem } from "@flowcms/shared/html";
+import { tidyText, totalCount, type TidyCounts } from "@flowcms/shared/tidy";
+import type { ContentRules } from "@flowcms/shared/content-rules";
+import { cn } from "@/lib/cn";
+import { ContentRulesContext, REVEAL_EVENT, allowAt, rulesAt, stripsColon, tidyOn, useContentRules } from "@/lib/contentRules";
 
 type Json = Record<string, unknown>;
 
@@ -85,6 +89,9 @@ const CollapsibleCard = ({
     onToggle,
     onRemove,
     removeLabel,
+    path,
+    error,
+    warning,
     children,
 }: {
     title: string;
@@ -95,11 +102,16 @@ const CollapsibleCard = ({
     onToggle: () => void;
     onRemove?: () => void;
     removeLabel?: string;
+    /** The card's data path, so a jump from the publish panel can find it. */
+    path?: string;
+    /** A problem with the whole card (for example an empty section), shown under its title. */
+    error?: string;
+    warning?: string;
     children: ReactNode;
 }) => {
     const reduce = useReducedMotion();
     return (
-        <div className={`overflow-hidden rounded-2xl border border-grey-light dark:border-grey-light/10 ${cardTint(depth)}`}>
+        <div data-field-path={path} className={`overflow-hidden rounded-2xl border ${error ? "border-error/60" : "border-grey-light dark:border-grey-light/10"} ${cardTint(depth)}`}>
             <div className="flex items-center gap-1 pr-2">
                 <button
                     type="button"
@@ -130,6 +142,8 @@ const CollapsibleCard = ({
                     </button>
                 )}
             </div>
+            {error && <p role="alert" className="px-3 pb-2.5 text-caption-2 text-error">{error}</p>}
+            {!error && warning && <p className="px-3 pb-2.5 text-caption-2 text-warning">{warning}</p>}
             <AnimatePresence initial={false}>
                 {open && (
                     <motion.div
@@ -520,6 +534,66 @@ const ReferenceField = ({
     );
 };
 
+/** "See: <label>" after a rule message, opening the workspace guide in a new tab. */
+const GuideSee = ({ guide }: { guide: { label?: string; url: string } }) => (
+    <>
+        {" See: "}
+        <a href={guide.url} target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2">
+            {guide.label?.trim() || "Guide"}
+        </a>
+    </>
+);
+
+/** A rich text field under the type's content rules: its toolbar and paste follow the field's `allow` list, and it tidies as it goes. */
+const RuledRichText = ({ value, onChange, path }: { value: string; onChange: (v: string) => void; path: string }) => {
+    const { rules, onTidy } = useContentRules();
+    return <RichTextField value={value} onChange={onChange} minH="8rem" allow={allowAt(rules, path)} tidy={tidyOn(rules)} onTidy={onTidy} />;
+};
+
+/** A one-line text field. With content rules on, doubled and leading spaces and odd space characters are
+ *  removed as they are typed, and the rest (trailing spaces, a trailing colon on a heading) when the field is left. */
+const TextInput = ({ value, onChange, placeholder, path, tidy }: { value: string; onChange: (v: string) => void; placeholder?: string; path: string; tidy: boolean }) => {
+    const { rules, onTidy } = useContentRules();
+    const on = tidy && tidyOn(rules);
+    const touched = useRef(false);
+    const el = useRef<HTMLInputElement>(null);
+    const caret = useRef<number | null>(null);
+    const report = (c: TidyCounts) => totalCount(c) && onTidy?.(c);
+    // The caret is put back in the same commit that shows the tidied text, so fast typing cannot outrun it.
+    useLayoutEffect(() => {
+        if (caret.current !== null && el.current) el.current.setSelectionRange(caret.current, caret.current);
+        caret.current = null;
+    });
+    return (
+        <input
+            ref={el}
+            className={INPUT}
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => {
+                touched.current = true;
+                const typed = e.target.value;
+                if (!on) return onChange(typed);
+                const r = tidyText(typed, { live: true });
+                if (r.value !== typed) {
+                    // The caret lands after the same text it was after, minus what was removed before it.
+                    caret.current = tidyText(typed.slice(0, e.target.selectionStart ?? typed.length), { live: true }).value.length;
+                    report(r.counts);
+                }
+                onChange(r.value);
+            }}
+            onBlur={() => {
+                if (!on || !touched.current) return;
+                const r = tidyText(value, { stripColon: stripsColon(rules, path) });
+                if (r.value !== value) {
+                    report(r.counts);
+                    onChange(r.value);
+                }
+            }}
+        />
+    );
+};
+
 export const FieldControl = ({
     field,
     value,
@@ -561,13 +635,7 @@ export const FieldControl = ({
                 />
             );
         case "Rich text":
-            return (
-                <RichTextField
-                    value={typeof value === "string" ? value : ""}
-                    onChange={onChange}
-                    minH="8rem"
-                />
-            );
+            return <RuledRichText value={typeof value === "string" ? value : ""} onChange={onChange} path={errorPath} />;
         case "Media":
             return <MediaField value={value} alt={fieldLabel(field)} onChange={onChange} />;
         case "Component":
@@ -579,14 +647,7 @@ export const FieldControl = ({
             return <ReferenceField field={field} value={value} onChange={onChange} />;
         default:
             // Text / URL / Slug (when nested)
-            return (
-                <input
-                    className={INPUT}
-                    value={typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)}
-                    onChange={(e) => onChange(e.target.value)}
-                    placeholder={field.type === "URL" ? "/path or https://…" : undefined}
-                />
-            );
+            return <TextInput value={typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)} onChange={onChange} placeholder={field.type === "URL" ? "/path or https://…" : undefined} path={errorPath} tidy={field.type === "Text"} />;
     }
 };
 
@@ -614,6 +675,7 @@ const FieldGroup = ({
 }) => {
     const set = (name: string, v: unknown) => onChange({ ...data, [name]: v });
     const autoAlt = useRef<Record<string, string>>({});
+    const { rules, warnings = {} } = useContentRules();
     return (
         <div className="flex min-w-0 flex-col gap-4">
             {fields.map((f) => {
@@ -623,8 +685,10 @@ const FieldGroup = ({
                 const Wrap = f.type === "Media" || f.type === "Rich text" || f.type === "Component" || f.type === "Reference" ? "div" : "label";
                 const path = errorPrefix ? `${errorPrefix}.${f.name}` : f.name;
                 const error = errors[path];
+                const warning = warnings[path];
+                const guide = rulesAt(rules, path) && rules?.guide?.url ? rules.guide : null;
                 return (
-                    <Wrap key={f.id} className="flex min-w-0 flex-col gap-1.5">
+                    <Wrap key={f.id} data-field-path={path} className={cn("flex min-w-0 flex-col gap-1.5 rounded-lg", error && "flow-field-error")}>
                         <span className="flex items-center gap-1.5 text-caption-1 text-grey">
                             {fieldLabel(f)}
                             {f.required && <span className="text-error">*</span>}
@@ -634,7 +698,17 @@ const FieldGroup = ({
                                 </span>
                             )}
                         </span>
-                        <span className="-mt-0.5 text-caption-2 text-grey/80">{fieldDescription(f)}</span>
+                        <span className="-mt-0.5 text-caption-2 text-grey/80">
+                            {fieldDescription(f)}
+                            {guide && (
+                                <>
+                                    {" "}
+                                    <a href={guide.url} target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline-offset-2 hover:underline dark:text-lilac">
+                                        {guide.label?.trim() || "Guide"}
+                                    </a>
+                                </>
+                            )}
+                        </span>
                         <FieldControl
                             field={f}
                             value={data[f.name]}
@@ -644,7 +718,8 @@ const FieldGroup = ({
                             errorPath={path}
                             depth={depth}
                         />
-                        {error && <span className="text-caption-2 text-error">{error}</span>}
+                        {error && <span role="alert" className="text-caption-2 text-error">{error}{guide && <GuideSee guide={guide} />}</span>}
+                        {!error && warning && <span className="text-caption-2 text-warning">{warning}{guide && <GuideSee guide={guide} />}</span>}
                     </Wrap>
                 );
             })}
@@ -696,6 +771,25 @@ const RepeatableComponent = ({
             return next;
         });
 
+    // A jump from the publish panel to a field inside a folded item opens that item first.
+    useEffect(() => {
+        const open = (e: Event) => {
+            const p = String((e as CustomEvent).detail ?? "");
+            const m = p.startsWith(`${errorPath}[`) ? /^\[(\d+)\]/.exec(p.slice(errorPath.length)) : null;
+            if (!m) return;
+            const i = Number(m[1]);
+            setCollapsed((prev) => {
+                if (!prev.has(i)) return prev;
+                const next = new Set(prev);
+                next.delete(i);
+                return next;
+            });
+        };
+        window.addEventListener(REVEAL_EVENT, open);
+        return () => window.removeEventListener(REVEAL_EVENT, open);
+    }, [errorPath]);
+    const { warnings = {} } = useContentRules();
+
     const allCollapsed = items.length > 0 && collapsed.size === items.length;
     const toggleAll = () =>
         setCollapsed(allCollapsed ? new Set() : new Set(items.map((_, i) => i)));
@@ -725,6 +819,9 @@ const RepeatableComponent = ({
                     onToggle={() => toggle(i)}
                     onRemove={() => remove(i)}
                     removeLabel={`Remove ${field.name} ${i + 1}`}
+                    path={`${errorPath}[${i}]`}
+                    error={errors[`${errorPath}[${i}]`]}
+                    warning={warnings[`${errorPath}[${i}]`]}
                 >
                     <FieldGroup
                         fields={sub}
@@ -814,6 +911,14 @@ const SingleComponent = ({
     depth: number;
 }) => {
     const [open, setOpen] = useState(true);
+    useEffect(() => {
+        const reveal = (e: Event) => {
+            const p = String((e as CustomEvent).detail ?? "");
+            if (p === errorPath || p.startsWith(`${errorPath}.`) || p.startsWith(`${errorPath}[`)) setOpen(true);
+        };
+        window.addEventListener(REVEAL_EVENT, reveal);
+        return () => window.removeEventListener(REVEAL_EVENT, reveal);
+    }, [errorPath]);
     return (
         <CollapsibleCard
             title={fieldLabel(field)}
@@ -836,11 +941,20 @@ const FieldsForm = ({
     data,
     onChange,
     errors = {},
+    warnings,
+    rules = null,
+    onTidy,
     components = {},
 }: {
     fields: SchemaField[];
     data: Json;
     onChange: (next: Json) => void;
+    /** The type's formatting rules: they trim the toolbar, filter paste and switch on tidying per field. */
+    rules?: ContentRules | null;
+    /** Soft problems (path -> message), shown in amber. They never block anything. */
+    warnings?: Record<string, string>;
+    /** Told what a field just tidied (extra spaces, empty paragraphs), for the small note. */
+    onTidy?: (c: TidyCounts) => void;
     /** Optional field-keyed validation errors (path -> message) from the API. Each
      *  message renders in red under its field. Defaults to none. */
     errors?: FieldErrors;
@@ -854,9 +968,11 @@ const FieldsForm = ({
     const shown = fields.filter((f) => f.type !== "Slug" && key(f) !== "title" && !(f.type === "Rich text" && key(f) === "body"));
     if (!shown.length) return null;
     return (
-        <ComponentDefsContext.Provider value={components}>
-            <FieldGroup fields={shown} data={data} onChange={onChange} errors={errors} />
-        </ComponentDefsContext.Provider>
+        <ContentRulesContext.Provider value={{ rules, onTidy, warnings }}>
+            <ComponentDefsContext.Provider value={components}>
+                <FieldGroup fields={shown} data={data} onChange={onChange} errors={errors} />
+            </ComponentDefsContext.Provider>
+        </ContentRulesContext.Provider>
     );
 };
 

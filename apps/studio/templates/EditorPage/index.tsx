@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import Icon from "@/components/ui/Icon";
 import StatusPill, { type PillStatus } from "@/components/ui/StatusPill";
@@ -12,9 +13,11 @@ import EditorCanvas from "@/components/editor/EditorCanvas";
 import RightPanel from "@/components/editor/RightPanel";
 import FieldsForm, { RefTypesContext, type RefType } from "@/components/editor/FieldsForm";
 import ScheduleModal from "@/components/editor/ScheduleModal";
+import FixPanel from "@/components/editor/FixPanel";
 import SectionEditor, { EditorStatsBar, type ComponentDef, type Section } from "@/components/editor/SectionEditor";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/components/providers/AuthProvider";
+import { usePlan } from "@/components/providers/LicenseProvider";
 import { useRevealBatch } from "@/lib/useReveal";
 import { cn } from "@/lib/cn";
 import type { SchemaField } from "@/mocks/schema";
@@ -26,6 +29,9 @@ import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type Previe
 import { slugify } from "@flowcms/shared/strings";
 import { isEmptyBody, showsBodyEditor } from "@flowcms/shared/editor";
 import { CONTENT_LIST_URL_KEY } from "@/lib/contentListUrl";
+import { blocking, checkContentRules, inlineMessages, publishBlockedMessage, type ContentRules, type RuleComponents, type RuleField, type RuleIssue } from "@flowcms/shared/content-rules";
+import { addCounts, emptyCounts, tidyNote, type TidyCounts } from "@flowcms/shared/tidy";
+import { revealField } from "@/lib/contentRules";
 
 /** Approval summary for an entry (GET /entries/:id/reviews). `enforced` is true only
  *  when the workspace is licensed for approval workflows. */
@@ -45,7 +51,7 @@ type ApiEntry = {
 };
 
 /** Content type as returned by /content-types (includes the field schema). */
-type ApiType = RefType & { slugPattern?: string | null; freeFormBody?: boolean };
+type ApiType = RefType & { slugPattern?: string | null; freeFormBody?: boolean; contentRules?: ContentRules | null };
 /** Reusable component as returned by /content-types/components. */
 type ApiComponent = { id: string; name: string; apiId: string; icon: string; fields: SchemaField[] };
 
@@ -160,6 +166,7 @@ const EditorPage = () => {
     const [review, setReview] = useState<ReviewInfo | null>(null);
     const [scheduleOpen, setScheduleOpen] = useState(false);
     const { can } = useAuth();
+    const { has } = usePlan();
 
     // Two-way live link to the preview tab. `localEdits` ticks only on edits made
     // *here*, so we broadcast those to the preview; edits arriving FROM the preview
@@ -286,7 +293,7 @@ const EditorPage = () => {
 
     // Fields of the active type, and whether it has a rich-text body (so we know
     // to mount the TipTap canvas vs. a fields-only form).
-    const fields: SchemaField[] = types.find((t) => t.id === typeId)?.fields ?? [];
+    const fields: SchemaField[] = useMemo(() => types.find((t) => t.id === typeId)?.fields ?? [], [types, typeId]);
     // A type with a slug pattern builds the slug from the content on every save
     // ("{service.slug}-{city.slug}"), so the slug is shown, not typed.
     const slugPattern = (types.find((t) => t.id === typeId)?.slugPattern ?? "").trim();
@@ -314,6 +321,68 @@ const EditorPage = () => {
         for (const c of components) map[c.apiId] = c.fields;
         return map;
     }, [components]);
+    // ── Formatting rules (set per content type) ────────────────────────────────
+    // The same engine the API runs on publish, so what is listed here is what would be
+    // refused there. Saving is never blocked; publish, schedule and approve are.
+    // Enterprise `content_rules`: without the license the stored rules do nothing here, as on the server.
+    const rules = has("content_rules") ? (types.find((t) => t.id === typeId)?.contentRules ?? null) : null;
+    const deferredData = useDeferredValue(entryData);
+    const issues = useMemo(
+        () => (rules ? checkContentRules(rules, fields as RuleField[], componentFields as RuleComponents, deferredData) : []),
+        [rules, fields, componentFields, deferredData],
+    );
+    const [serverIssues, setServerIssues] = useState<RuleIssue[]>([]);
+    const listed = issues.length ? issues : serverIssues;
+    const hardIssues = blocking(issues);
+    const [fixOpen, setFixOpen] = useState(false);
+    const [tidyMsg, setTidyMsg] = useState<string | null>(null);
+    const tidyAcc = useRef<TidyCounts>(emptyCounts());
+    const tidyTimers = useRef<{ gather?: number; hide?: number }>({});
+    /** A field just tidied something: gather a moment's worth into one small, non-blocking note. */
+    const onTidy = useCallback((c: TidyCounts) => {
+        tidyAcc.current = addCounts(tidyAcc.current, c);
+        window.clearTimeout(tidyTimers.current.gather);
+        tidyTimers.current.gather = window.setTimeout(() => {
+            const note = tidyNote(tidyAcc.current);
+            tidyAcc.current = emptyCounts();
+            if (!note) return;
+            setTidyMsg(note);
+            window.clearTimeout(tidyTimers.current.hide);
+            tidyTimers.current.hide = window.setTimeout(() => setTidyMsg(null), 6000);
+        }, 500);
+    }, []);
+    /** Scroll to a field, open the card it sits in, and flash it. */
+    const jumpTo = useCallback((path: string) => {
+        revealField(path);
+        window.setTimeout(() => {
+            const el = Array.from(document.querySelectorAll<HTMLElement>("[data-field-path]")).find((n) => n.dataset.fieldPath === path);
+            // The title and the slug live in the header, not in the field list.
+            if (!el && path === "title") return void document.querySelector<HTMLElement>('input[aria-label="Title"]')?.focus();
+            if (!el) return;
+            el.scrollIntoView({ block: "center", behavior: "smooth" });
+            el.classList.add("flow-flash");
+            window.setTimeout(() => el.classList.remove("flow-flash"), 1900);
+            el.querySelector<HTMLElement>("input, [contenteditable='true']")?.focus({ preventScroll: true });
+        }, 180);
+    }, []);
+    /** Stops publish, schedule and approve while a hard rule fails: opens the list instead. */
+    const blocked = (): boolean => {
+        if (!hardIssues.length) return false;
+        setFixOpen(true);
+        setError(publishBlockedMessage(hardIssues.length));
+        return true;
+    };
+    /** An API error into the top bar; a refusal for formatting also fills and opens the list. */
+    const fail = (e: unknown, fallback: string) => {
+        if (!(e instanceof ApiError)) return setError(fallback);
+        const d = e.data as { issues?: RuleIssue[] } | null;
+        if (Array.isArray(d?.issues) && d.issues.length) {
+            setServerIssues(d.issues);
+            setFixOpen(true);
+        }
+        setError(e.message);
+    };
+
     // Live word count across the body + all section text (drives the footer stats).
     const wordCount = useMemo(() => {
         const strip = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -343,6 +412,13 @@ const EditorPage = () => {
             const saved = await api<ApiEntry>(`/entries/${entryId}`, { method: "PATCH", body: JSON.stringify(payload) });
             setHasDraft(!!saved.hasDraft);
             setDraftApproved(!!saved.draftApproved);
+            setServerIssues([]);
+            const serverTidy = (saved as { tidied?: string }).tidied;
+            if (serverTidy) {
+                setTidyMsg(serverTidy);
+                window.clearTimeout(tidyTimers.current.hide);
+                tidyTimers.current.hide = window.setTimeout(() => setTidyMsg(null), 6000);
+            }
             // A patterned type may have rebuilt the slug from the saved content.
             if (slugPattern && (saved.slug ?? "") !== slug) setSlug(saved.slug ?? "");
             return entryId;
@@ -432,7 +508,7 @@ const EditorPage = () => {
             setSaveState("saved");
             await loadReview();
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Couldn't submit for approval.");
+            fail(e, "Couldn't submit for approval.");
             setSaveState("dirty");
         }
     };
@@ -440,6 +516,7 @@ const EditorPage = () => {
     /** Reviewer records a decision; enough approvals flips the entry to APPROVED. */
     const decide = async (decision: "approve" | "request_changes") => {
         if (!entryId) return;
+        if (decision === "approve" && blocked()) return;
         setSaveState("saving");
         setError(null);
         try {
@@ -448,7 +525,7 @@ const EditorPage = () => {
             if (r.status) setStatus(r.status);
             setSaveState("saved");
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Couldn't record your decision.");
+            fail(e, "Couldn't record your decision.");
             setSaveState("dirty");
         }
     };
@@ -458,6 +535,7 @@ const EditorPage = () => {
      *  when the time arrives). Requires publish rights + a complete, approved entry. */
     const doSchedule = async (iso: string) => {
         setScheduleOpen(false);
+        if (blocked()) return;
         setSaveState("saving");
         setError(null);
         try {
@@ -471,14 +549,14 @@ const EditorPage = () => {
             setSaveState("saved");
             await loadReview();
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Couldn't schedule this content.");
+            fail(e, "Couldn't schedule this content.");
             setSaveState("dirty");
         }
     };
 
     /** Publish an already-approved entry (no re-save, which would clear approval). */
     const publishNow = async () => {
-        if (!entryId) return;
+        if (!entryId || blocked()) return;
         setSaveState("saving");
         setError(null);
         try {
@@ -487,7 +565,7 @@ const EditorPage = () => {
             setSaveState("saved");
             await loadReview();
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Publish failed.");
+            fail(e, "Publish failed.");
             setSaveState("dirty");
         }
     };
@@ -521,12 +599,13 @@ const EditorPage = () => {
             const id = await persist();
             setSaveState(id ? "saved" : "dirty");
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Save failed.");
+            fail(e, "Save failed.");
             setSaveState("dirty");
         }
     };
 
     const publish = async () => {
+        if (blocked()) return;
         setSaveState("saving");
         setError(null);
         try {
@@ -537,7 +616,7 @@ const EditorPage = () => {
             }
             setSaveState("saved");
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Publish failed.");
+            fail(e, "Publish failed.");
             setSaveState("dirty");
         }
     };
@@ -557,6 +636,7 @@ const EditorPage = () => {
     /** Step 1 of promoting edits made to a live entry: flush the latest edits into the
      *  draft, then mark it approved so the Publish button appears. */
     const approveDraft = async () => {
+        if (blocked()) return;
         setSaveState("saving");
         setError(null);
         try {
@@ -567,14 +647,14 @@ const EditorPage = () => {
             setDraftApproved(!!e.draftApproved);
             setSaveState("saved");
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Couldn't approve the changes.");
+            fail(e, "Couldn't approve the changes.");
             setSaveState("dirty");
         }
     };
 
     /** Step 2: promote the approved draft to the live version (goes public now). */
     const publishChanges = async () => {
-        if (!entryId) return;
+        if (!entryId || blocked()) return;
         setSaveState("saving");
         setError(null);
         try {
@@ -589,7 +669,7 @@ const EditorPage = () => {
             setDraftApproved(false);
             setSaveState("saved");
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Publish failed.");
+            fail(e, "Publish failed.");
             setSaveState("dirty");
         }
     };
@@ -604,7 +684,7 @@ const EditorPage = () => {
             setDraftApproved(false);
             await reload();
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Couldn't discard the draft.");
+            fail(e, "Couldn't discard the draft.");
         }
     };
 
@@ -639,7 +719,7 @@ const EditorPage = () => {
         try {
             previewId = (await persist()) ?? entryId;
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : "Couldn't save before preview.");
+            fail(e, "Couldn't save before preview.");
         }
         if (!w) return;
         if (previewId) w.location.href = `${window.location.origin}/preview?id=${previewId}`;
@@ -801,6 +881,15 @@ const EditorPage = () => {
                                 onChange={setTypeId}
                                 options={types.map((t) => ({ value: t.id, label: t.name }))}
                             />
+                        )}
+                        {listed.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => setFixOpen((v) => !v)}
+                                className={cn("rounded-md px-1.5 py-0.5 text-[0.6875rem] font-semibold transition-colors", listed.some((i) => i.level === "block") ? "bg-error/10 text-error hover:bg-error/20" : "bg-warning/15 text-warning hover:bg-warning/25")}
+                            >
+                                {listed.some((i) => i.level === "block") ? `${listed.filter((i) => i.level === "block").length} to fix before publishing` : `${listed.length} to look at`}
+                            </button>
                         )}
                         {error && <span className="text-error">· {error}</span>}
                     </div>
@@ -997,10 +1086,22 @@ const EditorPage = () => {
                                     <button type="button" onClick={removeNofollow} className="btn-secondary btn-sm shrink-0">Remove nofollow</button>
                                 </div>
                             )}
+                            {tidyMsg &&
+                                createPortal(
+                                    <div role="status" aria-live="polite" className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-primary/20 bg-white px-4 py-2 text-caption-1 font-medium text-primary shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:bg-dark-2 dark:text-lilac">
+                                        {tidyMsg}
+                                    </div>,
+                                    document.body,
+                                )}
+                            {fixOpen && listed.length > 0 && <FixPanel issues={listed} onJump={jumpTo} onClose={() => setFixOpen(false)} />}
                             <FieldsForm
                                 fields={formFields}
                                 data={entryData}
                                 components={componentFields}
+                                rules={rules}
+                                errors={inlineMessages(blocking(listed))}
+                                warnings={inlineMessages(listed.filter((i) => i.level === "warn"))}
+                                onTidy={onTidy}
                                 onChange={(d) => {
                                     setEntryData(d);
                                     bump();

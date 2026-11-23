@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { mediaUrl } from "@/lib/api";
 import { runAi, aiErrorMessage } from "@/lib/useAi";
 import { richTextExtensions, imageUploadProps } from "@/lib/tiptap";
+import { filterPastedHtml, tidyRich, totalCount, type TidyCounts } from "@flowcms/shared/tidy";
 import { RichTextTracker } from "@/lib/richTextTracker";
 import { ColorMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
 import { EditorIcon } from "./EditorIcons";
@@ -47,40 +48,56 @@ const AiBtn = ({ onAi, busy, compact }: { onAi: () => void; busy: boolean; compa
     </button>
 );
 
-const Toolbar = ({ editor, onInsertImage, onAi, aiBusy }: { editor: Editor; onInsertImage: () => void; onAi: () => void; aiBusy: boolean }) => {
+const Toolbar = ({ editor, onInsertImage, onAi, aiBusy, allow }: { editor: Editor; onInsertImage: () => void; onAi: () => void; aiBusy: boolean; allow?: string[] }) => {
+    // With an allow list from the content rules, only the listed buttons show.
+    const ok = (token: string) => !allow || allow.includes(token);
+    const groups: ReactNode[][] = [
+        [
+            ok("bold") && <TBtn key="b" title="Bold" label={<EditorIcon name="bold" className={ICON} />} active={editor.isActive("bold")} on={() => editor.chain().focus().toggleBold().run()} />,
+            ok("italic") && <TBtn key="i" title="Italic" label={<EditorIcon name="italic" className={ICON} />} active={editor.isActive("italic")} on={() => editor.chain().focus().toggleItalic().run()} />,
+            ok("underline") && !!editor.schema.marks.underline && <TBtn key="u" title="Underline" label={<EditorIcon name="underline" className={ICON} />} active={editor.isActive("underline")} on={() => editor.chain().focus().toggleUnderline().run()} />,
+            ok("strike") && <TBtn key="s" title="Strikethrough" label={<EditorIcon name="strike" className={ICON} />} active={editor.isActive("strike")} on={() => editor.chain().focus().toggleStrike().run()} />,
+            ok("highlight") && <TBtn key="h" title="Highlight" label={<EditorIcon name="highlight" className={ICON} />} active={editor.isActive("highlight")} on={() => editor.chain().focus().toggleHighlight().run()} />,
+            ok("color") && <ColorMenu key="c" editor={editor} />,
+            ok("code") && <TBtn key="co" title="Inline code" label={<EditorIcon name="code" className={ICON} />} active={editor.isActive("code")} on={() => editor.chain().focus().toggleCode().run()} />,
+            ok("link") && !!editor.schema.marks.link && <LinkMenu key="l" editor={editor} iconClass={ICON} triggerClass={LINK_TRIGGER} activeClass={LINK_ACTIVE} />,
+            ok("superscript") && <TBtn key="sup" title="Superscript" label={<EditorIcon name="superscript" className={ICON} />} active={editor.isActive("superscript")} on={() => editor.chain().focus().toggleSuperscript().run()} />,
+            ok("subscript") && <TBtn key="sub" title="Subscript" label={<EditorIcon name="subscript" className={ICON} />} active={editor.isActive("subscript")} on={() => editor.chain().focus().toggleSubscript().run()} />,
+        ],
+        [
+            ok("heading") && <TBtn key="h2" title="Heading 2" label={<span className="text-caption-1 font-semibold">H2</span>} active={editor.isActive("heading", { level: 2 })} on={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} />,
+            ok("heading") && <TBtn key="h3" title="Heading 3" label={<span className="text-caption-1 font-semibold">H3</span>} active={editor.isActive("heading", { level: 3 })} on={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} />,
+            ok("heading") && <TBtn key="p" title="Paragraph" label={<EditorIcon name="paragraph" className={ICON} />} active={editor.isActive("paragraph")} on={() => editor.chain().focus().setParagraph().run()} />,
+        ],
+        [
+            ok("bulletList") && <TBtn key="ul" title="Bullet list" label={<EditorIcon name="bulletList" className={ICON} />} active={editor.isActive("bulletList")} on={() => editor.chain().focus().toggleBulletList().run()} />,
+            ok("orderedList") && <TBtn key="ol" title="Numbered list" label={<EditorIcon name="orderedList" className={ICON} />} active={editor.isActive("orderedList")} on={() => editor.chain().focus().toggleOrderedList().run()} />,
+            ok("taskList") && <TBtn key="tl" title="Checklist" label={<EditorIcon name="taskList" className={ICON} />} active={editor.isActive("taskList")} on={() => editor.chain().focus().toggleTaskList().run()} />,
+            ok("blockquote") && <TBtn key="q" title="Quote" label={<EditorIcon name="quote" className={ICON} />} active={editor.isActive("blockquote")} on={() => editor.chain().focus().toggleBlockquote().run()} />,
+            ok("codeBlock") && <TBtn key="cb" title="Code block" label={<EditorIcon name="codeBlock" className={ICON} />} active={editor.isActive("codeBlock")} on={() => editor.chain().focus().toggleCodeBlock().run()} />,
+        ],
+        [
+            ok("align") && <TBtn key="al" title="Align left" label={<EditorIcon name="alignLeft" className={ICON} />} active={editor.isActive({ textAlign: "left" })} on={() => editor.chain().focus().setTextAlign("left").run()} />,
+            ok("align") && <TBtn key="ac" title="Align center" label={<EditorIcon name="alignCenter" className={ICON} />} active={editor.isActive({ textAlign: "center" })} on={() => editor.chain().focus().setTextAlign("center").run()} />,
+            ok("align") && <TBtn key="ar" title="Align right" label={<EditorIcon name="alignRight" className={ICON} />} active={editor.isActive({ textAlign: "right" })} on={() => editor.chain().focus().setTextAlign("right").run()} />,
+        ],
+        [
+            ok("emoji") && <EmojiMenu key="em" editor={editor} iconClass={ICON} />,
+            ok("table") && <TableMenu key="tb" editor={editor} iconClass={ICON} />,
+            ok("rule") && <TBtn key="hr" title="Horizontal rule" label={<EditorIcon name="rule" className={ICON} />} on={() => editor.chain().focus().setHorizontalRule().run()} />,
+            ok("image") && <TBtn key="im" title="Insert image" label={<EditorIcon name="image" className={ICON} />} on={onInsertImage} />,
+        ],
+        [ok("ai") && <AiBtn key="ai" onAi={onAi} busy={aiBusy} />],
+    ];
+    const shown = groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
     return (
         <div className="flex flex-wrap items-center gap-0.5 border-b border-grey-light bg-lavender-mist/40 px-2 py-1.5 dark:border-grey-light/10 dark:bg-dark-3/40">
-            <TBtn title="Bold" label={<EditorIcon name="bold" className={ICON} />} active={editor.isActive("bold")} on={() => editor.chain().focus().toggleBold().run()} />
-            <TBtn title="Italic" label={<EditorIcon name="italic" className={ICON} />} active={editor.isActive("italic")} on={() => editor.chain().focus().toggleItalic().run()} />
-            {!!editor.schema.marks.underline && <TBtn title="Underline" label={<EditorIcon name="underline" className={ICON} />} active={editor.isActive("underline")} on={() => editor.chain().focus().toggleUnderline().run()} />}
-            <TBtn title="Strikethrough" label={<EditorIcon name="strike" className={ICON} />} active={editor.isActive("strike")} on={() => editor.chain().focus().toggleStrike().run()} />
-            <TBtn title="Highlight" label={<EditorIcon name="highlight" className={ICON} />} active={editor.isActive("highlight")} on={() => editor.chain().focus().toggleHighlight().run()} />
-            <ColorMenu editor={editor} />
-            <TBtn title="Inline code" label={<EditorIcon name="code" className={ICON} />} active={editor.isActive("code")} on={() => editor.chain().focus().toggleCode().run()} />
-            {!!editor.schema.marks.link && <LinkMenu editor={editor} iconClass={ICON} triggerClass={LINK_TRIGGER} activeClass={LINK_ACTIVE} />}
-            <TBtn title="Superscript" label={<EditorIcon name="superscript" className={ICON} />} active={editor.isActive("superscript")} on={() => editor.chain().focus().toggleSuperscript().run()} />
-            <TBtn title="Subscript" label={<EditorIcon name="subscript" className={ICON} />} active={editor.isActive("subscript")} on={() => editor.chain().focus().toggleSubscript().run()} />
-            <Div />
-            <TBtn title="Heading 2" label={<span className="text-caption-1 font-semibold">H2</span>} active={editor.isActive("heading", { level: 2 })} on={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} />
-            <TBtn title="Heading 3" label={<span className="text-caption-1 font-semibold">H3</span>} active={editor.isActive("heading", { level: 3 })} on={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} />
-            <TBtn title="Paragraph" label={<EditorIcon name="paragraph" className={ICON} />} active={editor.isActive("paragraph")} on={() => editor.chain().focus().setParagraph().run()} />
-            <Div />
-            <TBtn title="Bullet list" label={<EditorIcon name="bulletList" className={ICON} />} active={editor.isActive("bulletList")} on={() => editor.chain().focus().toggleBulletList().run()} />
-            <TBtn title="Numbered list" label={<EditorIcon name="orderedList" className={ICON} />} active={editor.isActive("orderedList")} on={() => editor.chain().focus().toggleOrderedList().run()} />
-            <TBtn title="Checklist" label={<EditorIcon name="taskList" className={ICON} />} active={editor.isActive("taskList")} on={() => editor.chain().focus().toggleTaskList().run()} />
-            <TBtn title="Quote" label={<EditorIcon name="quote" className={ICON} />} active={editor.isActive("blockquote")} on={() => editor.chain().focus().toggleBlockquote().run()} />
-            <TBtn title="Code block" label={<EditorIcon name="codeBlock" className={ICON} />} active={editor.isActive("codeBlock")} on={() => editor.chain().focus().toggleCodeBlock().run()} />
-            <Div />
-            <TBtn title="Align left" label={<EditorIcon name="alignLeft" className={ICON} />} active={editor.isActive({ textAlign: "left" })} on={() => editor.chain().focus().setTextAlign("left").run()} />
-            <TBtn title="Align center" label={<EditorIcon name="alignCenter" className={ICON} />} active={editor.isActive({ textAlign: "center" })} on={() => editor.chain().focus().setTextAlign("center").run()} />
-            <TBtn title="Align right" label={<EditorIcon name="alignRight" className={ICON} />} active={editor.isActive({ textAlign: "right" })} on={() => editor.chain().focus().setTextAlign("right").run()} />
-            <Div />
-            <EmojiMenu editor={editor} iconClass={ICON} />
-            <TableMenu editor={editor} iconClass={ICON} />
-            <TBtn title="Horizontal rule" label={<EditorIcon name="rule" className={ICON} />} on={() => editor.chain().focus().setHorizontalRule().run()} />
-            <TBtn title="Insert image" label={<EditorIcon name="image" className={ICON} />} on={onInsertImage} />
-            <Div />
-            <AiBtn onAi={onAi} busy={aiBusy} />
+            {shown.map((g, i) => (
+                <Fragment key={i}>
+                    {i > 0 && <Div />}
+                    {g}
+                </Fragment>
+            ))}
         </div>
     );
 };
@@ -93,7 +110,26 @@ const Toolbar = ({ editor, onInsertImage, onAi, aiBusy }: { editor: Editor; onIn
  * action that rewrites the selection — both on the toolbar and in the inline
  * selection bubble. Value in/out is HTML.
  */
-const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value: string; onChange: (html: string) => void; placeholder?: string; minH?: string }) => {
+const RichTextField = ({
+    value,
+    onChange,
+    placeholder,
+    minH = "12rem",
+    allow,
+    tidy = false,
+    onTidy,
+}: {
+    value: string;
+    onChange: (html: string) => void;
+    placeholder?: string;
+    minH?: string;
+    /** From the field's content rule: the only blocks and marks this field takes (toolbar, paste, shortcuts). */
+    allow?: string[];
+    /** Quietly clean accidental formatting as it is typed or pasted, and when the field is left. */
+    tidy?: boolean;
+    /** Told what was tidied, for the small note. */
+    onTidy?: (c: TidyCounts) => void;
+}) => {
     const [imgPicker, setImgPicker] = useState(false);
     const [aiBusy, setAiBusy] = useState(false);
     const [aiError, setAiError] = useState<string | null>(null);
@@ -103,19 +139,57 @@ const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value
     // Loading never reports a change, and after a real edit every block the user did
     // not touch keeps its stored bytes.
     const track = useMemo(() => { const t = new RichTextTracker(); t.load(value); return t; }, []); // eslint-disable-line react-hooks/exhaustive-deps -- seeded once with the mounted value
+    // Opening a field must never change it: tidying on leave happens only after the person edited.
+    const edited = useRef(false);
+    const live = useRef({ tidy, allow, onTidy });
+    useEffect(() => {
+        live.current = { tidy, allow, onTidy };
+    });
     const editor = useEditor({
         immediatelyRender: false,
-        extensions: richTextExtensions(placeholder ?? "Write here…"),
+        extensions: richTextExtensions(placeholder ?? "Write here…", allow),
         content: value || "",
         editorProps: {
             attributes: { class: "flow-prose max-w-none px-4 py-3 focus:outline-none", style: `min-height:${minH}` },
             // Drag-and-drop / paste image files → upload to the asset library + insert.
             ...imageUploadProps(),
+            // A pasted block of text from a document or a web page arrives clean: no styles or
+            // empty paragraphs, and nothing this field does not allow.
+            transformPastedHTML: (html) => {
+                const { tidy: on, allow: a, onTidy: report } = live.current;
+                if (!on) return html;
+                const r = tidyRich(html, { keepStyles: false });
+                if (totalCount(r.counts)) report?.(r.counts);
+                return a ? filterPastedHtml(html, a) : r.value;
+            },
+            // A second space in a row, or a space at the start of a line, is never wanted.
+            handleTextInput: (view, from, _to, text) => {
+                const { tidy: on, onTidy: report } = live.current;
+                if (!on || text !== " ") return false;
+                const $from = view.state.doc.resolve(from);
+                const atStart = from === $from.start();
+                const prev = atStart ? "" : view.state.doc.textBetween(from - 1, from);
+                if (!atStart && prev !== " " && prev !== "\u00A0") return false;
+                report?.({ spaces: 1, nbsp: 0, odd: 0, emptyBlocks: 0, breaks: 0, blankLines: 0, colons: 0, styles: 0 });
+                return true;
+            },
         },
         onCreate: ({ editor }) => track.ready(editor.getHTML()),
         onUpdate: ({ editor }) => {
             // The editor tidying its own markup is not an edit.
-            if (track.changed(editor.getHTML())) onChange(track.current);
+            if (track.changed(editor.getHTML())) {
+                edited.current = true;
+                onChange(track.current);
+            }
+        },
+        onBlur: () => {
+            // On leaving the field: trailing spaces, empty paragraphs, stray hard spaces and pasted styles.
+            const { tidy: on, allow: a, onTidy: report } = live.current;
+            if (!on || !edited.current) return;
+            const r = tidyRich(track.current, { keepStyles: !a });
+            if (r.value === track.current) return;
+            if (totalCount(r.counts)) report?.(r.counts);
+            onChange(r.value);
         },
     });
 
@@ -162,7 +236,7 @@ const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value
 
     return (
         <div className="overflow-hidden rounded-2xl border border-grey-light dark:border-grey-light/10">
-            <Toolbar editor={editor} onInsertImage={() => setImgPicker(true)} onAi={() => void askAi()} aiBusy={aiBusy} />
+            <Toolbar editor={editor} onInsertImage={() => setImgPicker(true)} onAi={() => void askAi()} aiBusy={aiBusy} allow={allow} />
 
             {/* Inline selection bubble — quick formatting + AI where the cursor is. */}
             <BubbleMenu
@@ -171,13 +245,17 @@ const RichTextField = ({ value, onChange, placeholder, minH = "12rem" }: { value
                 shouldShow={({ editor, state }) => bubbleLinkOpen.current || (editor.isEditable && !state.selection.empty)}
                 className="flex items-center gap-0.5 rounded-lg border border-grey-light bg-white p-1 shadow-[0_0.75rem_2rem_rgba(26,26,46,0.16)] dark:border-grey-light/10 dark:bg-dark-1"
             >
-                <TBtn title="Bold" label={<EditorIcon name="bold" className={ICON} />} active={editor.isActive("bold")} on={() => editor.chain().focus().toggleBold().run()} />
-                <TBtn title="Italic" label={<EditorIcon name="italic" className={ICON} />} active={editor.isActive("italic")} on={() => editor.chain().focus().toggleItalic().run()} />
-                <TBtn title="Highlight" label={<EditorIcon name="highlight" className={ICON} />} active={editor.isActive("highlight")} on={() => editor.chain().focus().toggleHighlight().run()} />
-                <TBtn title="Inline code" label={<EditorIcon name="code" className={ICON} />} active={editor.isActive("code")} on={() => editor.chain().focus().toggleCode().run()} />
-                {!!editor.schema.marks.link && <LinkMenu editor={editor} iconClass="h-3.5 w-3.5" triggerClass={LINK_TRIGGER} activeClass={LINK_ACTIVE} onOpenChange={(o) => (bubbleLinkOpen.current = o)} />}
-                <Div />
-                <AiBtn onAi={() => void askAi()} busy={aiBusy} compact />
+                {(!allow || allow.includes("bold")) && <TBtn title="Bold" label={<EditorIcon name="bold" className={ICON} />} active={editor.isActive("bold")} on={() => editor.chain().focus().toggleBold().run()} />}
+                {(!allow || allow.includes("italic")) && <TBtn title="Italic" label={<EditorIcon name="italic" className={ICON} />} active={editor.isActive("italic")} on={() => editor.chain().focus().toggleItalic().run()} />}
+                {(!allow || allow.includes("highlight")) && <TBtn title="Highlight" label={<EditorIcon name="highlight" className={ICON} />} active={editor.isActive("highlight")} on={() => editor.chain().focus().toggleHighlight().run()} />}
+                {(!allow || allow.includes("code")) && <TBtn title="Inline code" label={<EditorIcon name="code" className={ICON} />} active={editor.isActive("code")} on={() => editor.chain().focus().toggleCode().run()} />}
+                {(!allow || allow.includes("link")) && !!editor.schema.marks.link && <LinkMenu editor={editor} iconClass="h-3.5 w-3.5" triggerClass={LINK_TRIGGER} activeClass={LINK_ACTIVE} onOpenChange={(o) => (bubbleLinkOpen.current = o)} />}
+                {!allow && (
+                    <>
+                        <Div />
+                        <AiBtn onAi={() => void askAi()} busy={aiBusy} compact />
+                    </>
+                )}
             </BubbleMenu>
 
             <div className="max-h-[20rem] overflow-auto bg-white dark:bg-dark-1 scrollbar-thin">

@@ -25,6 +25,8 @@ const FEATURE_LABEL: Record<string, string> = {
     scim: "SCIM provisioning",
     advanced_rbac: "Advanced RBAC + workflows",
     multi_workspace: "Multi-workspace console",
+    ip_policies: "IP allowlists & session policy",
+    content_rules: "Content rules & publishing guardrails",
 };
 
 const Plan = ({ info }: { info: LicenseInfo }) => {

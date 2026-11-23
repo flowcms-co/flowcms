@@ -466,6 +466,16 @@ html.dark {
     }
 }
 
+/* A field the publish panel just jumped to. */
+@keyframes flow-flash {
+    0%, 60% { box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.55); background-color: rgba(245, 158, 11, 0.1); }
+    100% { box-shadow: 0 0 0 3px rgba(245, 158, 11, 0); background-color: transparent; }
+}
+.flow-flash { animation: flow-flash 1.8s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+    .flow-flash { animation: none; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.55); }
+}
+
 /* Weekly-goal celebration motion (Editor dashboard). */
 @keyframes flow-confetti {
     0%, 100% { transform: translateY(0) rotate(0deg); }

@@ -72,13 +72,14 @@ export async function api<T = unknown>(
     const data = res.status === 204 ? null : await res.json().catch(() => null);
 
     if (!res.ok) {
-        const body = data as { message?: string | string[]; errors?: Record<string, string> } | null;
+        const body = data as { message?: string | string[]; errors?: Record<string, string>; issues?: unknown[] } | null;
         const raw = body?.message;
         let message = Array.isArray(raw) ? raw.join(", ") : (raw ?? "Something went wrong.");
         // Field-keyed validation errors (e.g. from publishing an incomplete entry)
         // arrive in `errors`; fold them into the message so the user sees *which*
         // fields failed instead of a bare "Validation failed."
-        if (body?.errors && typeof body.errors === "object") {
+        // Formatting-rule refusals carry `issues`; the editor lists those itself, so the top bar keeps the short line.
+        if (body?.errors && typeof body.errors === "object" && !body.issues) {
             const details = Object.values(body.errors).filter(Boolean).join(" ");
             if (details) message = message ? `${message} ${details}` : details;
         }

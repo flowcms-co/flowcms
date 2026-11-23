@@ -31,6 +31,7 @@ export type FeatureKey =
     | "scim"
     | "multi_workspace"
     | "ip_policies"
+    | "content_rules"
     | "seo_automation";
 
 export const FEATURE_TIER: Record<FeatureKey, Plan> = {
@@ -45,6 +46,7 @@ export const FEATURE_TIER: Record<FeatureKey, Plan> = {
     scim: "enterprise",
     multi_workspace: "enterprise",
     ip_policies: "enterprise",
+    content_rules: "enterprise",
     seo_automation: "pro",
 };
 
@@ -60,6 +62,7 @@ export const FEATURE_LABEL: Record<FeatureKey, string> = {
     scim: "SCIM user provisioning",
     multi_workspace: "Multi-workspace console",
     ip_policies: "IP allowlists & session policy",
+    content_rules: "Content rules & publishing guardrails",
     seo_automation: "Scheduled AI auditing",
 };
 
@@ -118,6 +121,7 @@ export const PLANS: PlanCard[] = [
             FEATURE_LABEL.sso + " & " + FEATURE_LABEL.scim,
             FEATURE_LABEL.multi_workspace,
             FEATURE_LABEL.ip_policies,
+            FEATURE_LABEL.content_rules,
             "Priority support & SLA",
         ],
     },

@@ -49,6 +49,7 @@ export const ACTION_LABEL: Record<string, string> = {
     "model.delete": "Deleted content type",
     "content.create": "Created",
     "content.edit": "Edited",
+    "content.tidy": "Tidied formatting",
     "content.submit": "Submitted for review",
     "content.approve": "Approved",
     "content.request_changes": "Requested changes",

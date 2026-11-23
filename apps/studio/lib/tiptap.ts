@@ -17,13 +17,77 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TaskList, TaskItem } from "@tiptap/extension-list";
 import { TableKit } from "@tiptap/extension-table";
 import { TextStyle, Color } from "@tiptap/extension-text-style";
-import type { AnyExtension } from "@tiptap/react";
+import { Plugin } from "@tiptap/pm/state";
+import type { Node as PmNode } from "@tiptap/pm/model";
+import { Extension, type AnyExtension } from "@tiptap/react";
 import type { EditorProps } from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
 import { uploadFile, mediaUrl } from "@/lib/api";
 
-/** Build the extension list for a rich-text editor with the given placeholder. */
-export const richTextExtensions = (placeholder: string): AnyExtension[] => [
+/** The block and mark types each content-rule `allow` name stands for. */
+const ALLOW_TYPES: Record<string, string[]> = {
+    heading: ["heading"],
+    bulletList: ["bulletList"],
+    orderedList: ["orderedList"],
+    taskList: ["taskList"],
+    blockquote: ["blockquote"],
+    codeBlock: ["codeBlock"],
+    table: ["table"],
+    image: ["image"],
+    rule: ["horizontalRule"],
+    bold: ["bold"],
+    italic: ["italic"],
+    underline: ["underline"],
+    strike: ["strike"],
+    code: ["code"],
+    highlight: ["highlight"],
+    subscript: ["subscript"],
+    superscript: ["superscript"],
+    link: ["link"],
+    color: ["textStyle"],
+};
+
+const countTypes = (doc: PmNode, names: Set<string>): Map<string, number> => {
+    const n = new Map<string, number>();
+    doc.descendants((node) => {
+        if (names.has(node.type.name)) n.set(node.type.name, (n.get(node.type.name) ?? 0) + 1);
+        for (const m of node.marks) if (names.has(m.type.name)) n.set(m.type.name, (n.get(m.type.name) ?? 0) + 1);
+        return true;
+    });
+    return n;
+};
+
+/**
+ * Keeps a field to what its content rule allows, whichever way a block or mark arrives:
+ * a toolbar button, a keyboard shortcut or a typing shortcut such as `## ` or `- `. A change
+ * that would ADD something not allowed is refused. What is already in the document is never
+ * touched, so an old article that holds a list still loads and saves as it was.
+ * (Pasted content is cleaned before it gets here, see filterPastedHtml.)
+ */
+export const allowOnly = (allow: readonly string[]) => {
+    const banned = new Set(Object.entries(ALLOW_TYPES).filter(([token]) => !allow.includes(token)).flatMap(([, types]) => types));
+    return Extension.create({
+        name: "allowOnly",
+        addProseMirrorPlugins() {
+            return [
+                new Plugin({
+                    filterTransaction: (tr, state) => {
+                        if (!tr.docChanged) return true;
+                        const before = countTypes(state.doc, banned);
+                        const after = countTypes(tr.doc, banned);
+                        for (const [name, n] of after) if (n > (before.get(name) ?? 0)) return false;
+                        return true;
+                    },
+                }),
+            ];
+        },
+    });
+};
+
+/** Build the extension list for a rich-text editor with the given placeholder. `allow` is a
+ *  content rule's allowed names: anything else cannot be added to this field. */
+export const richTextExtensions = (placeholder: string, allow?: readonly string[]): AnyExtension[] => [
+    ...(allow ? [allowOnly(allow)] : []),
     // Links carry only what the author sets. The Link extension's own defaults add
     // target="_blank" and rel="noopener noreferrer nofollow" to every link, which
     // would mark the site's internal links nofollow on the next save. "Open in new
