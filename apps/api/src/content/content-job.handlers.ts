@@ -32,6 +32,8 @@ export class ContentJobHandlers implements OnModuleInit {
         this.jobs.register("content.bulkPublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.publish(ws, id, uid, [PERMISSIONS.CONTENT_PUBLISH]), "Published"));
         this.jobs.register("content.bulkUnpublish", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.unpublish(ws, id, uid), "Unpublished"));
         this.jobs.register("content.bulkDraft", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.unpublish(ws, id, uid), "Moved to draft"));
+        // Tidy formatting on each entry as a normal save: live pages get a draft, nothing is published.
+        this.jobs.register("content.bulkTidy", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.tidyEntry(ws, id, uid, undefined, [PERMISSIONS.CONTENT_UPDATE]), "Tidied"));
         this.jobs.register("content.bulkDuplicate", (j, h) => this.run(j, h, (ws, id, uid) => this.entries.duplicate(ws, uid, id), "Duplicated"));
         // Only someone allowed to publish can queue this job (see the controller), so
         // each entry is scheduled with that right; the usual rules still apply per
@@ -120,7 +122,9 @@ export class ContentJobHandlers implements OnModuleInit {
      *  ("contentSections: This field is required.") rather than just "Validation failed.". */
     private reasonOf(e: unknown): string {
         if (e instanceof HttpException) {
-            const r = e.getResponse() as { message?: string; errors?: Record<string, string> } | string;
+            const r = e.getResponse() as { message?: string; errors?: Record<string, string>; issues?: { text: string }[] } | string;
+            // Formatting rules already say where and what, in a full sentence: use it as is.
+            if (typeof r === "object" && r.issues?.length) return `${r.issues[0].text}${r.issues.length > 1 ? ` (and ${r.issues.length - 1} more)` : ""}`;
             if (typeof r === "object" && r.errors) {
                 const [field, msg] = Object.entries(r.errors)[0] ?? [];
                 if (field) return `${field}: ${msg}`;

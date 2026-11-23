@@ -16,6 +16,7 @@ export type LiteEntry = {
 export const EVENT_VERB: Record<string, string> = {
     "content.create": "created",
     "content.edit": "edited",
+    "content.tidy": "tidied the formatting of",
     "content.submit": "submitted",
     "content.approve": "approved",
     "content.schedule": "scheduled",

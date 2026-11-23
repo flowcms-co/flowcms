@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { ContentType } from "@flowcms/db";
 import { PrismaService } from "../prisma/prisma.service";
 import { CacheService } from "../cache/cache.service";
@@ -7,6 +7,8 @@ import { isHomeType, isPageType, routePrefixForType } from "./route-path";
 import { pluralize } from "./pluralize";
 import { normalizeSchemaFields, toCamelCase, toLowerId, buildEntryKeyRemap } from "./naming";
 import { migrateRepeatable, repeatableFlipped } from "./component-shape";
+import { CONTENT_RULES_PORT, type ContentRulesPort } from "./content-rules.port";
+import { configProblems, type ContentRules, type RuleField } from "@flowcms/shared";
 import type { SchemaField } from "./entry-validation";
 
 @Injectable()
@@ -14,6 +16,8 @@ export class ContentTypesService {
     constructor(
         private readonly prisma: PrismaService,
         @Optional() private readonly cache?: CacheService,
+        // EE `content_rules`; absent (rules cannot be set) in Community.
+        @Optional() @Inject(CONTENT_RULES_PORT) private readonly contentRules?: ContentRulesPort,
     ) {}
 
     /** A type switched to "not pages": its entries leave the SEO audit now, not at
@@ -57,6 +61,7 @@ export class ContentTypesService {
             routePattern?: string;
             slugPattern?: string;
             freeFormBody?: boolean;
+            contentRules?: unknown;
             fields?: unknown[];
         };
         // Page type drives routing/kind/JSON-LD. Legacy types (no stored pageType)
@@ -92,6 +97,8 @@ export class ContentTypesService {
             // Pages of this type are kept out of search on purpose; the SEO audit then
             // does not warn about their noindex.
             noindexIntended: (s as { noindexIntended?: unknown }).noindexIntended === true,
+            // Formatting rules that stop an article being published (see docs/CONTENT-RULES.md).
+            contentRules: s.contentRules ?? null,
             fields: s.fields ?? [],
             entryCount: t._count?.entries ?? 0,
             // Public-site routing derived from the API id: entries live at
@@ -196,13 +203,42 @@ export class ContentTypesService {
         return fallback;
     }
 
+    /** The schema to store, with its content rules settled. A schema sent without `contentRules`
+     *  (the Schema Builder rebuilds the whole object from the keys it knows) keeps the stored
+     *  rules; `null` clears them; anything else is checked and must match this type's fields. */
+    async settleRules(workspaceId: string, schema: Record<string, unknown>, stored: unknown): Promise<Record<string, unknown>> {
+        const sent = schema.contentRules;
+        // Setting, changing or clearing rules is Enterprise only. Sending back what is already
+        // stored (a client round trip) is harmless and allowed, so an unlicensed save never fails on it.
+        const storedRules = (stored as { contentRules?: unknown } | null)?.contentRules;
+        if (sent !== undefined && JSON.stringify(sent) !== JSON.stringify(storedRules ?? null)) {
+            if (this.contentRules) await this.contentRules.assertCanEdit();
+            else throw new ForbiddenException('Content rules require a Flow CMS plan that includes them ("content_rules"). See Settings → License.');
+        }
+        if (sent === undefined) {
+            const kept = (stored as { contentRules?: unknown } | null)?.contentRules;
+            return kept === undefined ? schema : { ...schema, contentRules: kept };
+        }
+        if (sent === null) {
+            const { contentRules: _drop, ...rest } = schema;
+            void _drop;
+            return rest;
+        }
+        const comps = await this.prisma.contentType.findMany({ where: { workspaceId, kind: "COMPONENT" }, select: { apiId: true, schema: true } });
+        const map: Record<string, RuleField[]> = {};
+        for (const c of comps) map[c.apiId] = ((c.schema as { fields?: RuleField[] } | null)?.fields ?? []) as RuleField[];
+        const problems = configProblems(sent, (schema.fields ?? []) as RuleField[], map);
+        if (problems.length) throw new BadRequestException({ message: `The content rules need fixing. ${problems.join(" ")}`, errors: { contentRules: problems.join(" ") } });
+        return { ...schema, contentRules: sent as ContentRules };
+    }
+
     async create(workspaceId: string, dto: CreateContentTypeDto) {
         // Respect a caller-supplied apiId (slugified + de-duplicated); otherwise
         // derive one from the display name.
         const base = this.slug(dto.apiId?.trim() || dto.name, dto.kind ?? "COLLECTION");
         const apiId = await this.uniqueApiId(workspaceId, base);
         // Field keys are coerced to unique camelCase machine names before storage.
-        const schema = normalizeSchemaFields(dto.schema) as object;
+        const schema = (await this.settleRules(workspaceId, normalizeSchemaFields(dto.schema) as Record<string, unknown>, null)) as object;
         const t = await this.prisma.contentType.create({
             data: {
                 workspaceId,
@@ -228,7 +264,7 @@ export class ContentTypesService {
         // field names) must be remapped so their content stays aligned with the schema.
         let keyRemap: { remap: (d: unknown) => unknown; changed: boolean } = { remap: (d) => d, changed: false };
         if (dto.schema !== undefined) {
-            const schema = normalizeSchemaFields(dto.schema) as object;
+            const schema = (await this.settleRules(workspaceId, normalizeSchemaFields(dto.schema) as Record<string, unknown>, existing.schema)) as object;
             data.schema = schema;
             const oldFields = ((existing.schema as { fields?: Parameters<typeof buildEntryKeyRemap>[0] }) ?? {}).fields;
             const newFields = (schema as { fields?: Parameters<typeof buildEntryKeyRemap>[1] }).fields;

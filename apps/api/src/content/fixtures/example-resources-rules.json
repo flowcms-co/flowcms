@@ -1,0 +1,458 @@
+{
+  "version": 1,
+  "guide": {
+    "label": "Guide",
+    "url": "https://example.com/guide"
+  },
+  "tidy": true,
+  "fields": {
+    "title": {
+      "notEmpty": {
+        "value": true,
+        "message": "This box is empty. Write the title. Without it the page shows a blank heading."
+      },
+      "titleCase": true,
+      "noTrailingColon": {
+        "value": true,
+        "level": "warn",
+        "message": "This heading ends with a colon (“{text}”). Remove the colon."
+      }
+    },
+    "resourceHeroSection.headline": {
+      "notEmpty": {
+        "value": true,
+        "message": "This box is empty. Write the headline. Without it the page shows a blank heading."
+      },
+      "titleCase": true,
+      "noTrailingColon": {
+        "value": true,
+        "level": "warn",
+        "message": "This heading ends with a colon (“{text}”). Remove the colon."
+      }
+    },
+    "resourceHeroSection.subheadline": {
+      "noLinks": {
+        "value": true,
+        "message": "The subheadline has a link in it. The banner shows plain text only, so the link is removed. Take the link out here and put it in the Intro instead."
+      },
+      "maxWords": {
+        "value": 35,
+        "level": "warn",
+        "message": "The subheadline is {n} words. Keep it to one sentence of 35 words or fewer, and move the rest into the Intro."
+      },
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn",
+        "message": "The subheadline is {n} paragraphs. Keep it to one sentence, and move the rest into the Intro."
+      }
+    },
+    "servicePageContent.heading": {
+      "notEmpty": {
+        "value": true,
+        "message": "This box is empty. Write the overview heading. Without it the page shows a blank heading."
+      },
+      "titleCase": true,
+      "noTrailingColon": {
+        "value": true,
+        "level": "warn",
+        "message": "This heading ends with a colon (“{text}”). Remove the colon."
+      }
+    },
+    "servicePageContent.introText": {
+      "allow": [
+        "paragraph",
+        "bold",
+        "italic",
+        "link"
+      ],
+      "maxParagraphs": 2,
+      "notEmpty": true,
+      "noLabelParagraphs": true,
+      "minWords": {
+        "value": 50,
+        "level": "warn",
+        "message": "The intro is {n} words. Aim for 50 to 110 words: one paragraph that sets up the whole article. Add a sentence or two."
+      },
+      "maxWords": {
+        "value": 110,
+        "level": "warn",
+        "message": "The intro is {n} words. Aim for 50 to 110 words: one paragraph that sets up the whole article. Move the extra detail into a section."
+      },
+      "linksRelative": {
+        "value": true,
+        "level": "warn"
+      },
+      "guideAnchor": "#intro"
+    },
+    "servicePageContent.sections": {
+      "noEmptyItems": [
+        "heading",
+        "content"
+      ],
+      "lastItemIs": [
+        "heading",
+        "How Can We Help?"
+      ],
+      "uniqueItems": {
+        "value": [
+          "heading"
+        ],
+        "also": [
+          "servicePageContent.heading"
+        ]
+      },
+      "itemRules": [
+        {
+          "index": "last",
+          "rules": {
+            "content": {
+              "allow": [
+                "paragraph",
+                "bold",
+                "italic",
+                "link"
+              ],
+              "maxParagraphs": 1,
+              "containsAny": {
+                "value": [
+                  "Acme Home",
+                  "our local"
+                ],
+                "message": "The help paragraph should name Acme Home, or say “Our local ... professionals”. Add a sentence about what the professionals do for this topic."
+              },
+              "minWords": {
+                "value": 25,
+                "level": "warn",
+                "message": "The help paragraph is {n} words. Write 25 to 75 words, in 2 to 4 sentences."
+              },
+              "maxWords": {
+                "value": 75,
+                "level": "warn",
+                "message": "The help paragraph is {n} words. Write 25 to 75 words, in 2 to 4 sentences."
+              }
+            }
+          }
+        },
+        {
+          "index": "notLast",
+          "rules": {
+            "content": {
+              "minLists": {
+                "value": 1,
+                "level": "warn",
+                "message": "This section has no bullet list. Every section except “How Can We Help?” has one short paragraph followed by a bullet list. Add a list of 3 to 8 points, or merge this text into another section."
+              }
+            }
+          }
+        }
+      ],
+      "soft": {
+        "minItems": {
+          "value": 3,
+          "message": "This article has {n} sections. Use 3 to 5, counting “How Can We Help?”. Add a section."
+        },
+        "maxItems": {
+          "value": 5,
+          "message": "This article has {n} sections. Use 3 to 5, counting “How Can We Help?”. Merge short sections, or move question-style ones to the FAQ."
+        }
+      }
+    },
+    "servicePageContent.sections[].heading": {
+      "notEmpty": true,
+      "titleCase": true,
+      "noTrailingColon": {
+        "value": true,
+        "level": "warn",
+        "message": "This heading ends with a colon (“{text}”). Remove the colon."
+      }
+    },
+    "servicePageContent.sections[].content": {
+      "allow": [
+        "paragraph",
+        "bulletList",
+        "bold",
+        "italic",
+        "link"
+      ],
+      "maxLists": 1,
+      "listMustBeLast": true,
+      "notEmpty": true,
+      "noLinks": {
+        "value": "listItem"
+      },
+      "maxParagraphs": {
+        "value": 2,
+        "level": "warn"
+      },
+      "minParagraphs": {
+        "value": 1,
+        "level": "warn"
+      },
+      "minListItems": {
+        "value": 3,
+        "level": "warn"
+      },
+      "maxListItems": {
+        "value": 8,
+        "level": "warn"
+      },
+      "linksRelative": {
+        "value": true,
+        "level": "warn"
+      }
+    },
+    "servicePageContent.sections[].ctaLabel": {
+      "mustBeEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This box should stay empty on articles. Text here replaces the standard call box wording. Clear it."
+      }
+    },
+    "servicePageContent.keyBenefits": {
+      "exactItems": {
+        "value": 3,
+        "message": "This block needs exactly {need} items and has {n}. Add or remove items so there are {need}. These are the 3 action steps the reader should take, not a list of topics.",
+        "guideAnchor": "#action-steps"
+      },
+      "noEmptyItems": [
+        "heading",
+        "content"
+      ],
+      "itemRules": [
+        {
+          "index": 1,
+          "rules": {
+            "heading": {
+              "startsWith": {
+                "value": [
+                  "Describe",
+                  "Discuss",
+                  "Speak"
+                ],
+                "level": "warn",
+                "message": "Step 1 should be the contact step (“{text}”). Start it with “Describe”, “Discuss” or “Speak With”, for example “Describe The Ceiling Damage”."
+              }
+            }
+          }
+        },
+        {
+          "index": 2,
+          "rules": {
+            "heading": {
+              "startsWith": {
+                "value": [
+                  "Schedule"
+                ],
+                "message": "Step 2 should be the booking step. Start its heading with “Schedule”, for example “Schedule An Inspection”."
+              }
+            }
+          }
+        },
+        {
+          "index": 3,
+          "rules": {
+            "heading": {
+              "startsWith": {
+                "value": [
+                  "Get"
+                ],
+                "message": "Step 3 should be the result step. Start its heading with “Get”, for example “Get Professional Restoration Service”."
+              }
+            }
+          }
+        }
+      ]
+    },
+    "servicePageContent.keyBenefits[].heading": {
+      "titleCase": true,
+      "noTrailingColon": {
+        "value": true,
+        "level": "warn",
+        "message": "This heading ends with a colon (“{text}”). Remove the colon."
+      }
+    },
+    "servicePageContent.keyBenefits[].content": {
+      "allow": [
+        "paragraph",
+        "bold",
+        "italic",
+        "link"
+      ],
+      "maxParagraphs": {
+        "value": 1,
+        "message": "This step has {n} paragraphs. Each step is one short paragraph."
+      },
+      "guideAnchor": "#action-steps"
+    },
+    "servicePageContent.howItWorksSteps": {
+      "maxItems": {
+        "value": 0,
+        "message": "Resources must not use How it works steps: they replace the three action steps on the page. Delete all of the items in this block."
+      }
+    },
+    "faqSection.faqs": {
+      "onlyKeys": [
+        "question",
+        "answer"
+      ],
+      "soft": {
+        "minItems": {
+          "value": 4,
+          "message": "This article has {n} FAQs. Use 4 to 8. Add a question."
+        },
+        "maxItems": {
+          "value": 8,
+          "message": "This article has {n} FAQs. Use 4 to 8. Remove one, or merge them."
+        }
+      }
+    },
+    "faqSection.faqs[].question": {
+      "endsWith": {
+        "value": [
+          "?"
+        ],
+        "level": "warn",
+        "message": "This FAQ question should end with a question mark."
+      }
+    },
+    "faqSection.faqs[].answer": {
+      "maxParagraphs": {
+        "value": 1,
+        "level": "warn",
+        "message": "This answer is {n} paragraphs. Keep FAQ answers to one short paragraph."
+      },
+      "minWords": {
+        "value": 10,
+        "level": "warn",
+        "message": "This answer is {n} words. Keep FAQ answers to one short paragraph of 10 to 60 words. Add a sentence."
+      },
+      "maxWords": {
+        "value": 60,
+        "level": "warn",
+        "message": "This answer is {n} words. Keep FAQ answers to one short paragraph of 10 to 60 words. Trim it, or move the detail into a section."
+      },
+      "linksRelative": {
+        "value": true,
+        "level": "warn"
+      }
+    },
+    "metaTitle": {
+      "sameAs": {
+        "value": "title",
+        "level": "warn",
+        "message": "The meta title is different from the Title. Make it the same as the Title, and do not add “Acme Home” at the end: the site adds it."
+      },
+      "maxChars": {
+        "value": 60,
+        "level": "warn",
+        "message": "The meta title is {n} characters. Keep it to 60 characters or fewer."
+      }
+    },
+    "metaDescription": {
+      "minChars": {
+        "value": 110,
+        "level": "warn",
+        "message": "The meta description is {n} characters. Aim for 110 to 160 so Google shows it in full."
+      },
+      "maxChars": {
+        "value": 160,
+        "level": "warn",
+        "message": "The meta description is {n} characters. Aim for 110 to 160 so Google shows it in full."
+      }
+    },
+    "focusKeyword": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "The focus keyword is empty. Set a focus keyword and use the same words in the Title."
+      },
+      "containedIn": {
+        "value": "title",
+        "level": "warn",
+        "message": "The focus keyword “{text}” does not appear in the Title. Use the same words in both."
+      }
+    },
+    "relatedPost": {
+      "exactItems": {
+        "value": 3,
+        "level": "warn",
+        "message": "This article has {n} related posts. Pick exactly 3 other articles, and do not pick this article itself."
+      }
+    },
+    "tags": {
+      "minItems": {
+        "value": 2,
+        "level": "warn",
+        "message": "This article has {n} tags. Pick 2 to 4."
+      },
+      "maxItems": {
+        "value": 4,
+        "level": "warn",
+        "message": "This article has {n} tags. Pick 2 to 4."
+      }
+    },
+    "trackdriveCategory": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "No category is chosen. Pick the service this article belongs to, so the page shows the right phone number and links to the right service page."
+      }
+    },
+    "resourceHeroSection.backgroundImage.Image": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image is missing. Add the image."
+      }
+    },
+    "resourceHeroSection.backgroundImage.Alt text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no alt text. Describe the picture in one short sentence."
+      }
+    },
+    "servicePageContent.desktopImage.Image": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image is missing. Add the image."
+      }
+    },
+    "servicePageContent.desktopImage.Alt text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no alt text. Describe the picture in one short sentence."
+      }
+    },
+    "servicePageContent.mobileImage.Image": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image is missing. Add the image."
+      }
+    },
+    "servicePageContent.mobileImage.Alt text": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no alt text. Describe the picture in one short sentence."
+      }
+    },
+    "seo.shareImage": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image is missing. Add the image."
+      }
+    },
+    "seo.shareImageAlt": {
+      "notEmpty": {
+        "value": true,
+        "level": "warn",
+        "message": "This image has no alt text. Describe the picture in one short sentence."
+      }
+    }
+  }
+}

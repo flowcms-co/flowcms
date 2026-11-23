@@ -7,6 +7,7 @@ import { AdvancedRbacModule } from "./advanced-rbac/advanced-rbac.module";
 import { IpPoliciesModule } from "./ip-policies/ip-policies.module";
 import { ScimModule } from "./scim/scim.module";
 import { SsoModule } from "./sso/sso.module";
+import { ContentRulesModule } from "./content-rules/content-rules.module";
 import { SeoAutomationModule } from "./seo-automation/seo-automation.module";
 
 /**
@@ -30,4 +31,5 @@ export const EE_MODULES = [
     ScimModule,
     SsoModule,
     SeoAutomationModule,
+    ContentRulesModule,
 ];

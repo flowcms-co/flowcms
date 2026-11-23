@@ -37,7 +37,7 @@ field name) or the id.
 | GET | `/agent/model/:group` | |
 | GET | `/agent/model/:group/:ref` | |
 | POST | `/agent/model/:group` | `{ name, apiId?, kind?, schema }` (as Studio sends it) |
-| PATCH | `/agent/model/:group/:ref` | `{ name?, apiId?, draftAndPublish?, schema? }`. Schema keys you send replace the stored ones; `schema.fields` replaces the whole list (this is how you reorder) |
+| PATCH | `/agent/model/:group/:ref` | `{ name?, apiId?, draftAndPublish?, schema? }`. Schema keys you send replace the stored ones; `schema.fields` replaces the whole list (this is how you reorder). `schema.contentRules` sets the type's formatting rules (see CONTENT-RULES.md); `null` clears them |
 | POST | `/agent/model/:group/:ref/fields` | `{ field, position? }`. Refused with 409 if the name is taken |
 | PATCH | `/agent/model/:group/:ref/fields/:field` | `{ changes }`, merged into the field |
 | DELETE | `/agent/model/:group/:ref/fields/:field` | |

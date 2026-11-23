@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, Logger, Optional } from "@nestjs/common";
 import { ContentStatus } from "@flowcms/db";
 import { slugify as toSlug, stripTags } from "@flowcms/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { safeFetch } from "../common/ssrf";
 import { pluralize } from "../content/pluralize";
 import { toLowerId, normalizeFieldsWithData } from "../content/naming";
+import { CONTENT_RULES_PORT, activeRules, type ContentRulesPort } from "../content/content-rules.port";
+import { fieldsOf, validateEntryData, type ComponentMap } from "../content/entry-validation";
 
 /** A normalized item ready to become a ContentEntry. */
 type ImportItem = {
@@ -94,7 +96,11 @@ const decode = (s: string) =>
 @Injectable()
 export class ImportService {
     private readonly logger = new Logger(ImportService.name);
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        // EE `content_rules`; absent (imports never held back) in Community.
+        @Optional() @Inject(CONTENT_RULES_PORT) private readonly contentRules?: ContentRulesPort,
+    ) {}
 
     private async fetchJson(url: string, headers?: Record<string, string>): Promise<unknown> {
         // SSRF-guarded; sites legitimately redirect (http→https, canonical host),
@@ -609,6 +615,14 @@ export class ImportService {
         for (const g of groups) {
             const before = await this.prisma.contentType.findUnique({ where: { workspaceId_apiId: { workspaceId, apiId: g.apiId } } });
             const type = await this.ensureType(workspaceId, g.apiId, g.name, g.fields);
+            let componentMap: ComponentMap | null = null;
+            const components = async (): Promise<ComponentMap> => {
+                if (!componentMap) {
+                    componentMap = {};
+                    for (const c of await this.prisma.contentType.findMany({ where: { workspaceId, kind: "COMPONENT" }, select: { apiId: true, schema: true } })) componentMap[c.apiId] = fieldsOf(c.schema);
+                }
+                return componentMap;
+            };
             if (!before) typesCreated++;
 
             for (const item of g.items) {
@@ -624,6 +638,18 @@ export class ImportService {
                         assetIndex.size || liveOrigin
                             ? (this.resolveAssetRefs(item.data, assetIndex, liveOrigin) as Record<string, unknown>)
                             : item.data;
+                    const entryData = { ...data, title: item.title };
+                    // An import goes around the publish gate, so it may not land a live entry that
+                    // breaks the type's formatting rules: such an entry arrives as a draft instead.
+                    let status = item.status;
+                    const rules = status !== "DRAFT" ? await activeRules(this.contentRules, type.schema) : null;
+                    if (rules) {
+                        try {
+                            validateEntryData(fieldsOf(type.schema), entryData, { enforceRequired: false, enforceRules: true, slug: item.slug, components: await components(), rules });
+                        } catch {
+                            status = "DRAFT" as typeof status;
+                        }
+                    }
                     await this.prisma.contentEntry.create({
                         data: {
                             workspaceId,
@@ -631,9 +657,9 @@ export class ImportService {
                             authorId: userId,
                             slug: item.slug,
                             locale: item.locale,
-                            status: item.status,
-                            publishedAt: item.status === "PUBLISHED" ? item.publishedAt ?? new Date() : null,
-                            data: { ...data, title: item.title },
+                            status,
+                            publishedAt: status === "PUBLISHED" ? item.publishedAt ?? new Date() : null,
+                            data: entryData,
                         },
                     });
                     imported++;

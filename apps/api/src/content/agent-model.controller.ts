@@ -189,7 +189,9 @@ export class AgentModelController {
         }
         const summary = { destructive, routing, ...impact };
         if (flag(q.dryRun)) {
-            return { dryRun: true, ...summary, type: this.types.shape({ ...row, name: change.name ?? row.name, schema: (change.schema ?? before) as never }) };
+            // A dry run checks the content rules too, so a bad rule set is refused before anything is applied.
+            const settled = change.schema ? await this.types.settleRules(req.apiToken.workspaceId, change.schema, before) : undefined;
+            return { dryRun: true, ...summary, type: this.types.shape({ ...row, name: change.name ?? row.name, schema: (settled ?? before) as never }) };
         }
         if (destructive.length && !flag(q.confirm)) {
             throw new ConflictException({ code: "CONFIRM_REQUIRED", message: "This change drops or converts stored values. Check the summary, then repeat with ?confirm=true.", ...summary });

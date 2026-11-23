@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsDateString, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
 import { PERMISSIONS, can } from "@flowcms/shared";
 import { AuditService } from "../audit/audit.service";
@@ -7,6 +7,7 @@ import type { AuthUser } from "../auth/types";
 import { CreateEntryDto, SetAuthorDto, UpdateEntryDto } from "./entries.dto";
 import { ContentEntriesService } from "./content-entries.service";
 import { ContentListService, type EntryPageQuery } from "./content-list.service";
+import { FeatureGuard, RequireFeature } from "../license/feature.guard";
 import { JobsService } from "../jobs/jobs.service";
 
 class ReviewDto {
@@ -146,6 +147,15 @@ export class ContentEntriesController {
         return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkDelete", `Delete ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"}`, { ids: dto.ids }, dto.ids.length);
     }
 
+    /** "Tidy all flagged": the save-time tidy on each entry, saved as a normal edit (drafts for live pages). Never publishes. */
+    @Post("bulk/tidy")
+    @UseGuards(FeatureGuard)
+    @RequireFeature("content_rules")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    bulkTidy(@CurrentUser() user: AuthUser, @Body() dto: BulkIdsDto) {
+        return this.jobs.enqueue(user.workspaceId, user.id, "content.bulkTidy", `Tidy formatting on ${dto.ids.length} item${dto.ids.length === 1 ? "" : "s"}`, { ids: dto.ids }, dto.ids.length);
+    }
+
     /** Backfill image alt text on existing pages from the asset library. */
     @Post("bulk/fill-alt")
     @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
@@ -196,6 +206,15 @@ export class ContentEntriesController {
     // CONTENT_UPDATE (not CONTENT_PUBLISH) so an editor can do the final publish of
     // content a reviewer has already approved. The service still refuses to publish
     // anything not yet approved when the actor lacks CONTENT_PUBLISH.
+    /** Tidy one entry's accidental formatting (see bulk/tidy). */
+    @Post(":id/tidy")
+    @UseGuards(FeatureGuard)
+    @RequireFeature("content_rules")
+    @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
+    tidy(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+        return this.entries.tidyEntry(user.workspaceId, id, user.id, user.role, user.role.permissions);
+    }
+
     @Post(":id/publish")
     @RequirePermissions(PERMISSIONS.CONTENT_UPDATE)
     publish(@CurrentUser() user: AuthUser, @Param("id") id: string) {

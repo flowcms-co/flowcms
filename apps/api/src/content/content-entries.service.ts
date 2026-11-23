@@ -7,10 +7,12 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { WebhooksService, type WebhookEvent } from "../webhooks/webhooks.service";
 import { ConnectorsService, type ConnectorEvent } from "../connectors/connectors.service";
 import { PluginsService } from "../plugins/plugins.service";
+import { CONTENT_RULES_PORT, activeRules, type ContentRulesPort } from "./content-rules.port";
 import { APPROVAL_PORT, type ApprovalPort } from "./approval.port";
 import { RBAC_PORT, type RbacPort, type RoleRules } from "./rbac.port";
 import { CreateEntryDto, UpdateEntryDto } from "./entries.dto";
-import { fieldsOf, validateEntryData, type ComponentMap, type SchemaField } from "./entry-validation";
+import { tidyEntryData, tidyNote } from "@flowcms/shared";
+import { contentWarnings, fieldsOf, validateEntryData, type ComponentMap, type SchemaField } from "./entry-validation";
 import { RelationSyncService, refIds, reverseDelta, applyForwardValue } from "./relation-sync.service";
 import { entryPath } from "./route-path";
 import { authorWhere, autoAuthorId, effectiveAuthorId } from "./author";
@@ -69,7 +71,14 @@ export class ContentEntriesService {
         // EE `advanced_rbac` field-level rules; absent (unenforced) in Community.
         @Optional() @Inject(RBAC_PORT) private readonly rbac?: RbacPort,
         @Optional() private readonly audit?: AuditService,
+        // EE `content_rules`; absent (every rule check inert) in Community.
+        @Optional() @Inject(CONTENT_RULES_PORT) private readonly contentRules?: ContentRulesPort,
     ) {}
+
+    /** The type's content rules, or null when not licensed (nothing is checked, tidied or blocked). */
+    private rulesOf(schema: unknown) {
+        return activeRules(this.contentRules, schema);
+    }
 
     private readonly logger = new Logger(ContentEntriesService.name);
 
@@ -358,7 +367,7 @@ export class ContentEntriesService {
             throw new BadRequestException((e as Error).message);
         }
         const schema = existing.contentType.schema;
-        validateEntryData(fieldsOf(schema), restored, { enforceRequired: mode === "publish", slug: existing.slug, components: await this.componentMap(workspaceId) });
+        validateEntryData(fieldsOf(schema), restored, { enforceRequired: mode === "publish", slug: existing.slug, components: await this.componentMap(workspaceId), rules: await this.rulesOf(schema) });
 
         const note = `restored from v${version.versionNumber}${fields.length ? ` (${fields.join(", ")})` : ""}`;
         const isLive = existing.status === "PUBLISHED";
@@ -479,6 +488,17 @@ export class ContentEntriesService {
         });
         if (!entry) throw new NotFoundException("Entry not found.");
         const d: ReviewDecision = decision === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
+        // An article that breaks the type's rules cannot be approved, so nobody signs off on
+        // something that would then be refused at publish.
+        if (decision === "approve" && (await this.rulesOf(entry.contentType.schema))) {
+            validateEntryData(fieldsOf(entry.contentType.schema), (entry.data ?? {}) as Record<string, unknown>, {
+                enforceRequired: false,
+                enforceRules: true,
+                slug: entry.slug,
+                components: await this.componentMap(workspaceId),
+                rules: await this.rulesOf(entry.contentType.schema),
+            });
+        }
         await this.prisma.contentReview.upsert({
             where: { entryId_reviewerId: { entryId, reviewerId } },
             update: { decision: d, note: note?.trim() || null },
@@ -581,6 +601,44 @@ export class ContentEntriesService {
         const map: ComponentMap = {};
         for (const c of comps) map[c.apiId] = fieldsOf(c.schema);
         return map;
+    }
+
+    /** Tidy a save's data the way the type's content rules ask (stray spaces, empty paragraphs,
+     *  pasted styles; never words). A type without rules is left exactly as it is. */
+    private async tidied(workspaceId: string, schema: unknown, data: Record<string, unknown>): Promise<{ data: Record<string, unknown>; note: string | null }> {
+        const rules = await this.rulesOf(schema);
+        if (!rules || rules.tidy === false) return { data, note: null };
+        const r = tidyEntryData(rules, fieldsOf(schema), await this.componentMap(workspaceId), data);
+        return { data: r.data, note: tidyNote(r.counts) };
+    }
+
+    /** What a save returns beside the entry when its type has content rules: every problem left
+     *  (a failing hard rule only stops publishing, never saving) and what was tidied. */
+    private async ruleExtras(workspaceId: string, schema: unknown, data: Record<string, unknown>, note: string | null): Promise<{ warnings?: unknown[]; tidied?: string }> {
+        const rules = await this.rulesOf(schema);
+        if (!rules) return {};
+        const warnings = contentWarnings(fieldsOf(schema), data, rules, await this.componentMap(workspaceId));
+        return { warnings, ...(note ? { tidied: note } : {}) };
+    }
+
+    /**
+     * "Tidy all" for one entry: the same tidy a save applies (spaces, empty paragraphs, trailing colons,
+     * pasted styles; never words), run on the entry as it stands and saved the normal way. A live entry
+     * gets a pending draft, any other entry is saved in place, and nothing is ever published or approved.
+     * Returns what was tidied, as a plain note.
+     */
+    async tidyEntry(workspaceId: string, id: string, actorId?: string, role?: RoleRules, actorPermissions?: string[]) {
+        const existing = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, include: { contentType: { select: CT_SELECT } } });
+        if (!existing) throw new NotFoundException("Entry not found.");
+        const rules = await this.rulesOf(existing.contentType.schema);
+        if (!rules || rules.tidy === false) return { id, changed: false, note: null as string | null };
+        const source = ((existing.status === "PUBLISHED" ? (existing.draftData ?? existing.data) : existing.data) ?? {}) as Record<string, unknown>;
+        const r = tidyEntryData(rules, fieldsOf(existing.contentType.schema), await this.componentMap(workspaceId), source);
+        const note = tidyNote(r.counts);
+        if (!note || !this.changed(source, r.data)) return { id, changed: false, note: null as string | null };
+        await this.update(workspaceId, id, { data: r.data } as UpdateEntryDto, actorId, role, actorPermissions);
+        await this.logEvent(workspaceId, actorId, "content.tidy", id, { metadata: { note, counts: r.counts } });
+        return { id, changed: true, note };
     }
 
     /** Keep the SEO meta title linked to the entry title unless the user set a custom
@@ -936,8 +994,10 @@ export class ContentEntriesService {
         // A reuse create checks under its lock below, after the last match check.
         const patterned = !!this.slugPatternOf(type.schema);
         if (!patterned && !reuse) await this.assertSlugFree(workspaceId, type.id, dto.slug, locale);
+        const tidy = await this.tidied(workspaceId, type.schema, data);
+        data = tidy.data;
         // New entries are drafts — type-check values but don't require completeness yet.
-        validateEntryData(fieldsOf(type.schema), data, { enforceRequired: false, slug: dto.slug ?? null, components: await this.componentMap(workspaceId) });
+        validateEntryData(fieldsOf(type.schema), data, { enforceRequired: false, slug: dto.slug ?? null, components: await this.componentMap(workspaceId), rules: await this.rulesOf(type.schema) });
         // Plugin hooks may augment the data (reading time, word count, excerpt…).
         data = await this.plugins.runBeforeSave(workspaceId, { data, title: String(data.title ?? ""), status: "DRAFT" });
         this.syncMetaTitle(data);
@@ -978,7 +1038,7 @@ export class ContentEntriesService {
         await this.propagateReverse(workspaceId, e.id, e.contentType.schema, submittedReverse, { actorId: userId ?? undefined, role });
         const shaped = this.shape(e);
         this.fire(workspaceId, "content.created", shaped);
-        return shaped;
+        return { ...shaped, ...(await this.ruleExtras(workspaceId, type.schema, data, tidy.note)) };
     }
 
     async update(workspaceId: string, id: string, dto: UpdateEntryDto, actorId?: string, role?: RoleRules, actorPermissions?: string[]) {
@@ -1038,11 +1098,16 @@ export class ContentEntriesService {
             // `updatedAt` bump, and a pending approval stays as it is. Checked on what
             // was sent, before save hooks and the meta title sync add their own values.
             if (!this.changed(base, draft) && (dto.slug === undefined || dto.slug === existing.slug)) return this.unchanged(workspaceId, id);
+            const tidy = await this.tidied(workspaceId, existing.contentType.schema, draft);
+            draft = tidy.data;
+            // Tidying can make a save a no-op (the editor re-sending what the server already tidied).
+            if (tidy.note && !this.changed(base, draft) && (dto.slug === undefined || dto.slug === existing.slug)) return this.unchanged(workspaceId, id);
             // Type-check, but don't enforce completeness on a draft (autosave-friendly).
             validateEntryData(fieldsOf(existing.contentType.schema), draft, {
                 enforceRequired: false,
                 slug: dto.slug !== undefined ? dto.slug : existing.slug,
                 components: await this.componentMap(workspaceId),
+                rules: await this.rulesOf(existing.contentType.schema),
             });
             draft = await this.plugins.runBeforeSave(workspaceId, { data: draft, title: String(draft.title ?? ""), status: existing.status });
             this.syncMetaTitle(draft, (existing.draftData ?? existing.data ?? {}) as Record<string, unknown>);
@@ -1065,7 +1130,7 @@ export class ContentEntriesService {
             await this.propagateReverse(workspaceId, updated.id, existing.contentType.schema, submittedReverse, { actorId, role, actorPermissions });
             const shaped = { ...this.shape(updated), data: updated.draftData, title: String(draft.title ?? "Untitled") };
             this.fire(workspaceId, "content.updated", shaped);
-            return shaped;
+            return { ...shaped, ...(await this.ruleExtras(workspaceId, existing.contentType.schema, draft, tidy.note)) };
         }
 
         const data: Prisma.ContentEntryUpdateInput = {};
@@ -1091,10 +1156,14 @@ export class ContentEntriesService {
         // draft. The dedicated publish/schedule path (setStatus) enforces on its own.
         const enteringComplete =
             dto.status !== undefined && dto.status !== existing.status && REQUIRE_COMPLETE.has(dto.status as ContentStatus);
+        const tidy = dataChanged ? await this.tidied(workspaceId, existing.contentType.schema, merged) : { data: merged, note: null };
+        merged = tidy.data;
+        if (tidy.note && !structural && !this.changed(existing.data, merged)) return this.unchanged(workspaceId, id);
         validateEntryData(fieldsOf(existing.contentType.schema), merged, {
             enforceRequired: enteringComplete,
             slug: targetSlug,
             components: await this.componentMap(workspaceId),
+            rules: await this.rulesOf(existing.contentType.schema),
         });
         // Approval gate (Pro `approval_workflows`): block publish/schedule until the
         // entry is signed off. No-op unless the EE port is present + licensed.
@@ -1141,7 +1210,7 @@ export class ContentEntriesService {
             if (targetStatus === "PUBLISHED") this.fire(workspaceId, "content.published", shaped);
             else if (targetStatus === "SCHEDULED") this.fire(workspaceId, "content.scheduled", shaped);
         }
-        return shaped;
+        return { ...shaped, ...(await this.ruleExtras(workspaceId, existing.contentType.schema, merged, tidy.note)) };
     }
 
     /** Most entries one bulk field update may touch. */
@@ -1224,6 +1293,7 @@ export class ContentEntriesService {
                 enforceRequired: true,
                 slug: existing.slug,
                 components: await this.componentMap(workspaceId),
+                rules: await this.rulesOf(existing.contentType.schema),
             });
         }
         const e = await this.prisma.contentEntry.update({
@@ -1272,7 +1342,7 @@ export class ContentEntriesService {
             // Approve then Publish. Anyone else was already stopped above.
             if (!existing.draftApproved && !grantsPublish(actorPermissions)) throw new BadRequestException("Approve the draft changes before publishing them.");
             const promoted = (existing.draftData ?? {}) as Record<string, unknown>;
-            validateEntryData(fieldsOf(existing.contentType.schema), promoted, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId) });
+            validateEntryData(fieldsOf(existing.contentType.schema), promoted, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId), rules: await this.rulesOf(existing.contentType.schema) });
             const e = await this.prisma.contentEntry.update({
                 where: { id },
                 data: { data: existing.draftData as Prisma.InputJsonValue, draftData: Prisma.DbNull, draftApproved: false, status: "PUBLISHED", publishedAt: new Date(), firstPublishedAt: existing.firstPublishedAt ?? existing.publishedAt ?? new Date(), scheduledAt: null },
@@ -1318,7 +1388,7 @@ export class ContentEntriesService {
         });
         if (!existing) throw new NotFoundException("Entry not found.");
         if (existing.draftData == null) throw new BadRequestException("No draft changes to approve.");
-        validateEntryData(fieldsOf(existing.contentType.schema), (existing.draftData ?? {}) as Record<string, unknown>, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId) });
+        validateEntryData(fieldsOf(existing.contentType.schema), (existing.draftData ?? {}) as Record<string, unknown>, { enforceRequired: true, slug: existing.slug, components: await this.componentMap(workspaceId), rules: await this.rulesOf(existing.contentType.schema) });
         const e = await this.prisma.contentEntry.update({
             where: { id },
             data: { draftApproved: true },

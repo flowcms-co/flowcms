@@ -1,9 +1,13 @@
 import { BadRequestException } from "@nestjs/common";
+import { blocking, checkContentRules, issueErrors, publishBlockedMessage, valueFor, type ContentRules, type RuleIssue } from "@flowcms/shared";
 
 /** A field definition as authored in the Schema Builder (stored in ContentType.schema). */
 export type SchemaField = {
     id?: string;
     name: string;
+    /** The label and helper text the editor shows; the content rules quote them in messages. */
+    label?: string;
+    description?: string;
     type: string;
     required?: boolean;
     /** Component fields can repeat (a list) and nest their own fields (inline). */
@@ -54,31 +58,6 @@ export type FieldValidation = {
 
 /** Map of reusable-component apiId → its field defs (from kind=COMPONENT types). */
 export type ComponentMap = Record<string, SchemaField[]>;
-
-/**
- * Candidate data keys for a field. The Schema Builder stores a human field name
- * ("Cover image"); entry data may key it as "cover image", "coverImage",
- * "cover_image" or "cover". We accept any of these so validation is lenient about
- * the exact key while still enforcing presence + type.
- */
-function candidateKeys(name: string): string[] {
-    const raw = name.trim();
-    // Split camel humps too, so a camelCase field name ("coverImage") still resolves
-    // data keyed in any earlier convention ("Cover image", "cover_image", "cover").
-    const lower = raw.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
-    const parts = lower.split(/[\s_-]+/).filter(Boolean);
-    const camel = parts.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
-    const snake = parts.join("_");
-    const first = parts[0];
-    return [...new Set([raw, raw.toLowerCase(), lower, camel, snake, first].filter(Boolean))];
-}
-
-function valueFor(data: Record<string, unknown>, name: string): unknown {
-    for (const k of candidateKeys(name)) {
-        if (k in data && data[k] !== undefined && data[k] !== null && data[k] !== "") return data[k];
-    }
-    return undefined;
-}
 
 /** Type-check a present value. Lenient: only flags clearly-wrong types. A custom
  *  `validation.messages.type` overrides the default message. */
@@ -158,23 +137,50 @@ function ruleError(field: SchemaField, value: unknown): string | null {
     return null;
 }
 
+/** The type's content rules: stored at `schema.contentRules`, read here so every caller passes them the same way. */
+export function rulesOf(schema: unknown): ContentRules | null {
+    const r = (schema as { contentRules?: unknown } | null)?.contentRules;
+    return r && typeof r === "object" && !Array.isArray(r) && typeof (r as ContentRules).fields === "object" ? (r as ContentRules) : null;
+}
+
+export type ValidateOpts = {
+    enforceRequired: boolean;
+    slug?: string | null;
+    components?: ComponentMap;
+    /** The content type's formatting rules (`schema.contentRules`). */
+    rules?: ContentRules | null;
+    /** Block on failing hard rules. Defaults to `enforceRequired`: the moments an entry goes live. */
+    enforceRules?: boolean;
+};
+
 /**
  * Validate an entry's data against its content type's fields.
  * - Required fields are enforced only when `enforceRequired` is true (i.e. when
  *   publishing / scheduling / approving) — drafts can be incomplete.
+ * - The type's content rules block the same moments: a failing hard rule stops the
+ *   entry going live. Warnings never block.
  * - "Slug" fields map to the entry's slug column (passed separately).
- * Throws BadRequestException with a field-keyed error map on failure.
+ * Throws BadRequestException with a field-keyed error map (and, for rule failures, the
+ * structured `issues`) on failure.
  */
-export function validateEntryData(
-    fields: SchemaField[],
-    data: Record<string, unknown>,
-    opts: { enforceRequired: boolean; slug?: string | null; components?: ComponentMap },
-): void {
+export function validateEntryData(fields: SchemaField[], data: Record<string, unknown>, opts: ValidateOpts): void {
     const errors: Record<string, string> = {};
     validateFields(fields, data, opts, errors, "", true);
+    const hard = opts.rules && (opts.enforceRules ?? opts.enforceRequired) ? blocking(checkContentRules(opts.rules, fields, opts.components ?? {}, data)) : [];
+    if (hard.length > 0) {
+        // A rule problem reads better than a bare required/type message on the same path.
+        const ruleErrors = issueErrors(hard);
+        for (const [path, text] of Object.entries(ruleErrors)) errors[path] = errors[path] ? `${errors[path]} ${text}` : text;
+        throw new BadRequestException({ message: publishBlockedMessage(Object.keys(errors).length), errors, issues: hard });
+    }
     if (Object.keys(errors).length > 0) {
         throw new BadRequestException({ message: "Validation failed.", errors });
     }
+}
+
+/** Every rule problem in the data, hard and soft, without throwing. Returned with saves so people and agents see what is left to fix. */
+export function contentWarnings(fields: SchemaField[], data: Record<string, unknown>, rules: ContentRules | null | undefined, components?: ComponentMap): RuleIssue[] {
+    return rules ? checkContentRules(rules, fields, components ?? {}, data) : [];
 }
 
 /** Resolve a Component field's sub-fields: a library reference resolves via the
@@ -189,7 +195,7 @@ function resolveFields(field: SchemaField, components?: ComponentMap): SchemaFie
 function validateFields(
     fields: SchemaField[],
     data: Record<string, unknown>,
-    opts: { enforceRequired: boolean; slug?: string | null; components?: ComponentMap },
+    opts: ValidateOpts,
     errors: Record<string, string>,
     prefix: string,
     topLevel: boolean,

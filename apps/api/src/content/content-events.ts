@@ -5,6 +5,7 @@ import type { ContentStatus } from "@flowcms/db";
 export type ContentEvent =
     | "content.create"
     | "content.edit"
+    | "content.tidy"
     | "content.submit"
     | "content.approve"
     | "content.request_changes"
