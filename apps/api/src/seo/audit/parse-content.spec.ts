@@ -3,7 +3,7 @@ import { auditPage, type LiveFacts } from "./audit-engine";
 import { entryToPageInput, resolveTokens } from "./parse-content";
 
 const codes = (input: ReturnType<typeof entryToPageInput>) => auditPage(input).map((f) => f.code);
-const live: LiveFacts = { status: 200, title: "Fire Damage Restoration in Albuquerque, NM | NearbyPros", description: "Local crews restore fire and smoke damage across Albuquerque. Call for a free inspection and a same day response from licensed pros.", canonical: "https://nearbypros.com/fire-damage-restoration/albuquerque-nm", noindex: false, ldTypes: ["Service", "FAQPage"] };
+const live: LiveFacts = { status: 200, title: "Fire Damage Restoration in Albuquerque, NM | Acme Home", description: "Local crews restore fire and smoke damage across Albuquerque. Call for a free inspection and a same day response from licensed pros.", canonical: "https://example.com/fire-damage-restoration/albuquerque-nm", noindex: false, ldTypes: ["Service", "FAQPage"] };
 // A headless child entry: nothing SEO-related stored on it.
 const entry = { id: "e1", slug: "fire-damage-restoration-albuquerque-nm", data: { title: "{City} Fire Damage", city: "ckv9x2k3n0000abcd1234efgh" } };
 

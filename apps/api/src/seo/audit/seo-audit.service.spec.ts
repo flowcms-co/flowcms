@@ -16,9 +16,9 @@ describe("SeoAuditService", () => {
     });
 
     it("reads the live page at the mapped URL when the workspace has a site URL", async () => {
-        const { audit, ledger, seo } = make({ pages: [page("p1", "/fire-damage-restoration/albuquerque-nm")], site: "https://nearbypros.com" });
+        const { audit, ledger, seo } = make({ pages: [page("p1", "/fire-damage-restoration/albuquerque-nm")], site: "https://example.com" });
         await audit.auditWorkspace("w");
-        expect(seo.livePage.mock.calls[0][0]).toBe("https://nearbypros.com/fire-damage-restoration/albuquerque-nm");
+        expect(seo.livePage.mock.calls[0][0]).toBe("https://example.com/fire-damage-restoration/albuquerque-nm");
         const codes = ledger[0].l1Findings.map((f: any) => f.code);
         expect(codes).not.toContain("TECH_CANONICAL_MISSING");
         expect(codes).not.toContain("META_DESC_MISSING");

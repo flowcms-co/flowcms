@@ -16,8 +16,8 @@ describe("seoDash", () => {
     });
 
     it("explains what the Speed number is made of", () => {
-        const text = speedExplainer({ url: "https://nearbypros.com", strategy: "mobile", performance: 71, metrics: [] })!;
-        expect(text).toContain("nearbypros.com, mobile");
+        const text = speedExplainer({ url: "https://example.com", strategy: "mobile", performance: 71, metrics: [] })!;
+        expect(text).toContain("example.com, mobile");
         expect(text).toContain("Lighthouse performance: 71");
         expect(speedExplainer(null)).toBeNull();
     });
@@ -33,10 +33,10 @@ describe("seoDash", () => {
 
         const some = dataSources(
             { gsc: { connected: true, lastSync: "2026-10-05T09:00:00Z" }, ga4: { connected: true, lastSync: null } },
-            { site: "https://nearbypros.com", pagespeed: { connected: false, needsKey: true } },
+            { site: "https://example.com", pagespeed: { connected: false, needsKey: true } },
             NOW,
         );
-        expect(some.map((s) => s.state)).toEqual(["synced 3 hours ago", "not synced yet", "needs an API key", "nearbypros.com"]);
+        expect(some.map((s) => s.state)).toEqual(["synced 3 hours ago", "not synced yet", "needs an API key", "example.com"]);
     });
 
     it("only offers a scan when a scan can produce a score", () => {

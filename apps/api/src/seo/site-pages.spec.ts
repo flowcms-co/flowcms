@@ -50,26 +50,26 @@ describe("SitePagesService", () => {
     it("takes the site URL from the workspace, then Search Console, then the preview URL", async () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const site = (ws: object, gsc?: string) => new SitePagesService(prisma(ws, gsc) as any).siteUrl("w");
-        expect(await site({ siteUrl: "https://nearbypros.com/" }, "sc-domain:other.com")).toBe("https://nearbypros.com");
-        expect(await site({}, "sc-domain:nearbypros.com")).toBe("https://nearbypros.com");
-        expect(await site({ previewUrl: "https://nearbypros.com/preview?slug={slug}" })).toBe("https://nearbypros.com");
+        expect(await site({ siteUrl: "https://example.com/" }, "sc-domain:other.com")).toBe("https://example.com");
+        expect(await site({}, "sc-domain:example.com")).toBe("https://example.com");
+        expect(await site({ previewUrl: "https://example.com/preview?slug={slug}" })).toBe("https://example.com");
         expect(await site({})).toBeNull();
     });
 
     it("normalises site URLs and builds absolute canonicals", () => {
-        expect(normalizeSiteUrl("nearbypros.com")).toBe("https://nearbypros.com");
+        expect(normalizeSiteUrl("example.com")).toBe("https://example.com");
         expect(normalizeSiteUrl("not a url")).toBeNull();
-        expect(absoluteUrl("https://nearbypros.com", "/fire-damage-restoration/albuquerque-nm")).toBe("https://nearbypros.com/fire-damage-restoration/albuquerque-nm");
-        expect(absoluteUrl("https://nearbypros.com/", "/")).toBe("https://nearbypros.com/");
+        expect(absoluteUrl("https://example.com", "/fire-damage-restoration/albuquerque-nm")).toBe("https://example.com/fire-damage-restoration/albuquerque-nm");
+        expect(absoluteUrl("https://example.com/", "/")).toBe("https://example.com/");
     });
 });
 
 describe("View live links", () => {
     it("joins the site URL and the entry's real path", async () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const svc = new SitePagesService(prisma({ siteUrl: "https://nearbypros.com" }) as any);
+        const svc = new SitePagesService(prisma({ siteUrl: "https://example.com" }) as any);
         const [site, pages] = await Promise.all([svc.siteUrl("w"), svc.pages("w", ["e2"])]);
-        expect(absoluteUrl(site!, pages[0].path)).toBe("https://nearbypros.com/fire-damage-restoration/albuquerque-nm");
+        expect(absoluteUrl(site!, pages[0].path)).toBe("https://example.com/fire-damage-restoration/albuquerque-nm");
         // A city entry is not a page, so it gets no link.
         expect(await svc.pages("w", ["e4"])).toEqual([]);
     });
