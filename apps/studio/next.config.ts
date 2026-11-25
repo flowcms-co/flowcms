@@ -45,6 +45,8 @@ const nextConfig: NextConfig = {
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
           { key: "Content-Security-Policy", value: "frame-ancestors 'self'; base-uri 'self'; object-src 'none'" },
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          // The studio is an admin app: keep it out of search results on every install.
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
         ],
       },
       {
