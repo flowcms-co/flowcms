@@ -17,6 +17,7 @@ import { RolesModule } from "./roles/roles.module";
 import { IntegrationsModule } from "./integrations/integrations.module";
 import { ConnectorsModule } from "./connectors/connectors.module";
 import { PageTemplatesModule } from "./page-templates/page-templates.module";
+import { ElementTemplatesModule } from "./element-templates/element-templates.module";
 import { AiModule } from "./ai/ai.module";
 import { UsageModule } from "./usage/usage.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
@@ -97,6 +98,7 @@ try {
         DashboardModule,
         ContentModule,
         PageTemplatesModule,
+        ElementTemplatesModule,
         MailModule,
         NotificationsModule,
         ChatModule,

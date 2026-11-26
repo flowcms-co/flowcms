@@ -205,6 +205,14 @@ export class ContentEntriesService {
         void this.cache.delByPrefix(`dash:${workspaceId}:`);
     }
 
+    /** Published entries whose delivered output changed without a save (an element template they link to
+     *  was edited or removed): send each the same `content.updated` event a normal update sends. */
+    async announceChanged(workspaceId: string, ids: string[]) {
+        if (!ids.length) return;
+        const rows = await this.prisma.contentEntry.findMany({ where: { workspaceId, id: { in: ids }, status: "PUBLISHED" }, include: { contentType: { select: CT_SELECT } } });
+        for (const e of rows) this.fire(workspaceId, "content.updated", this.shape(e));
+    }
+
     /** How many full-body version snapshots to retain per entry. Each stores a
      *  complete copy of the entry data, so growth is bounded; drafts merge (below),
      *  so most of these are publishes, restores and status changes. */

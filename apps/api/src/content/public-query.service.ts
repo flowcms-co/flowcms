@@ -5,10 +5,10 @@ import { entryToCanonicalContent, buildJsonLd } from "./canonical-content";
 import { fieldsOf, type ComponentMap, type SchemaField } from "./entry-validation";
 import { altBackfillPatch, altLookupFrom, type AltLookup } from "./alt-backfill";
 import { CacheService } from "../cache/cache.service";
-import { expandElements } from "@flowcms/shared";
+import { expandElements, linkedTemplateIds } from "@flowcms/shared";
 
 /** What `shape` needs to default empty alt text from the asset library. */
-type AltCtx = { components: ComponentMap; altFor: AltLookup };
+type AltCtx = { components: ComponentMap; altFor: AltLookup; /** Current values of the element templates these entries link to, by id. */ templates: Map<string, unknown> };
 
 /** Coerce a stored reference value into an id list (single refs store a string,
  *  multiple store an array of ids). */
@@ -90,13 +90,21 @@ const coerce = (v: string): string | number | boolean => {
 const MEDIA_BASE = (process.env.MEDIA_PUBLIC_URL || process.env.STUDIO_URL || "").replace(/\/$/, "");
 
 /** Deep-expand every stored element (`<div data-flow-element=...>`) in any string into finished HTML. Delivery only: stored data is never rewritten. */
-const expandDeep = (v: unknown): unknown => {
-    if (typeof v === "string") return v.includes("data-flow-element") ? expandElements(v) : v;
-    if (Array.isArray(v)) return v.map(expandDeep);
+const expandDeep = (v: unknown, templates?: ReadonlyMap<string, unknown>): unknown => {
+    if (typeof v === "string") return v.includes("data-flow-element") ? expandElements(v, templates) : v;
+    if (Array.isArray(v)) return v.map((x) => expandDeep(x, templates));
     if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) {
-        return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, expandDeep(val)]));
+        return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, expandDeep(val, templates)]));
     }
     return v;
+};
+
+/** Every template id the rich text anywhere in these values links to. */
+const linkedIdsIn = (v: unknown, out = new Set<string>()): Set<string> => {
+    if (typeof v === "string") for (const id of v.includes("data-template") ? linkedTemplateIds(v) : []) out.add(id);
+    else if (Array.isArray(v)) for (const x of v) linkedIdsIn(x, out);
+    else if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) for (const x of Object.values(v)) linkedIdsIn(x, out);
+    return out;
 };
 
 /** Deep-rewrite relative "/media/..." strings to absolute CMS URLs. */
@@ -130,12 +138,15 @@ export class PublicQueryService {
     /** The workspace's asset alt text plus component schemas, for filling empty alt
      *  fields at delivery. Cached for a minute, so an edit to an asset's alt reaches
      *  the site without anyone re-saving the pages that use it. */
-    private async altCtx(workspaceId: string): Promise<AltCtx> {
+    private async altCtx(workspaceId: string, rows: { data: unknown }[]): Promise<AltCtx> {
         const media = await this.cache.wrap(`media:alt:${workspaceId}`, 60, () =>
             this.prisma.media.findMany({ where: { workspaceId, alt: { not: null } }, select: { url: true, alt: true } }),
         );
         const components: ComponentMap = Object.fromEntries(await this.componentFieldMap(workspaceId));
-        return { components, altFor: altLookupFrom(media) };
+        // Linked elements: one query for every template these entries use, never cached, so an edit shows at once.
+        const ids = [...linkedIdsIn(rows.map((r) => r.data))];
+        const found = ids.length ? await this.prisma.elementTemplate.findMany({ where: { workspaceId, id: { in: ids } }, select: { id: true, values: true } }) : [];
+        return { components, altFor: altLookupFrom(media), templates: new Map(found.map((t) => [t.id, t.values] as const)) };
     }
 
     async resolveType(workspaceId: string, type: string): Promise<ContentType> {
@@ -182,7 +193,7 @@ export class PublicQueryService {
             if (jsonLd.length) base.jsonLd = jsonLd;
         }
         // Elements become finished HTML on delivery (every public route shapes through here).
-        const expanded = expandDeep(base) as Record<string, unknown>;
+        const expanded = expandDeep(base, alt?.templates) as Record<string, unknown>;
         // Make relative "/media/..." refs absolute so they load from the CMS on any
         // frontend domain (not the consuming site's own origin).
         return MEDIA_BASE ? (absolutizeMedia(expanded) as Record<string, unknown>) : expanded;
@@ -205,7 +216,7 @@ export class PublicQueryService {
             where: { workspaceId, id: { in: ids }, ...(preview ? {} : { status: "PUBLISHED" }) },
             include: { contentType: { select: { apiId: true, schema: true } } },
         });
-        const alt = rows.length ? await this.altCtx(workspaceId) : undefined;
+        const alt = rows.length ? await this.altCtx(workspaceId, rows) : undefined;
         return new Map(
             rows.map((e) => {
                 const shaped = this.shape(e, undefined, e.contentType.schema, alt);
@@ -365,7 +376,7 @@ export class PublicQueryService {
             this.prisma.contentEntry.findMany({ where, orderBy: this.orderBy(opts.sort), take, skip }),
             this.prisma.contentEntry.count({ where }),
         ]);
-        const alt = rows.length ? await this.altCtx(ct.workspaceId) : undefined;
+        const alt = rows.length ? await this.altCtx(ct.workspaceId, rows) : undefined;
         const data = rows.map((e) => this.shape(e, projectionOf(opts).top, ct.schema, alt));
         await this.populateRefs(ct, data, opts);
         return { data, meta: { total, limit: take, offset: skip } };
@@ -376,7 +387,7 @@ export class PublicQueryService {
             where: { ...this.where(ct, { ...opts, filters: {} }), OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
         });
         if (!entry) throw new NotFoundException("Not found.");
-        const data = this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId));
+        const data = this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId, [entry]));
         await this.populateRefs(ct, [data], opts);
         return { data };
     }
@@ -386,7 +397,7 @@ export class PublicQueryService {
             where: this.where(ct, { ...opts, filters: {} }),
             orderBy: this.orderBy(opts.sort),
         });
-        const data = entry ? this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId)) : null;
+        const data = entry ? this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId, [entry])) : null;
         if (data) await this.populateRefs(ct, [data], opts);
         return { data };
     }
