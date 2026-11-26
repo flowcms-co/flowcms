@@ -44,6 +44,9 @@ export function setSavedTheme(theme: ElementsTheme) {
     applyElementsTheme(theme);
 }
 
+/** The saved theme as of now (it changes after a save, so read it when a panel opens, not from a stale hook value). */
+export const getSavedTheme = () => saved;
+
 /** Put the saved theme back, dropping any unsaved live preview. */
 export const restoreSavedTheme = () => applyElementsTheme(saved);
 

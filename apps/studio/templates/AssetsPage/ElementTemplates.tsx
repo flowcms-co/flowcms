@@ -19,7 +19,7 @@ import ElementUpgrade from "@/components/editor/ElementUpgrade";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { api, ApiError } from "@/lib/api";
-import { applyElementsTheme, restoreSavedTheme, setSavedTheme, useSavedTheme } from "@/lib/elements";
+import { applyElementsTheme, getSavedTheme, restoreSavedTheme, setSavedTheme, useSavedTheme } from "@/lib/elements";
 
 const WIDTHS: { id: string; label: string; px: number | null }[] = [
     { id: "320", label: "320", px: 320 },
@@ -61,10 +61,10 @@ const Row = ({ label, children, value }: { label: string; children: React.ReactN
 );
 
 /** The theme panel: edits show on every preview at once, and only Save keeps them. */
-const ThemePanel = ({ saved, onClose }: { saved: ElementsTheme; onClose: () => void }) => {
+const ThemePanel = ({ onClose }: { onClose: () => void }) => {
     const { can } = useAuth();
     const canSave = can("workspace.manage");
-    const [draft, setDraft] = useState<ElementsTheme>(saved);
+    const [draft, setDraft] = useState<ElementsTheme>(getSavedTheme);
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
     const change = (patch: Partial<ElementsTheme>) => {
@@ -122,6 +122,25 @@ const ThemePanel = ({ saved, onClose }: { saved: ElementsTheme; onClose: () => v
                         ))}
                     </select>
                 </Row>
+                <div className="border-b border-grey-light py-2 dark:border-grey-light/15">
+                    <span className="mb-1.5 block text-caption-1 font-semibold text-black dark:text-white">Text size</span>
+                    <div role="group" aria-label="Text size mode" className="mb-2 inline-flex gap-0.5 rounded-xl bg-lavender-mist p-0.5 dark:bg-dark-3">
+                        {([["auto", "Auto (one size, shrinks on small screens)"], ["custom", "Set per device"]] as const).map(([m, l]) => (
+                            <button key={m} type="button" aria-pressed={draft.fontMode === m} onClick={() => change({ fontMode: m })} className={`rounded-lg px-3 py-1.5 text-left text-caption-2 font-semibold ${draft.fontMode === m ? "bg-white text-primary shadow-sm dark:bg-dark-1 dark:text-lilac" : "text-grey"}`}>
+                                {l}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex gap-2">
+                        {(draft.fontMode === "auto" ? [["fontSize", "Size"]] : [["fontSizeMobile", "Phone"], ["fontSizeTablet", "Tablet"], ["fontSizeDesktop", "Desktop"]] as const).map(([k, l]) => (
+                            <label key={k} className="block flex-1 text-caption-2 text-grey">
+                                {l} (px)
+                                <input type="number" min={12} max={24} step={1} aria-label={`${l} text size`} className="flow-input mt-0.5 h-9 w-full px-2" value={draft[k as keyof ElementsTheme] as number} onChange={(e) => change({ [k]: Number(e.target.value) })} />
+                            </label>
+                        ))}
+                    </div>
+                    <p className="mt-1 text-caption-2 text-grey">12 to 24. Applies to element text; headings and big numbers scale with it.</p>
+                </div>
             </div>
             <div className="border-t border-grey-light px-5 py-4 dark:border-grey-light/15">
                 <p className={`mb-2 min-h-4 text-caption-2 ${msg ? (msg.ok ? "text-success" : "text-error") : "text-grey"}`} aria-live="polite">
@@ -143,7 +162,7 @@ const ThemePanel = ({ saved, onClose }: { saved: ElementsTheme; onClose: () => v
 /** Assets > Element templates: a live preview of every template in the workspace theme, a sandbox for the fields, and the theme panel. */
 const ElementTemplates = () => {
     const { locked } = usePlan();
-    const { theme: saved, ready } = useSavedTheme();
+    const { ready } = useSavedTheme();
     const [width, setWidth] = useState("full");
     const [tryT, setTryT] = useState<ElementTemplate | null>(null);
     const [panel, setPanel] = useState(false);
@@ -197,7 +216,7 @@ const ElementTemplates = () => {
                 ))}
             </div>
             {tryT && <ElementDrawer template={tryT} initial={tryT.defaults()} editing={false} sandbox onSave={() => setTryT(null)} onClose={() => setTryT(null)} />}
-            {panel && <ThemePanel saved={saved} onClose={() => setPanel(false)} />}
+            {panel && <ThemePanel onClose={() => setPanel(false)} />}
         </div>
     );
 };
