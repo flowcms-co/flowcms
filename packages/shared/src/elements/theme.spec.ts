@@ -53,3 +53,41 @@ describe("elements theme css", () => {
         expect(css).toContain("--el-font:'Source Serif 4',serif");
     });
 });
+
+describe("elements theme font sizes", () => {
+    const sized = (k: string, v: unknown) => parseTheme(withField(k, v));
+    it("defaults to auto, 16 / 15 / 16 / 17", () => {
+        expect(DEFAULT_THEME).toMatchObject({ fontMode: "auto", fontSize: 16, fontSizeMobile: 15, fontSizeTablet: 16, fontSizeDesktop: 17 });
+        expect(parseTheme({ ...DEFAULT_THEME, fontMode: undefined, fontSize: undefined }).errors).toEqual([]);
+    });
+    it("keeps valid sizes and falls to the default for invalid ones, each field on its own", () => {
+        for (const k of ["fontSize", "fontSizeMobile", "fontSizeTablet", "fontSizeDesktop"] as const) {
+            for (const ok of [12, 18.5, 24]) expect(sized(k, ok).theme[k]).toBe(ok);
+            for (const bad of [11, 25, NaN, Infinity, "18", null, "16px;}"]) {
+                const r = sized(k, bad);
+                expect(r.theme[k], `${k}=${String(bad)}`).toBe(DEFAULT_THEME[k]);
+                expect(r.errors).toEqual([]);
+            }
+        }
+    });
+    it("unknown mode is auto", () => {
+        for (const bad of ["x", "AUTO", 1, null, "custom;}"]) expect(sized("fontMode", bad).theme.fontMode).toBe("auto");
+        expect(sized("fontMode", "custom").theme.fontMode).toBe("custom");
+    });
+    it("auto css emits the clamp and only the single size", () => {
+        const css = themeCss({ ...DEFAULT_THEME, fontSize: 18, fontSizeMobile: 13 });
+        expect(css).toContain("--el-font-size:18px");
+        expect(css).toContain(".flow-el>*{font-size:clamp(");
+        expect(css).toContain("cqi");
+        expect(css).not.toContain("@container");
+        expect(css).not.toContain("13px");
+    });
+    it("custom css picks by container width and keeps the other values out of the css", () => {
+        const css = themeCss({ ...DEFAULT_THEME, fontMode: "custom", fontSize: 22, fontSizeMobile: 13, fontSizeTablet: 15, fontSizeDesktop: 20 });
+        expect(css).toContain(".flow-el>*{font-size:13px}");
+        expect(css).toContain("@container (min-width:560px){.flow-el>*{font-size:15px}}");
+        expect(css).toContain("@container (min-width:960px){.flow-el>*{font-size:20px}}");
+        expect(css).not.toContain("22px");
+        expect(css).not.toContain("clamp(");
+    });
+});
