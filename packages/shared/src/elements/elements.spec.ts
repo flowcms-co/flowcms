@@ -106,10 +106,10 @@ describe("cost", () => {
 
     it("validates each rule", () => {
         expect(cost.validate(base())).toEqual([]);
-        expect(cost.validate({ ...base(), low: 5000 })).toEqual(["Low end cannot be above the average."]);
-        expect(cost.validate({ ...base(), avg: 7000 })).toEqual(["Average cannot be above the high end."]);
-        expect(cost.validate({ ...base(), min: 2000 })).toEqual(["Bar minimum cannot be above the low end."]);
-        expect(cost.validate({ ...base(), max: 5000 })).toEqual(["High end cannot be above the bar maximum."]);
+        expect(cost.validate({ ...base(), low: 250 })).toEqual(["Low end cannot be above the average."]);
+        expect(cost.validate({ ...base(), avg: 350 })).toEqual(["Average cannot be above the high end."]);
+        expect(cost.validate({ ...base(), min: 150 })).toEqual(["Bar minimum cannot be above the low end."]);
+        expect(cost.validate({ ...base(), max: 250 })).toEqual(["High end cannot be above the bar maximum."]);
         expect(cost.validate({ ...base(), low: "abc" })).toEqual(["Low end must be a number."]);
     });
 
@@ -126,7 +126,7 @@ describe("cost", () => {
         expect(style).toMatch(/^--p-low:\d+(\.\d+)?%;--p-high:\d+(\.\d+)?%;--p-avg:\d+(\.\d+)?%$/);
         expect(html).not.toMatch(/evil|<script/);
         const ok = /--p-low:([\d.]+)%;--p-high:([\d.]+)%;--p-avg:([\d.]+)%/.exec(cost.render(base()))!;
-        expect(ok.slice(1).map(Number)).toEqual([6.87, 39.52, 20.62]);
+        expect(ok.slice(1).map(Number)).toEqual([25, 75, 50]);
     });
 
     it("has no call to action button", () => expect(cost.render(base())).not.toMatch(/<a |<button/));
@@ -150,12 +150,17 @@ describe("table", () => {
     });
 
     it("labels each cell with its column, for the stacked layout", () => {
-        expect(table.render(base())).toContain('<td data-label="Typical cost">$300 - $1,000</td>');
+        expect(table.render(base())).toContain('<td data-label="Example range">$100 - $200</td>');
     });
 });
 
+// What calculator.defaults() returned before the builder. Stored elements made then still render and edit.
+const LEGACY = (): Record<string, unknown> => ({ title: "House drying cost estimator", preset: "drying-cost", rateClean: 3.75, rateGray: 4.5, rateBlack: 7,
+    qtyLabel: "Quantity", optLabel: "Option", qty: 100, qtyUnit: "", option1Name: "Standard", option1Rate: 10, option2Name: "", option2Rate: "", option3Name: "", option3Rate: "", option4Name: "", option4Rate: "",
+    low: 0.8, high: 1.25, caption: "Estimated cost", note: "" });
+
 describe("calculator", () => {
-    const base = () => calculator.defaults() as Record<string, unknown>;
+    const base = LEGACY;
 
     it("escapes the title", () => clean(calculator.render({ ...base(), title: NASTY })));
 
@@ -193,19 +198,19 @@ describe("elements.js", () => {
 describe("cost unit", () => {
     const base = () => cost.defaults() as Record<string, unknown>;
     it("shows the unit after the range, escaped", () => {
-        expect(cost.render({ ...base(), unit: "per visit" })).toContain("$1,450 - $6,200 per visit</p>");
+        expect(cost.render({ ...base(), unit: "per visit" })).toContain("$100 - $300 per visit</p>");
         const html = cost.render({ ...base(), unit: NASTY });
         expect(html).not.toMatch(/<script|<img/i);
         expect(html).toContain("&lt;script&gt;");
     });
     it("shows nothing when empty or missing", () => {
-        expect(cost.render({ ...base(), unit: "  " })).toContain("$6,200</p>");
-        expect(cost.render({ ...base(), unit: undefined })).toContain("$6,200</p>");
+        expect(cost.render({ ...base(), unit: "  " })).toContain("$300</p>");
+        expect(cost.render({ ...base(), unit: undefined })).toContain("$300</p>");
     });
 });
 
 describe("custom calculator", () => {
-    const custom = () => ({ ...(calculator.defaults() as Record<string, unknown>), preset: "custom", qtyLabel: "Roof size (sq ft)", qty: 2000, option1Name: "Shingle", option1Rate: 5.5, option2Name: "Metal", option2Rate: 12, low: 0.9, high: 1.3, caption: "Roof estimate", note: "Excludes permits." });
+    const custom = () => ({ ...LEGACY(), preset: "custom", qtyLabel: "Roof size (sq ft)", qty: 2000, option1Name: "Shingle", option1Rate: 5.5, option2Name: "Metal", option2Rate: 12, low: 0.9, high: 1.3, caption: "Roof estimate", note: "Excludes permits." });
 
     it("validates", () => {
         expect(calculator.validate(custom())).toEqual([]);

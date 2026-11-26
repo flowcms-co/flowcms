@@ -28,7 +28,7 @@ export const cost: ElementTemplate = {
         { key: "unit", label: "Price unit (optional)", type: "text", hint: "Shown after the range, for example: per visit, per treatment, per roof square." },
         { key: "note", label: "How we get this data (optional)", type: "text", long: true },
     ],
-    defaults: () => ({ title: "Service Cost", location: "", low: 1450, avg: 3450, high: 6200, min: 450, max: 15000, unit: "", note: "" }),
+    defaults: () => ({ title: "Example range", location: "", low: 100, avg: 200, high: 300, min: 0, max: 400, unit: "", note: "" }),
     validate(values) {
         const v = read(values);
         const out: string[] = [];

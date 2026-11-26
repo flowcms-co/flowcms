@@ -54,13 +54,13 @@ export const steps: ElementTemplate = {
         },
     ],
     defaults: () => ({
-        title: "How a local pro handles it",
+        title: "Steps",
         layout: "horizontal",
         steps: [
-            { label: "Inspect", time: "Hour 1", text: "Find the source and map the wet areas." },
-            { label: "Extract", time: "Hours 1-4", text: "Pull standing water out fast." },
-            { label: "Dry", time: "Days 1-4", text: "Dehumidifiers and air movers run until dry." },
-            { label: "Restore", time: "Week 1-2", text: "Replace damaged materials and finish." },
+            { label: "Step one", time: "Time", text: "Describe this step." },
+            { label: "Step two", time: "Time", text: "Describe this step." },
+            { label: "Step three", time: "Time", text: "Describe this step." },
+            { label: "Step four", time: "Time", text: "Describe this step." },
         ],
     }),
     validate(values) {

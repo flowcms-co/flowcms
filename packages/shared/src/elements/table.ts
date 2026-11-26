@@ -24,8 +24,8 @@ export const table: ElementTemplate = {
     ],
     defaults: () => ({
         caption: "",
-        columns: "Service | Typical cost",
-        rows: "Water extraction | $300 - $1,000\nStructural drying (per day) | $200 - $500\nMold remediation | $1,000 - $4,000\nDrywall replacement (per sq ft) | $2 - $4\nContent pack-out | $500 - $2,500",
+        columns: "Item | Example range",
+        rows: "Item one | $100 - $200\nItem two | $200 - $300\nItem three | $300 - $400",
     }),
     validate(values) {
         const v = read(values);
