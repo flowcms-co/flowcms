@@ -32,13 +32,21 @@ const ElementDrawer = ({
     const preview = useMemo(() => renderElement(template.id, values), [template.id, values]);
 
     const field = (f: ElementField) => {
-        if (f.type === "text")
+        if (f.type === "text" || f.type === "number") {
+            const hint = f.hint ? <span className="mt-1 block text-caption-2 text-grey">{f.hint}</span> : null;
+            const val = String(values[f.key] ?? "");
             return (
                 <label key={f.key} className="block">
                     <span className={label}>{f.label}</span>
-                    <input className="flow-input" value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
+                    {f.type === "text" && f.long ? (
+                        <textarea className="flow-input" rows={5} value={val} onChange={(e) => set(f.key, e.target.value)} />
+                    ) : (
+                        <input className="flow-input" type={f.type === "number" ? "number" : "text"} step={f.type === "number" ? "any" : undefined} inputMode={f.type === "number" ? "decimal" : undefined} value={val} onChange={(e) => set(f.key, e.target.value)} />
+                    )}
+                    {hint}
                 </label>
             );
+        }
         if (f.type === "choice")
             return (
                 <fieldset key={f.key}>

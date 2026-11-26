@@ -70,6 +70,9 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
     const nodes = (): HTMLElement[] => Array.from(document.querySelectorAll<HTMLElement>(`[${attribute}]`));
     const fieldName = (el: HTMLElement): string => el.getAttribute(attribute) || "";
     const isRich = (el: HTMLElement): boolean => el.hasAttribute(richAttribute);
+    // A rich region that holds a delivered FlowCMS element (.flow-el) is shown but never edited or
+    // sent back: its markup is the expanded form, and saving it would lose the element's values.
+    const locked = (el: HTMLElement): boolean => isRich(el) && !!el.querySelector(".flow-el");
     const readValue = (el: HTMLElement): string => (isRich(el) ? el.innerHTML : el.textContent || "");
     const writeValue = (el: HTMLElement, v: string): void => {
         if (isRich(el)) el.innerHTML = v;
@@ -89,6 +92,7 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
         for (const el of nodes()) {
             const name = fieldName(el);
             if (parsePath(name)) continue; // repeating-list items reported under `arrays`
+            if (locked(el)) continue;
             m[name] = readValue(el);
         }
         return m;
@@ -116,6 +120,7 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
         editing = on;
         for (const el of nodes()) {
             if (parsePath(fieldName(el))) continue; // repeating-list items wire their own editing
+            if (locked(el)) continue;
             if (on) {
                 el.setAttribute("contenteditable", isRich(el) ? "true" : "plaintext-only");
                 el.classList.add(editClassName);
@@ -281,6 +286,7 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
         keepDetailsOpen(it);
         for (const sub of Object.keys(it.fields)) {
             const f = it.fields[sub];
+            if (locked(f.el)) continue;
             f.el.setAttribute("contenteditable", f.mode === "rich" ? "true" : "plaintext-only");
             f.el.classList.add(editClassName);
             f.el.addEventListener("input", onInput);
@@ -427,6 +433,7 @@ export function enableVisualEditing(options: VisualEditingOptions = {}): () => v
                 const rec: { index: number | null; clonedFrom: number | null; fields: Dict; value?: string } = { index: it.origIndex, clonedFrom: it.clonedFrom, fields: {} };
                 for (const sub of Object.keys(it.fields)) {
                     const f = it.fields[sub];
+                    if (locked(f.el)) continue;
                     if (sub === "_value") rec.value = readMode(f.el, f.mode);
                     else rec.fields[sub] = readMode(f.el, f.mode);
                 }

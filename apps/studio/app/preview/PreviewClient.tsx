@@ -162,6 +162,8 @@ const rebuildArray = (original: unknown, items: ArrayItemMsg[]): unknown[] => {
         if (rec.value !== undefined && (!rec.fields || !Object.keys(rec.fields).length)) return rec.value;
         const srcIdx = rec.index != null ? rec.index : rec.clonedFrom;
         const source = srcIdx != null ? orig[srcIdx] : undefined;
+        // A scalar item the page did not send back (it holds a locked element): keep it as stored.
+        if (typeof source === "string" && !(rec.fields && Object.keys(rec.fields).length)) return source;
         let base: Record<string, unknown> = source && typeof source === "object" && !Array.isArray(source) ? structuredClone(source as Record<string, unknown>) : {};
         // A newly added item was cloned from an existing one — regenerate its ids.
         if (rec.index == null) base = freshenIds(base);
@@ -340,6 +342,8 @@ const PreviewClient = () => {
     const dev = DEVICES.find((d) => d.id === device)!;
 
     const body = str(entry?.data?.body);
+    // A body holding an element is shown but not edited in place: the editor owns elements.
+    const bodyHasElement = body.includes("data-flow-element") || body.includes("flow-el");
     const summary = str(entry?.data?.summary);
     const client = str(entry?.data?.client);
     // Schema fields worth surfacing in the content preview: everything except the
@@ -412,7 +416,7 @@ const PreviewClient = () => {
         if (!syncRef.current || !entry) return;
         const data: Record<string, unknown> = structuredClone(entry.data ?? {});
         if (summaryRef.current) data.summary = summaryRef.current.textContent ?? "";
-        if (articleRef.current) data.body = articleRef.current.innerHTML ?? "";
+        if (articleRef.current && !bodyHasElement) data.body = articleRef.current.innerHTML ?? "";
         const nextTitle = titleRef.current ? titleRef.current.textContent ?? entry.title : entry.title;
         syncRef.current.post({ kind: "draft", from: "preview", draft: { title: nextTitle, slug: entry.slug ?? null, status: entry.status, data } });
     };
@@ -683,7 +687,7 @@ const PreviewClient = () => {
             : {
                   ...(titleRef.current ? { title: titleRef.current.textContent ?? "" } : {}),
                   ...(summaryRef.current ? { summary: summaryRef.current.textContent ?? "" } : {}),
-                  ...(articleRef.current ? { body: articleRef.current.innerHTML ?? "" } : {}),
+                  ...(articleRef.current && !bodyHasElement ? { body: articleRef.current.innerHTML ?? "" } : {}),
               };
         // `title` maps to the entry title; everything else writes into entry data by
         // its field path (nested keys like "heroBanner.title" deep-set into data).
@@ -976,10 +980,10 @@ const PreviewClient = () => {
                                 live editor is on (Pro) — edits save back to the entry body. */}
                             <div
                                 ref={articleRef}
-                                contentEditable={editing}
+                                contentEditable={editing && !bodyHasElement}
                                 suppressContentEditableWarning
                                 onInput={() => { setDirty(true); broadcastFromNodes(); }}
-                                className={cn("flow-prose focus:outline-none", editing && "-mx-3 rounded-xl p-3 outline-2 outline-dashed outline-primary/40")}
+                                className={cn("flow-prose focus:outline-none", editing && !bodyHasElement && "-mx-3 rounded-xl p-3 outline-2 outline-dashed outline-primary/40")}
                                 dangerouslySetInnerHTML={{ __html: safeHtml(body) || "<p>Nothing here yet — start writing in the editor.</p>" }}
                             />
                         </article>
