@@ -16,12 +16,15 @@ const ElementDrawer = ({
     template,
     initial,
     editing,
+    sandbox = false,
     onSave,
     onClose,
 }: {
     template: ElementTemplate;
     initial: Values;
     editing: boolean;
+    /** Try the fields only: nothing is inserted or saved. */
+    sandbox?: boolean;
     onSave: (values: Values) => void;
     onClose: () => void;
 }) => {
@@ -124,7 +127,7 @@ const ElementDrawer = ({
                             <div className="flex items-center justify-between border-b border-grey-light px-6 py-4 dark:border-grey-light/15">
                                 <div>
                                     <Dialog.Title className="text-h6 text-black dark:text-white">
-                                        {editing ? "Edit" : "Insert"} {template.name}
+                                        {sandbox ? "Try" : editing ? "Edit" : "Insert"} {template.name}
                                     </Dialog.Title>
                                     <p className="text-caption-2 text-grey">{template.description}</p>
                                 </div>
@@ -141,15 +144,18 @@ const ElementDrawer = ({
                             </div>
                             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-grey-light px-6 py-4 dark:border-grey-light/15">
                                 <p className="min-w-0 flex-1 text-caption-2 text-grey" aria-live="polite">
+                                    {sandbox ? "Sandbox: nothing you type here is saved. " : ""}
                                     {problems.length ? `${problems[0]}${problems.length > 1 ? ` (and ${problems.length - 1} more)` : ""} You can save it now, but it blocks publishing until fixed.` : "Ready to publish."}
                                 </p>
                                 <div className="flex gap-2">
                                     <button type="button" onClick={onClose} className="btn-secondary">
-                                        Cancel
+                                        {sandbox ? "Close" : "Cancel"}
                                     </button>
-                                    <button type="button" onClick={() => onSave(values)} className="btn-primary">
-                                        {editing ? "Save element" : "Insert element"}
-                                    </button>
+                                    {!sandbox && (
+                                        <button type="button" onClick={() => onSave(values)} className="btn-primary">
+                                            {editing ? "Save element" : "Insert element"}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </Dialog.Panel>

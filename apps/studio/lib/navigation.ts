@@ -70,6 +70,7 @@ export const NAV: NavItem[] = [
         tabs: [
             { label: "Library", href: "/assets" },
             { label: "Page Templates", href: "/assets/templates" },
+            { label: "Element templates", href: "/assets/elements" },
         ],
     },
     {
