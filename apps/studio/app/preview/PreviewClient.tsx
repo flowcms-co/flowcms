@@ -14,6 +14,7 @@ import { fieldLabel, type SchemaField } from "@/mocks/schema";
 import Sections, { findSections, type Section as ViewSection } from "./Sections";
 import SectionEditor, { type ComponentDef, type Section as ZoneSection } from "@/components/editor/SectionEditor";
 import Mapper from "./Mapper";
+import { fromSiteFrame, siteOriginOf } from "@/lib/bridgeOrigin";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
 import { isHiddenFieldPath } from "@/lib/mappableField";
@@ -461,15 +462,16 @@ const PreviewClient = () => {
         syncRef.current?.post({ kind: "draft", from: "preview", draft: { title: entry.title, slug: entry.slug ?? null, status: entry.status, data } });
     };
 
+    const siteOriginRef = useRef<string | null>(null);
+    useEffect(() => {
+        siteOriginRef.current = siteOriginOf(frameSrc);
+    }, [frameSrc]);
+
     const postToSite = (msg: Record<string, unknown>) => {
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
-        let origin = "*";
-        try {
-            if (frameSrc) origin = new URL(frameSrc).origin;
-        } catch {
-            /* keep * */
-        }
+        const origin = siteOriginOf(frameSrc);
+        if (!origin) return; // never broadcast with "*"
         win.postMessage({ source: "flowcms-studio", ...msg }, origin);
     };
 
@@ -578,7 +580,7 @@ const PreviewClient = () => {
     // generalized bridge) or as legacy {title, summary, body} keys.
     useEffect(() => {
         const onMsg = (e: MessageEvent) => {
-            if (e.source !== iframeRef.current?.contentWindow) return; // only our iframe
+            if (!fromSiteFrame(e, iframeRef.current?.contentWindow, siteOriginRef.current)) return; // only our iframe, on the site's origin
             const d = e.data as {
                 source?: string;
                 type?: string;
@@ -1056,6 +1058,7 @@ const PreviewClient = () => {
                 onClose={() => setMapping(false)}
                 ready={siteEditable}
                 post={postToSite}
+                isFromSite={(e) => fromSiteFrame(e, iframeRef.current?.contentWindow, siteOriginRef.current)}
                 contentTypeId={type?.id}
                 entryData={entry?.data ?? null}
                 initialBindings={bindings}

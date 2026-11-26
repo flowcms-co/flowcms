@@ -156,7 +156,8 @@
     function post(msg) {
         msg.source = "flowcms-preview";
         try {
-            if (window.parent) window.parent.postMessage(msg, parentOrigin);
+            // Never "*": until the Studio has spoken (and its origin is known) we stay silent.
+            if (window.parent && parentOrigin !== "*") window.parent.postMessage(msg, parentOrigin);
         } catch (e) {
             /* ignore */
         }
@@ -790,12 +791,16 @@
     }
 
     window.addEventListener("message", function (e) {
-        if (parentOrigin !== "*" && e.origin !== parentOrigin) return;
+        // Learn the studio's origin from its first message (it must come from our
+        // parent frame) and answer and accept only that origin from here on.
+        if (parentOrigin === "*") {
+            if (e.source !== window.parent || !e.origin || e.origin === "null") return;
+            if (!e.data || e.data.source !== "flowcms-studio") return;
+            parentOrigin = e.origin;
+        }
+        if (e.origin !== parentOrigin || e.source !== window.parent) return;
         var d = e.data;
         if (!d || d.source !== "flowcms-studio") return;
-        // Learn the studio's origin from its first message (it must come from our
-        // parent frame) and answer only that origin from here on.
-        if (parentOrigin === "*" && e.source === window.parent && e.origin && e.origin !== "null") parentOrigin = e.origin;
         if (d.type === "hello") {
             post({ type: "ready", editable: true });
             return;

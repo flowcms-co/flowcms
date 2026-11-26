@@ -45,6 +45,7 @@ type Props = {
     onClose: () => void;
     ready: boolean;
     post: (msg: Record<string, unknown>) => void;
+    isFromSite: (e: MessageEvent) => boolean;
     contentTypeId?: string;
     entryData: Record<string, unknown> | null;
     initialBindings: Binding[];
@@ -57,7 +58,7 @@ type Props = {
  * non-developer confirm or point-and-click the rest. Saves a SelectorMap so the
  * customer site needs only the universal bridge script.
  */
-const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialBindings, onSaved }: Props) => {
+const Mapper = ({ open, onClose, ready, post, isFromSite, contentTypeId, entryData, initialBindings, onSaved }: Props) => {
     const fields = useMemo(() => {
         const out: Field[] = [];
         flatten(entryData ?? {}, "", out);
@@ -95,7 +96,7 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
         if (!open) return;
         const onMsg = (e: MessageEvent) => {
             const d = e.data as { source?: string; type?: string; items?: Suggestion[]; fieldPath?: string; selector?: string; mode?: string; nth?: number; unresolved?: string[] } | null;
-            if (!d || d.source !== "flowcms-preview") return;
+            if (!isFromSite(e) || !d || d.source !== "flowcms-preview") return;
             if (d.type === "suggestions" && Array.isArray(d.items)) {
                 const m: Record<string, Suggestion> = {};
                 for (const it of d.items) if (it && it.fieldPath) m[it.fieldPath] = it;
@@ -115,7 +116,7 @@ const Mapper = ({ open, onClose, ready, post, contentTypeId, entryData, initialB
         };
         window.addEventListener("message", onMsg);
         return () => window.removeEventListener("message", onMsg);
-    }, [open]);
+    }, [open, isFromSite]);
 
     const accept = (path: string) => {
         const s = sugg[path];
