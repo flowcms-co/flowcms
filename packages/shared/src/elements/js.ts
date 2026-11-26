@@ -20,14 +20,18 @@ export const ELEMENTS_JS = `(function (w, d) {
       if (cat !== "gray" && cat !== "black") cat = "clean";
       var base = n(val("a")) * n(ds["rate" + cat.charAt(0).toUpperCase() + cat.slice(1)]);
       out = ["Estimated drying cost", usd(r10(base * 0.8)) + " - " + usd(r10(base * 1.25)), "Typical drying time: 3 to 5 days for " + cat + " water."];
+    } else if (ds.preset === "custom") {
+      var sel = calc.querySelector('[data-k="s"]'), opt = sel && sel.options[sel.selectedIndex];
+      var tot = n(val("a")) * n(opt && opt.getAttribute("data-rate"));
+      out = [null, usd(r10(tot * n(ds.lo))) + " - " + usd(r10(tot * n(ds.hi))), null];
     } else {
       var est = n(val("a")), pay = val("s") === "gradual" ? est : Math.min(est, n(val("b")));
       out = ["You pay", usd(pay), "Insurer may pay " + usd(est - pay)];
     }
     var cap = calc.querySelector(".el-res .el-cap"), v = calc.querySelector(".el-res .v"), note = calc.querySelector(".el-res .el-note");
-    if (cap) cap.textContent = out[0];
+    if (cap && out[0] !== null) cap.textContent = out[0];
     if (v) v.textContent = out[1];
-    if (note) note.textContent = out[2];
+    if (note && out[2] !== null) note.textContent = out[2];
   }
   function init(root) {
     root = root || d;

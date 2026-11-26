@@ -189,3 +189,47 @@ describe("elements.js", () => {
         expect(ELEMENTS_JS).not.toMatch(/innerHTML/);
     });
 });
+
+describe("cost unit", () => {
+    const base = () => cost.defaults() as Record<string, unknown>;
+    it("shows the unit after the range, escaped", () => {
+        expect(cost.render({ ...base(), unit: "per visit" })).toContain("$1,450 - $6,200 per visit</p>");
+        const html = cost.render({ ...base(), unit: NASTY });
+        expect(html).not.toMatch(/<script|<img/i);
+        expect(html).toContain("&lt;script&gt;");
+    });
+    it("shows nothing when empty or missing", () => {
+        expect(cost.render({ ...base(), unit: "  " })).toContain("$6,200</p>");
+        expect(cost.render({ ...base(), unit: undefined })).toContain("$6,200</p>");
+    });
+});
+
+describe("custom calculator", () => {
+    const custom = () => ({ ...(calculator.defaults() as Record<string, unknown>), preset: "custom", qtyLabel: "Roof size (sq ft)", qty: 2000, option1Name: "Shingle", option1Rate: 5.5, option2Name: "Metal", option2Rate: 12, low: 0.9, high: 1.3, caption: "Roof estimate", note: "Excludes permits." });
+
+    it("validates", () => {
+        expect(calculator.validate(custom())).toEqual([]);
+        expect(calculator.validate({ ...custom(), qtyLabel: " " })[0]).toMatch(/quantity label/);
+        expect(calculator.validate({ ...custom(), qty: 0 })[0]).toMatch(/starting quantity/);
+        expect(calculator.validate({ ...custom(), option1Name: "", option2Name: "" })[0]).toMatch(/at least one option/);
+        expect(calculator.validate({ ...custom(), option1Rate: 0, option2Name: "" })[0]).toMatch(/at least one option/);
+        expect(calculator.validate({ ...custom(), option2Rate: "x" })[0]).toMatch(/Every named option/);
+        expect(calculator.validate({ ...custom(), low: 2, high: 1 })[0]).toMatch(/multiplier/);
+        expect(calculator.validate({ ...custom(), option2Name: "" , option2Rate: ""})).toEqual([]);
+    });
+
+    it("escapes every custom label", () => {
+        const html = calculator.render({ ...custom(), title: NASTY, qtyLabel: NASTY, qtyUnit: NASTY, option1Name: NASTY, option2Name: NASTY, option3Name: NASTY, option3Rate: 1, option4Name: NASTY, option4Rate: 1, caption: NASTY, note: NASTY });
+        expect(html).not.toMatch(/<script|<img/i);
+        expect(html).not.toContain('onerror=1>');
+        // title, qty label, 4 options, caption (text and data attribute), note.
+        expect(html.split("&lt;script&gt;").length - 1).toBeGreaterThanOrEqual(9);
+    });
+
+    it("skips empty options and renders the first result", () => {
+        const html = calculator.render({ ...custom(), option2Name: "", option3Name: "Tile", option3Rate: 20 });
+        expect(html.match(/<option /g)?.length).toBe(2);
+        expect(html).toContain("Roof size (sq ft)");
+        expect(html).toContain("$9,900 - $14,300");
+    });
+});
