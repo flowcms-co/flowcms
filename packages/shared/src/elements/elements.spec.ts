@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { elementHtml, elementProblems, elementTemplate, expandElements, storedElements } from "./index";
+import { elementHtml, elementProblems, elementTemplate, expandElements, linkedTemplateIds, storedElements } from "./index";
 import { steps } from "./steps";
 import { cost } from "./cost";
 import { table } from "./table";
@@ -238,5 +238,36 @@ describe("custom calculator", () => {
         expect(html.match(/<option /g)?.length).toBe(2);
         expect(html).toContain("Roof size (sq ft)");
         expect(html).toContain("$9,900 - $14,300");
+    });
+});
+
+describe("linked elements", () => {
+    const snap = { ...cost.defaults(), title: "Snapshot title" };
+    const live = { ...cost.defaults(), title: "Live title" };
+    const linked = elementHtml("cost", snap, "tpl1");
+
+    it("stores the link next to the snapshot and reads it back", () => {
+        expect(linked).toContain('data-template="tpl1"');
+        expect(storedElements(linked)[0].templateId).toBe("tpl1");
+        expect(storedElements(elementHtml("cost", snap))[0].templateId).toBeUndefined();
+        expect(linkedTemplateIds(`${linked}${linked}${elementHtml("steps", {}, "tpl2")}`)).toEqual(["tpl1", "tpl2"]);
+    });
+
+    it("delivers the template's current values, from a Map or a plain object", () => {
+        for (const t of [new Map([["tpl1", live]]), { tpl1: live }]) {
+            const out = expandElements(linked, t);
+            expect(out).toContain("Live title");
+            expect(out).not.toContain("Snapshot title");
+        }
+    });
+
+    it("falls back to the snapshot when the template is gone or none is given", () => {
+        expect(expandElements(linked)).toContain("Snapshot title");
+        expect(expandElements(linked, new Map())).toContain("Snapshot title");
+        expect(expandElements(linked, { constructor: live })).toContain("Snapshot title");
+    });
+
+    it("an unlinked element ignores the templates", () => {
+        expect(expandElements(elementHtml("cost", snap), new Map([["tpl1", live]]))).toContain("Snapshot title");
     });
 });

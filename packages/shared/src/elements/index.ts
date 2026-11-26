@@ -48,15 +48,18 @@ export const ELEMENT_TEMPLATES: ElementTemplate[] = [steps, cost, table, calcula
 
 export const elementTemplate = (id: string): ElementTemplate | undefined => ELEMENT_TEMPLATES.find((t) => t.id === id && t.enabled);
 
-/** The stored form of one element. */
-export const elementHtml = (template: string, values: unknown): string =>
-    `<div data-flow-element="${esc(template)}" data-values="${esc(safeJson(values ?? {}))}"></div>`;
+/** The stored form of one element. With `templateId` it is linked to a workspace template, and `values` is only the fallback snapshot. */
+export const elementHtml = (template: string, values: unknown, templateId?: string): string =>
+    `<div data-flow-element="${esc(template)}"${templateId ? ` data-template="${esc(templateId)}"` : ""} data-values="${esc(safeJson(values ?? {}))}"></div>`;
 
 const STORED = /<div\b[^>]*?\sdata-flow-element\s*=\s*(?:"([\w-]*)"|'([\w-]*)')[^>]*>\s*<\/div>/gi;
 const unescape = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
+/** The template id a stored element is linked to, if any. */
+const linkOf = (tag: string): string | undefined => /\sdata-template\s*=\s*(?:"([\w-]+)"|'([\w-]+)')/i.exec(tag)?.slice(1).find(Boolean);
+
 /** Pull the template and values out of one stored element tag. Values is null when the JSON cannot be read. */
-function readStored(tag: string, template: string): { template: string; values: unknown } {
+function readStored(tag: string, template: string): { template: string; values: unknown; templateId?: string } {
     const m = /\sdata-values\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
     let values: unknown = null;
     try {
@@ -64,11 +67,11 @@ function readStored(tag: string, template: string): { template: string; values: 
     } catch {
         values = null;
     }
-    return { template, values };
+    return { template, values, templateId: linkOf(tag) };
 }
 
 /** Each stored element in a rich text value, in order. */
-export function storedElements(html: string): { template: string; values: unknown }[] {
+export function storedElements(html: string): { template: string; values: unknown; templateId?: string }[] {
     if (!html || !html.includes("data-flow-element")) return [];
     return [...html.matchAll(STORED)].map((m) => readStored(m[0], m[1] ?? m[2] ?? ""));
 }
@@ -79,12 +82,21 @@ export function renderElement(template: string, values: unknown): string {
     return t ? `<div class="flow-el flow-el--${esc(t.id)}" data-flow-element="${esc(t.id)}">${t.render(values)}</div>` : "";
 }
 
-/** Public delivery: every stored element becomes finished, escaped HTML. Anything that cannot be read is dropped, never half shown. */
-export function expandElements(html: string): string {
+/** The ids of the workspace templates a rich text value links to. */
+export const linkedTemplateIds = (html: string): string[] => [...new Set(storedElements(html).flatMap((e) => (e.templateId ? [e.templateId] : [])))];
+
+/**
+ * Public delivery: every stored element becomes finished, escaped HTML. Anything that cannot be read is dropped, never half shown.
+ * A linked element shows its template's current values from `templates` (id to values); with no such template it shows its own snapshot.
+ */
+export function expandElements(html: string, templates?: ReadonlyMap<string, unknown> | Record<string, unknown>): string {
     if (!html || !html.includes("data-flow-element")) return html;
+    const current = (id: string): unknown => (templates instanceof Map ? templates.get(id) : templates ? Object.hasOwn(templates, id) ? (templates as Record<string, unknown>)[id] : undefined : undefined);
     return html.replace(STORED, (tag, a: string | undefined, b: string | undefined) => {
-        const { template, values } = readStored(tag, a ?? b ?? "");
-        return values === null ? "" : renderElement(template, values);
+        const { template, values, templateId } = readStored(tag, a ?? b ?? "");
+        const live = templateId ? current(templateId) : undefined;
+        const use = live !== undefined ? live : values;
+        return use === null ? "" : renderElement(template, use);
     });
 }
 
