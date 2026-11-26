@@ -119,4 +119,11 @@ describe("elements style", () => {
     it("the classic sheet is byte for byte the v2.3.2 sheet", () => {
         expect(createHash("sha256").update(CLASSIC_CSS).digest("hex")).toBe("f117f8a76f5caba9bf55019f76d297e37305dd91630e639609b9cf5465daaa61");
     });
+
+    it("modern restyles cost, steps and table; classic never carries those rules", () => {
+        for (const rule of [".flow-el--cost .el-card{", ".flow-el--steps .el-n{", ".flow-el--table .el-tw{"]) {
+            expect(MODERN_CSS).toContain(rule);
+            expect(CLASSIC_CSS).not.toContain(rule);
+        }
+    });
 });

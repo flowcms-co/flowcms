@@ -171,7 +171,7 @@ const MODERN_ELEMENTS = `.flow-el{--bd:color-mix(in srgb,var(--el-border) 75%,va
 .flow-el--cost .el-big{margin-top:6px;font-size:clamp(1.75em,9cqi,2.5em);line-height:1.1;letter-spacing:-.01em}
 .flow-el--cost .el-side{border-color:var(--bd)}
 .flow-el--cost .el-side b{font-size:1.125em;font-weight:700;font-variant-numeric:tabular-nums}
-.flow-el--cost .el-track{height:6px;background:color-mix(in srgb,var(--el-border) 80%,var(--el-text))}
+.flow-el--cost .el-track{height:6px;background:color-mix(in srgb,var(--el-accent) 12%,var(--el-surface))}
 .flow-el--cost .el-fill{background:color-mix(in srgb,var(--el-accent) 75%,var(--el-surface))}
 .flow-el--cost .el-dot{width:14px;height:14px;border-width:2px}
 .flow-el--cost .el-avg{color:var(--ac-tx);font-weight:600}
@@ -202,7 +202,7 @@ const MODERN_ELEMENTS = `.flow-el{--bd:color-mix(in srgb,var(--el-border) 75%,va
 const MODERN_NARROW = `@container (max-width:419px){
 .flow-el .el-table tr{border-bottom:1px solid var(--bd);padding:4px 0}
 .flow-el .el-table tbody tr:last-child{border-bottom:0}
-.flow-el .el-table td,.flow-el .el-table tbody tr:last-child td{border-bottom:0;padding:8px 16px}
+.flow-el .el-table td,.flow-el .el-table tbody tr:last-child td{border-bottom:0;padding:8px 20px}
 .flow-el .el-table td:before{font-weight:600;font-size:.8125em}
 }`;
 
