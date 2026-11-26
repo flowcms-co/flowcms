@@ -1,15 +1,17 @@
 import { esc, num, str, usd } from "./util";
 import type { ElementField, ElementTemplate } from "./index";
+import { blankConfig, normConfig, renderBuilder, validateConfig } from "./builder";
 
-export type Preset = "drying-cost" | "insurance-out-of-pocket" | "custom";
+/** "builder" is the one offered for new elements. The other three are kept so stored elements keep rendering and stay editable. */
+export type Preset = "builder" | "drying-cost" | "insurance-out-of-pocket" | "custom";
 
 const read = (values: unknown) => {
     const v = (values && typeof values === "object" ? values : {}) as Record<string, unknown>;
-    const preset: Preset = v.preset === "insurance-out-of-pocket" || v.preset === "custom" ? v.preset : "drying-cost";
+    const preset: Preset = v.preset === "insurance-out-of-pocket" || v.preset === "custom" || v.preset === "builder" ? v.preset : "drying-cost";
     const options = [1, 2, 3, 4].map((i) => ({ name: str(v[`option${i}Name`]), rate: num(v[`option${i}Rate`]) })).filter((o) => o.name);
     return {
         title: str(v.title), preset, clean: num(v.rateClean), gray: num(v.rateGray), black: num(v.rateBlack),
-        qtyLabel: str(v.qtyLabel), optLabel: str(v.optLabel), qty: num(v.qty), qtyUnit: str(v.qtyUnit), options, low: num(v.low), high: num(v.high), caption: str(v.caption), note: str(v.note),
+        qtyLabel: str(v.qtyLabel), optLabel: str(v.optLabel), qty: num(v.qty), qtyUnit: str(v.qtyUnit), options, low: num(v.low), high: num(v.high), caption: str(v.caption), note: str(v.note), config: v.config,
     };
 };
 
@@ -35,7 +37,7 @@ const customResult = (qty: number, rate: number, lo: number, hi: number) => {
 export const calculator: ElementTemplate = {
     id: "calculator",
     name: "Calculator",
-    description: "A small working calculator with presets.",
+    description: "A working calculator you build yourself: fields, options, extras and a price range.",
     enabled: true,
     fields: [
         { key: "title", label: "Title", type: "text" },
@@ -65,12 +67,11 @@ export const calculator: ElementTemplate = {
         { key: "caption", label: "Custom: result caption", type: "text" },
         { key: "note", label: "Custom: note under the result (optional)", type: "text" },
     ],
-    defaults: () => ({ title: "House drying cost estimator", preset: "drying-cost", rateClean: 3.75, rateGray: 4.5, rateBlack: 7,
-        qtyLabel: "Quantity", optLabel: "Option", qty: 100, qtyUnit: "", option1Name: "Standard", option1Rate: 10, option2Name: "", option2Rate: "", option3Name: "", option3Rate: "", option4Name: "", option4Rate: "",
-        low: 0.8, high: 1.25, caption: "Estimated cost", note: "",
-    }),
+    // New elements are always the builder. The legacy preset fields above stay so old elements remain editable.
+    defaults: () => ({ preset: "builder", config: blankConfig() }),
     validate(values) {
         const v = read(values);
+        if (v.preset === "builder") return validateConfig(normConfig(v.config));
         if (v.preset === "custom") {
             const out: string[] = [];
             if (!v.qtyLabel) out.push("The quantity label cannot be empty.");
@@ -85,6 +86,7 @@ export const calculator: ElementTemplate = {
     },
     render(values) {
         const v = read(values);
+        if (v.preset === "builder") return renderBuilder(v.config);
         const title = v.title ? `<p class="el-title">${esc(v.title)}</p>` : "";
         const sel = (cur: string, opts: [string, string][]) => opts.map(([val, l]) => `<option value="${val}"${val === cur ? " selected" : ""}>${l}</option>`).join("");
         let attrs: string, fields: string, r: { cap: string; value: string; note: string };

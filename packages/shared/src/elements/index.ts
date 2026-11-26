@@ -18,6 +18,9 @@ import { calculator } from "./calculator";
 export { elementsCss, BASE_CSS, DEFAULT_THEME_CSS } from "./css";
 export { ELEMENTS_JS } from "./js";
 export { safeJson } from "./util";
+export { flowCalc, flowBind } from "./calc-core";
+export { blankConfig, normConfig, pruneConfig, renderBuilder, validateConfig, MAX_FIELDS, MAX_OPTIONS, MAX_PLAN_OPTIONS, MAX_ADVICE } from "./builder";
+export type { BuilderConfig, CalcField, CalcOption, CalcPlan, NumberField, ChoiceField, AddonField, PlanOption, Pair, ShowIf } from "./builder";
 export * from "./theme";
 export type { StepsValues } from "./steps";
 

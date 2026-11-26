@@ -191,7 +191,9 @@ describe("elements.js", () => {
         expect(ELEMENTS_JS).toContain("window");
         expect(ELEMENTS_JS).toContain("FlowElements");
         expect(() => new Function(ELEMENTS_JS)).not.toThrow();
-        expect(ELEMENTS_JS).not.toMatch(/innerHTML/);
+        // The one place markup is set is the builder result, which flowCalc has escaped value by value.
+        expect(ELEMENTS_JS.match(/innerHTML/g)).toHaveLength(1);
+        expect(ELEMENTS_JS).toContain("res.innerHTML = out.html");
     });
 });
 

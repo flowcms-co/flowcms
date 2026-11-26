@@ -1,12 +1,19 @@
+import { flowBind, flowCalc } from "./calc-core";
+
 /**
  * What GET /api/public/elements.js serves. A small vanilla script that makes every
  * `.flow-el--calculator` live. The server already renders the full static markup, so the page
  * reads fine without it. `window.FlowElements.init(root)` is safe to call again and again:
- * a calculator is bound once. Results are written with textContent, never innerHTML.
- * The maths mirrors calculator.ts.
+ * a calculator is bound once. The older presets write results with textContent; the builder writes
+ * markup that flowCalc has already escaped value by value.
+ * The builder calculator is not mirrored: the script embeds the source text of flowCalc and
+ * flowBind from calc-core.ts, the same functions the server render and the Studio preview run.
+ * (The older fixed presets keep their small hand-kept maths below.)
  */
 export const ELEMENTS_JS = `(function (w, d) {
   if (w.FlowElements && w.FlowElements.init) { w.FlowElements.init(); return; }
+  var flowCalc = ${flowCalc.toString()};
+  var flowBind = ${flowBind.toString()};
   function usd(n) { return "$" + Math.round(n).toLocaleString("en-US"); }
   function r10(x) { return Math.round(x / 10) * 10; }
   function n(x) { x = Number(x); return x > 0 && isFinite(x) ? x : 0; }
@@ -40,6 +47,7 @@ export const ELEMENTS_JS = `(function (w, d) {
     list.forEach(function (box) {
       if (box.getAttribute("data-flow-bound")) return;
       box.setAttribute("data-flow-bound", "1");
+      if (flowBind(box, flowCalc)) return;
       box.addEventListener("input", function () { update(box); });
       box.addEventListener("change", function () { update(box); });
       update(box);

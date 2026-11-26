@@ -52,6 +52,19 @@ export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-wid
 .flow-el .el-res{margin-top:20px;border-radius:calc(var(--el-radius) * .75);background:var(--el-panel);padding:20px}
 .flow-el .el-res .v{font-size:2em;font-weight:800;line-height:1.2;color:var(--el-accent)}
 .flow-el .el-res .el-note{margin:4px 0 0;font-size:.875em;color:var(--el-muted)}
+.flow-el .el-intro{margin:-12px 0 20px;color:var(--el-muted)}
+.flow-el [hidden]{display:none!important}
+.flow-el .el-un{font-weight:400;color:var(--el-muted)}
+.flow-el .el-lb{display:block;font-size:.875em;font-weight:600;color:var(--el-text)}
+.flow-el .el-opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.flow-el .el-opts button{min-height:44px;padding:8px 16px;border:1px solid var(--el-border);border-radius:calc(var(--el-radius) * .6);background:var(--el-surface);font:inherit;font-size:.875em;font-weight:600;color:var(--el-text);cursor:pointer}
+.flow-el .el-opts button[aria-pressed="true"]{border-color:var(--el-accent);background:color-mix(in srgb,var(--el-accent) 12%,transparent);color:var(--el-accent)}
+.flow-el .el-cf .el-chk{display:flex;align-items:center;gap:8px;min-height:44px}
+.flow-el .el-cf .el-chk input{width:auto;min-height:0;margin:0}
+.flow-el .el-bd{width:100%;margin:8px 0 0;border-collapse:collapse;font-size:.875em}
+.flow-el .el-bd td{padding:6px 0;border-bottom:1px solid var(--el-border);vertical-align:top}
+.flow-el .el-bd td:last-child{text-align:right;white-space:nowrap;padding-left:12px}
+.flow-el .el-res .el-adv{font-weight:600;color:var(--el-text)}
 .flow-el .el-fine{margin:12px 0 0;font-size:.75em;color:var(--el-muted)}
 @container (min-width:420px){.flow-el .el-cf{grid-template-columns:1fr 1fr}.flow-el .el-cf .full{grid-column:1/-1}}
 @container (min-width:520px){.flow-el .el-grid{grid-template-columns:minmax(0,1fr) 11em}.flow-el .el-side{grid-template-columns:1fr;border-top:0;border-left:1px solid var(--el-border)}.flow-el .el-big{font-size:clamp(1.25em,5.2cqi,2.4em)}}

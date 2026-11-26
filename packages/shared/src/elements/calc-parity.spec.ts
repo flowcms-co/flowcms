@@ -5,7 +5,7 @@ import { calculator } from "./calculator";
 import { ELEMENTS_JS } from "./js";
 
 describe("custom calculator parity", () => {
-    const custom = () => ({ ...(calculator.defaults() as Record<string, unknown>), preset: "custom", qtyLabel: "Roof size (sq ft)", qty: 2000, option1Name: "Shingle", option1Rate: 5.5, option2Name: "Metal", option2Rate: 12, low: 0.9, high: 1.3, caption: "Roof estimate", note: "Excludes permits." });
+    const custom = () => ({ preset: "custom", title: "House drying cost estimator", rateClean: 3.75, rateGray: 4.5, rateBlack: 7, optLabel: "Option", qtyUnit: "", qtyLabel: "Roof size (sq ft)", qty: 2000, option1Name: "Shingle", option1Rate: 5.5, option2Name: "Metal", option2Rate: 12, low: 0.9, high: 1.3, caption: "Roof estimate", note: "Excludes permits." });
 
     it("renders the same first result the script computes, and after a change", () => {
         document.body.innerHTML = `<div class="flow-el flow-el--calculator">${calculator.render(custom())}</div>`;
