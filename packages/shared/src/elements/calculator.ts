@@ -9,7 +9,7 @@ const read = (values: unknown) => {
     const options = [1, 2, 3, 4].map((i) => ({ name: str(v[`option${i}Name`]), rate: num(v[`option${i}Rate`]) })).filter((o) => o.name);
     return {
         title: str(v.title), preset, clean: num(v.rateClean), gray: num(v.rateGray), black: num(v.rateBlack),
-        qtyLabel: str(v.qtyLabel), qty: num(v.qty), qtyUnit: str(v.qtyUnit), options, low: num(v.low), high: num(v.high), caption: str(v.caption), note: str(v.note),
+        qtyLabel: str(v.qtyLabel), optLabel: str(v.optLabel), qty: num(v.qty), qtyUnit: str(v.qtyUnit), options, low: num(v.low), high: num(v.high), caption: str(v.caption), note: str(v.note),
     };
 };
 
@@ -54,6 +54,7 @@ export const calculator: ElementTemplate = {
         { key: "rateBlack", label: "Black water rate ($ per sq ft)", type: "number" },
         { key: "qtyLabel", label: "Custom: quantity label", type: "text", hint: "For example: Roof size (sq ft), Number of outlets." },
         { key: "qty", label: "Custom: starting quantity", type: "number" },
+        { key: "optLabel", label: "Custom: option picker label", type: "text", hint: "For example: Roof material, Type of pest. Default: Option." },
         { key: "qtyUnit", label: "Custom: rate unit (optional)", type: "text", hint: "Shown beside each rate, for example: sq ft, outlet." },
         ...[1, 2, 3, 4].flatMap((i): ElementField[] => [
             { key: `option${i}Name`, label: `Custom: option ${i} name${i > 1 ? " (optional)" : ""}`, type: "text" },
@@ -65,7 +66,7 @@ export const calculator: ElementTemplate = {
         { key: "note", label: "Custom: note under the result (optional)", type: "text" },
     ],
     defaults: () => ({ title: "House drying cost estimator", preset: "drying-cost", rateClean: 3.75, rateGray: 4.5, rateBlack: 7,
-        qtyLabel: "Quantity", qty: 100, qtyUnit: "", option1Name: "Standard", option1Rate: 10, option2Name: "", option2Rate: "", option3Name: "", option3Rate: "", option4Name: "", option4Rate: "",
+        qtyLabel: "Quantity", optLabel: "Option", qty: 100, qtyUnit: "", option1Name: "Standard", option1Rate: 10, option2Name: "", option2Rate: "", option3Name: "", option3Rate: "", option4Name: "", option4Rate: "",
         low: 0.8, high: 1.25, caption: "Estimated cost", note: "",
     }),
     validate(values) {
@@ -104,7 +105,7 @@ export const calculator: ElementTemplate = {
             const optHtml = opts.map((o, i) => `<option value="${i}" data-rate="${o.rate}"${i === 0 ? " selected" : ""}>${esc(o.name)} (${usd(o.rate)}${v.qtyUnit ? ` per ${esc(v.qtyUnit)}` : ""})</option>`).join("");
             fields =
                 `<div><label>${esc(ql)}<input data-k="a" type="number" min="0" inputmode="decimal" value="${qty}"></label></div>` +
-                `<div><label>Option<select data-k="s">${optHtml}</select></label></div>`;
+                `<div><label>${esc(v.optLabel || "Option")}<select data-k="s">${optHtml}</select></label></div>`;
             r = { cap: esc(cap), value: customResult(qty, opts[0]?.rate ?? 0, lo, hi), note: esc(v.note) };
         } else {
             attrs = `data-preset="insurance"`;
