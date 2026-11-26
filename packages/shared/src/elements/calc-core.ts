@@ -204,6 +204,124 @@ export function flowBind(box: any, calc: any): boolean {
         res.innerHTML = out.html;
         if (open && res.querySelector("details")) res.querySelector("details").open = true;
     };
+    // Custom dropdown over each native select. The select stays the source of truth (and the no-JS fallback).
+    const enhance = (w: any) => {
+        const sel = w.querySelector("select");
+        const lab = w.querySelector("label");
+        if (!sel || !lab || w.querySelector(".el-dd")) return;
+        const doc = sel.ownerDocument;
+        const uid = "el-dd-" + Math.random().toString(36).slice(2, 8);
+        const name = () => {
+            let t = "";
+            lab.childNodes.forEach((n: any) => {
+                if (n !== sel) t += n.textContent;
+            });
+            return t.replace(/\s+/g, " ").trim();
+        };
+        const dd = doc.createElement("div");
+        dd.className = "el-dd";
+        const btn = doc.createElement("button");
+        btn.type = "button";
+        btn.className = "el-dd-b";
+        btn.setAttribute("aria-haspopup", "listbox");
+        btn.setAttribute("aria-expanded", "false");
+        btn.setAttribute("aria-controls", uid);
+        const txt = doc.createElement("span");
+        txt.className = "el-dd-t";
+        btn.appendChild(txt);
+        const list = doc.createElement("div");
+        list.className = "el-dd-l";
+        list.id = uid;
+        list.setAttribute("role", "listbox");
+        list.setAttribute("aria-label", name());
+        list.hidden = true;
+        const rows: any[] = [];
+        Array.prototype.forEach.call(sel.options, (o: any, i: number) => {
+            const r = doc.createElement("div");
+            r.className = "el-dd-opt";
+            r.id = uid + "-" + i;
+            r.setAttribute("role", "option");
+            r.textContent = o.textContent;
+            if (o.title) r.title = o.title;
+            rows.push(r);
+            list.appendChild(r);
+        });
+        dd.appendChild(btn);
+        dd.appendChild(list);
+        lab.parentNode.insertBefore(dd, lab.nextSibling);
+        w.classList.add("el-js");
+        sel.tabIndex = -1;
+        sel.setAttribute("aria-hidden", "true");
+        let act = 0;
+        const sync = () => {
+            rows.forEach((r, i) => {
+                r.setAttribute("aria-selected", String(i === sel.selectedIndex));
+                r.classList.toggle("act", i === act);
+            });
+            const o = sel.options[sel.selectedIndex];
+            txt.textContent = o ? o.textContent : "";
+            btn.setAttribute("aria-label", name() + ": " + txt.textContent);
+            if (!list.hidden && rows[act]) btn.setAttribute("aria-activedescendant", rows[act].id);
+            else btn.removeAttribute("aria-activedescendant");
+        };
+        const show = (on: boolean) => {
+            list.hidden = !on;
+            btn.setAttribute("aria-expanded", String(on));
+            if (on) act = Math.max(0, sel.selectedIndex);
+            sync();
+            if (on && rows[act] && rows[act].scrollIntoView) rows[act].scrollIntoView({ block: "nearest" });
+        };
+        const pick = (i: number) => {
+            show(false);
+            if (i === sel.selectedIndex || i < 0) return;
+            sel.selectedIndex = i;
+            sel.dispatchEvent(new (doc.defaultView as any).Event("change", { bubbles: true }));
+        };
+        const move = (i: number) => {
+            act = Math.min(rows.length - 1, Math.max(0, i));
+            sync();
+            if (rows[act].scrollIntoView) rows[act].scrollIntoView({ block: "nearest" });
+        };
+        btn.addEventListener("click", () => show(list.hidden));
+        btn.addEventListener("keydown", (e: any) => {
+            const k = e.key;
+            if (list.hidden) {
+                if (k === "Enter" || k === " " || k === "ArrowDown" || k === "ArrowUp") {
+                    e.preventDefault();
+                    show(true);
+                }
+                return;
+            }
+            if (k === "ArrowDown") move(act + 1);
+            else if (k === "ArrowUp") move(act - 1);
+            else if (k === "Home") move(0);
+            else if (k === "End") move(rows.length - 1);
+            else if (k === "Enter" || k === " ") pick(act);
+            else if (k === "Escape") show(false);
+            else if (k === "Tab") show(false);
+            else return;
+            if (k !== "Tab") e.preventDefault();
+        });
+        list.addEventListener("mousedown", (e: any) => e.preventDefault());
+        list.addEventListener("click", (e: any) => {
+            const r = e.target && e.target.closest ? e.target.closest(".el-dd-opt") : null;
+            if (r) pick(rows.indexOf(r));
+        });
+        list.addEventListener("mousemove", (e: any) => {
+            const r = e.target && e.target.closest ? e.target.closest(".el-dd-opt") : null;
+            if (r && rows.indexOf(r) !== act) {
+                act = rows.indexOf(r);
+                sync();
+            }
+        });
+        doc.addEventListener("click", (e: any) => {
+            if (!list.hidden && !dd.contains(e.target)) show(false);
+        });
+        sel.addEventListener("change", sync);
+        sel.addEventListener("focus", () => btn.focus());
+        sync();
+    };
+    el.querySelectorAll('[data-t="s"]').forEach(enhance);
     el.addEventListener("input", update);
     el.addEventListener("change", update);
     el.addEventListener("click", (e: any) => {
