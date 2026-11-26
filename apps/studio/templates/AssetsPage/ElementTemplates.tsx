@@ -16,6 +16,7 @@ import Icon from "@/components/ui/Icon";
 import { TierBadge } from "@/components/ui/UpgradeLock";
 import ElementDrawer from "@/components/editor/ElementDrawer";
 import ElementUpgrade from "@/components/editor/ElementUpgrade";
+import SavedTemplates from "./SavedTemplates";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { usePlan } from "@/components/providers/LicenseProvider";
 import { api, ApiError } from "@/lib/api";
@@ -191,7 +192,7 @@ const ElementTemplates = () => {
             </div>
             <div className="mb-4 flex items-start gap-3 rounded-xl bg-lavender-mist p-3 text-caption-1 text-black dark:bg-dark-3 dark:text-white">
                 <Icon className="mt-0.5 h-4 w-4 flex-none fill-primary" name="info" />
-                <p>Each time you insert an element, its values are saved with that page only. Nothing here changes pages that already use one.</p>
+                <p>An element you insert from here is saved with that page only. To share one set of values across pages, save it as a template: pages link to it, and changing the template changes every page that uses it.</p>
             </div>
             <div className="mb-4 flex flex-wrap items-center gap-3">
                 <b className="text-caption-1 text-black dark:text-white">Preview width</b>
@@ -215,6 +216,7 @@ const ElementTemplates = () => {
                     <Card key={t.id} t={t} px={px} onTry={() => setTryT(t)} />
                 ))}
             </div>
+            <SavedTemplates />
             {tryT && <ElementDrawer template={tryT} initial={tryT.defaults()} editing={false} sandbox onSave={() => setTryT(null)} onClose={() => setTryT(null)} />}
             {panel && <ThemePanel onClose={() => setPanel(false)} />}
         </div>

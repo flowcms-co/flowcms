@@ -15,6 +15,9 @@ import { EMOJIS, TEXT_COLORS } from "@/lib/tiptap";
 import { ELEMENT_TEMPLATES, elementTemplate, type ElementTemplate } from "@flowcms/shared/elements";
 import { usePlanIfAny } from "@/components/providers/LicenseProvider";
 import { EDIT_ELEMENT_EVENT, type EditElementDetail } from "@/lib/elements";
+import { api, ApiError } from "@/lib/api";
+import { changeMessage, reloadSavedTemplates, useSavedTemplates, type SavedTemplate } from "@/lib/elementTemplates";
+import { confirm, notice } from "@/components/providers/ConfirmProvider";
 import ElementDrawer from "./ElementDrawer";
 
 const ElementUpgrade = lazy(() => import("./ElementUpgrade"));
@@ -284,15 +287,46 @@ export const TableMenu = ({ editor, iconClass }: { editor: Editor; iconClass?: s
     );
 };
 
+/** The saved templates in the Insert element menu. Reloads each time the menu opens so a copy made elsewhere shows. */
+const SavedList = ({ templates, onPick }: { templates: SavedTemplate[] | null; onPick: (t: SavedTemplate) => void }) => {
+    useEffect(() => {
+        void reloadSavedTemplates();
+    }, []);
+    return (
+        <div data-saved-templates className="mt-1 border-t border-grey-light pt-1 dark:border-grey-light/15">
+            <p className="px-2.5 py-1 text-caption-2 font-semibold text-grey">From a saved template</p>
+            {templates && templates.length === 0 && <p className="px-2.5 py-1 text-caption-2 text-grey">None yet. Use “Save as template” in an element.</p>}
+            <div className="max-h-56 overflow-y-auto">
+                {(templates ?? []).map((t) => (
+                    <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => onPick(t)}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption-1 text-black transition-colors hover:bg-lavender-mist hover:text-primary dark:text-white dark:hover:bg-dark-3"
+                    >
+                        <span className="min-w-0 truncate">{t.name}</span>
+                        <span className="flex-none text-caption-2 text-grey">{elementTemplate(t.element)?.name ?? t.element}</span>
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+type DrawerState = { template: ElementTemplate; values: Record<string, unknown>; pos: number | null; link: { id: string; name: string; pages: number | null } | null };
+
 /**
  * Insert > Element. Lists the premade templates (only the built ones can be picked) and opens the
- * fill drawer. Without the `elements` license the menu stays visible but only offers the upgrade;
- * elements already in the text keep showing, and can be removed but not edited.
- * The drawer also opens from an element's own Edit button (EDIT_ELEMENT_EVENT).
+ * fill drawer, plus the workspace's saved templates, which insert a linked element. Without the
+ * `elements` license the menu stays visible but only offers the upgrade; elements already in the
+ * text keep showing, and can be removed but not edited.
+ * The drawer also opens from an element's own Edit button (EDIT_ELEMENT_EVENT). A linked element
+ * edits its template, after a confirm that names how many pages change.
  */
 export const ElementMenu = ({ editor, iconClass }: { editor: Editor; iconClass?: string }) => {
     const licensed = usePlanIfAny()?.has("elements") ?? false;
-    const [drawer, setDrawer] = useState<{ template: ElementTemplate; values: Record<string, unknown>; pos: number | null } | null>(null);
+    const saved = useSavedTemplates(licensed);
+    const [drawer, setDrawer] = useState<DrawerState | null>(null);
 
     useEffect(() => {
         if (!licensed) return;
@@ -301,23 +335,53 @@ export const ElementMenu = ({ editor, iconClass }: { editor: Editor; iconClass?:
             if (d.editor !== editor) return;
             const node = editor.state.doc.nodeAt(d.pos);
             const template = node ? elementTemplate(String(node.attrs.template)) : undefined;
-            if (node && template) setDrawer({ template, values: (node.attrs.values ?? {}) as Record<string, unknown>, pos: d.pos });
+            if (!node || !template) return;
+            const own = (node.attrs.values ?? {}) as Record<string, unknown>;
+            const id = node.attrs.templateId ? String(node.attrs.templateId) : null;
+            if (!id) return setDrawer({ template, values: own, pos: d.pos, link: null });
+            // A linked element edits the template's current values; a template that is gone leaves the snapshot, unlinked.
+            api<SavedTemplate>(`/element-templates/${id}`)
+                .then((t) => setDrawer({ template, values: t.values, pos: d.pos, link: { id: t.id, name: t.name, pages: t.pages } }))
+                .catch(() => setDrawer({ template, values: own, pos: d.pos, link: null }));
         };
         window.addEventListener(EDIT_ELEMENT_EVENT, on);
         return () => window.removeEventListener(EDIT_ELEMENT_EVENT, on);
     }, [editor, licensed]);
 
-    const save = (values: Record<string, unknown>) => {
+    // The block boundary after the block the cursor is in (after the whole list, table or quote).
+    const insertAt = () => {
+        const { $to, to } = editor.state.selection;
+        return $to.depth >= 1 ? $to.after(1) : to;
+    };
+    /** Put an element (linked when `templateId` is given) in the document: replace the one at `pos`, or insert a new one. */
+    const place = (element: string, values: Record<string, unknown>, templateId: string | null, pos: number | null) => {
+        if (pos !== null) editor.chain().focus().command(({ tr }) => { tr.setNodeMarkup(pos, undefined, { template: element, templateId, values }); return true; }).run();
+        else editor.chain().focus().insertContentAt(insertAt(), { type: "flowElement", attrs: { template: element, templateId, values } }).run();
+    };
+
+    const save = async (values: Record<string, unknown>) => {
         if (!drawer) return;
-        const { template, pos } = drawer;
-        if (pos !== null) {
-            editor.chain().focus().command(({ tr }) => { tr.setNodeMarkup(pos, undefined, { template: template.id, values }); return true; }).run();
-        } else {
-            // The block boundary after the block the cursor is in (after the whole list, table or quote).
-            const { $to, to } = editor.state.selection;
-            const at = $to.depth >= 1 ? $to.after(1) : to;
-            editor.chain().focus().insertContentAt(at, { type: "flowElement", attrs: { template: template.id, values } }).run();
+        const { template, pos, link } = drawer;
+        if (link) {
+            if (!(await confirm({ title: `Update “${link.name}”?`, message: changeMessage(link.name, link.pages ?? 0), confirmLabel: "Update template" }))) return;
+            try {
+                await api(`/element-templates/${link.id}`, { method: "PATCH", body: JSON.stringify({ values }) });
+            } catch (e) {
+                await notice({ title: "The template was not changed", message: e instanceof ApiError ? e.message : "Try again." });
+                return;
+            }
+            void reloadSavedTemplates();
         }
+        place(template.id, values, link?.id ?? null, pos);
+        setDrawer(null);
+    };
+
+    /** Create a template from the drawer's values and link this element to it (also what "Duplicate as new template" does). */
+    const makeTemplate = async (name: string, values: Record<string, unknown>) => {
+        if (!drawer) return;
+        const t = await api<SavedTemplate>("/element-templates", { method: "POST", body: JSON.stringify({ name, element: drawer.template.id, values }) });
+        place(drawer.template.id, values, t.id, drawer.pos);
+        void reloadSavedTemplates();
         setDrawer(null);
     };
 
@@ -332,13 +396,14 @@ export const ElementMenu = ({ editor, iconClass }: { editor: Editor; iconClass?:
                                     key={t.id}
                                     type="button"
                                     disabled={!t.enabled}
-                                    onClick={() => { setDrawer({ template: t, values: t.defaults(), pos: null }); close(); }}
+                                    onClick={() => { setDrawer({ template: t, values: t.defaults(), pos: null, link: null }); close(); }}
                                     className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption-1 text-black transition-colors hover:bg-lavender-mist hover:text-primary disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-black dark:text-white dark:hover:bg-dark-3 dark:disabled:hover:text-white"
                                 >
                                     {t.name}
                                     {!t.enabled && <span className="text-caption-2 text-grey">Coming soon</span>}
                                 </button>
                             ))}
+                            <SavedList templates={saved} onPick={(t) => { place(t.element, t.values, t.id, null); close(); }} />
                         </div>
                     ) : (
                         <Suspense fallback={null}>
@@ -347,7 +412,16 @@ export const ElementMenu = ({ editor, iconClass }: { editor: Editor; iconClass?:
                     )
                 }
             </Popover>
-            {drawer && <ElementDrawer template={drawer.template} initial={drawer.values} editing={drawer.pos !== null} onSave={save} onClose={() => setDrawer(null)} />}
+            {drawer && (
+                <ElementDrawer
+                    template={drawer.template}
+                    initial={drawer.values}
+                    editing={drawer.pos !== null}
+                    templates={{ linked: drawer.link, saveAsTemplate: makeTemplate, duplicate: makeTemplate }}
+                    onSave={save}
+                    onClose={() => setDrawer(null)}
+                />
+            )}
         </>
     );
 };

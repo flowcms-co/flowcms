@@ -4,6 +4,7 @@ import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { elementTemplate, renderElement } from "@flowcms/shared/elements";
 import { usePlanIfAny } from "@/components/providers/LicenseProvider";
 import { EDIT_ELEMENT_EVENT, useElementStyles, type EditElementDetail } from "@/lib/elements";
+import { useSavedTemplates } from "@/lib/elementTemplates";
 
 /** An element inside the editor: the real rendered preview in a frame, with Edit and Remove. */
 const ElementNodeView = ({ node, editor, getPos, deleteNode, selected }: NodeViewProps) => {
@@ -11,7 +12,11 @@ const ElementNodeView = ({ node, editor, getPos, deleteNode, selected }: NodeVie
     const licensed = usePlanIfAny()?.has("elements") ?? false;
     const template = String(node.attrs.template ?? "");
     const t = elementTemplate(template);
-    const values = node.attrs.values;
+    // A linked element shows its template's current values; its own values are only the fallback.
+    const saved = useSavedTemplates(licensed);
+    const linkId = node.attrs.templateId ? String(node.attrs.templateId) : null;
+    const link = linkId ? saved?.find((x) => x.id === linkId) : undefined;
+    const values = link ? link.values : node.attrs.values;
     const html = values === null || values === undefined ? "" : renderElement(template, values);
     const problems = t && values ? t.validate(values) : [];
     const edit = () => {
@@ -23,7 +28,11 @@ const ElementNodeView = ({ node, editor, getPos, deleteNode, selected }: NodeVie
         <NodeViewWrapper data-flow-element-view="" className={`my-4 rounded-xl border bg-white dark:bg-dark-1 ${selected ? "border-primary" : "border-grey-light dark:border-grey-light/15"}`}>
             <div contentEditable={false} className="select-none">
                 <div className="flex items-center justify-between gap-2 border-b border-grey-light px-3 py-1.5 dark:border-grey-light/15">
-                    <span className="text-caption-2 font-semibold text-grey">{t ? t.name : "Unknown element"}</span>
+                    <span className="text-caption-2 font-semibold text-grey">
+                        {t ? t.name : "Unknown element"}
+                        {linkId && link && <span data-element-link className="ml-2 rounded-md bg-lavender-mist px-1.5 py-0.5 text-primary dark:bg-dark-3 dark:text-lilac">Template: {link.name}</span>}
+                        {linkId && saved && !link && <span className="ml-2 text-warning">Template removed, showing the saved copy</span>}
+                    </span>
                     <span className="flex items-center gap-1">
                         {licensed && t && (
                             <button type="button" onClick={edit} className={`${btn} text-primary hover:bg-lavender-mist dark:text-lilac dark:hover:bg-dark-3`}>

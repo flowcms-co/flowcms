@@ -102,7 +102,7 @@ describe("elements in the editor", () => {
         const editor = open(stored);
         const node = editor.state.doc.child(1);
         expect(node.type.name).toBe("flowElement");
-        expect(node.attrs).toEqual({ template: "steps", values });
+        expect(node.attrs).toEqual({ template: "steps", values, templateId: null });
         expect(editor.getHTML()).toBe(stored);
     });
 
@@ -116,6 +116,13 @@ describe("elements in the editor", () => {
         out.ready(baseline);
         expect(out.changed(editor.getHTML())).toBe(true);
         expect(out.current).toBe(`<h2>Costs</h2>\n${elementHtml("steps", values)}\n<p>New words.</p>`);
+    });
+
+    it("a linked element keeps its template id and snapshot byte for byte", () => {
+        const linked = `<p>Intro</p>${elementHtml("steps", values, "tpl123")}<p>After</p>`;
+        const editor = open(linked);
+        expect(editor.state.doc.child(1).attrs).toEqual({ template: "steps", values, templateId: "tpl123" });
+        expect(editor.getHTML()).toBe(linked);
     });
 
     it("an unreadable element is kept as a node, not dropped", () => {

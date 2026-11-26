@@ -5,10 +5,22 @@ import { Dialog, Transition } from "@headlessui/react";
 import { flowBind, flowCalc, renderElement, type BuilderConfig, type ElementField, type ElementTemplate } from "@flowcms/shared/elements";
 import Icon from "@/components/ui/Icon";
 import { useElementStyles } from "@/lib/elements";
+import { pagesWord } from "@/lib/elementTemplates";
 import CalculatorBuilderEditor from "./CalculatorBuilderEditor";
+import NameDialog from "./NameDialog";
 
 type Row = Record<string, string>;
 type Values = Record<string, unknown>;
+
+/** What a template adds to the drawer: the link this element has, and the two ways to use a copy. */
+export type TemplateLink = {
+    /** Set when this element is linked to a workspace template. */
+    linked: { name: string; pages: number | null } | null;
+    /** Create a template from these values and link this element to it. */
+    saveAsTemplate: (name: string, values: Values) => Promise<void>;
+    /** Create a copy from these values under a new name and re-link this element to the copy. */
+    duplicate: (name: string, values: Values) => Promise<void>;
+};
 
 const label = "mb-1 block text-caption-2 font-semibold text-black dark:text-white";
 
@@ -18,6 +30,7 @@ const ElementDrawer = ({
     initial,
     editing,
     sandbox = false,
+    templates,
     onSave,
     onClose,
 }: {
@@ -26,11 +39,14 @@ const ElementDrawer = ({
     editing: boolean;
     /** Try the fields only: nothing is inserted or saved. */
     sandbox?: boolean;
+    templates?: TemplateLink;
     onSave: (values: Values) => void;
     onClose: () => void;
 }) => {
     useElementStyles();
     const [values, setValues] = useState<Values>(initial);
+    const [ask, setAsk] = useState<"save" | "duplicate" | null>(null);
+    const linked = templates?.linked ?? null;
     const set = (key: string, v: unknown) => setValues((cur) => ({ ...cur, [key]: v }));
     const problems = useMemo(() => template.validate(values), [template, values]);
     const preview = useMemo(() => renderElement(template.id, values), [template.id, values]);
@@ -145,6 +161,22 @@ const ElementDrawer = ({
                             </div>
                             <div className={`grid min-h-0 flex-1 gap-0 overflow-y-auto ${builder ? "md:grid-cols-[minmax(0,30rem)_minmax(0,1fr)]" : "md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]"} md:overflow-hidden`}>
                                 <div className="flex flex-col gap-5 p-6 md:overflow-y-auto">
+                                    {templates && linked && (
+                                        <div data-template-panel className="rounded-xl bg-lavender-mist p-3 text-caption-1 text-black dark:bg-dark-3 dark:text-white">
+                                            <p>
+                                                Linked to template <b>{linked.name}</b>
+                                                {linked.pages !== null ? `, used on ${pagesWord(linked.pages)}` : ""}. Saving here changes the template, and every page that uses it.
+                                            </p>
+                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                <button type="button" onClick={() => setAsk("duplicate")} className="btn-secondary h-8">
+                                                    Duplicate as new template
+                                                </button>
+                                                <a href="/assets/elements" target="_blank" rel="noreferrer" className="btn-secondary h-8">
+                                                    Open templates
+                                                </a>
+                                            </div>
+                                        </div>
+                                    )}
                                     {builder ? <CalculatorBuilderEditor value={values.config} onChange={(c: BuilderConfig) => set("config", c)} /> : template.fields.map(field)}
                                 </div>
                                 <div className="border-t border-grey-light bg-lavender-mist/40 p-6 dark:border-grey-light/15 dark:bg-dark-3/40 md:overflow-y-auto md:border-l md:border-t-0">
@@ -161,9 +193,14 @@ const ElementDrawer = ({
                                     <button type="button" onClick={onClose} className="btn-secondary">
                                         {sandbox ? "Close" : "Cancel"}
                                     </button>
+                                    {!sandbox && templates && !linked && (
+                                        <button type="button" onClick={() => setAsk("save")} className="btn-secondary">
+                                            Save as template
+                                        </button>
+                                    )}
                                     {!sandbox && (
                                         <button type="button" onClick={() => onSave(values)} className="btn-primary">
-                                            {editing ? "Save element" : "Insert element"}
+                                            {linked ? "Save to template" : editing ? "Save element" : "Insert element"}
                                         </button>
                                     )}
                                 </div>
@@ -171,6 +208,19 @@ const ElementDrawer = ({
                         </Dialog.Panel>
                     </Transition.Child>
                 </div>
+                {templates && ask && (
+                    <NameDialog
+                        title={ask === "save" ? "Save as template" : "Duplicate as new template"}
+                        hint={ask === "save" ? "Pages you insert it on stay linked: change the template and they all change." : "This element moves to the new copy. The original template and its other pages are not touched."}
+                        initial={ask === "duplicate" && linked ? `${linked.name} 2` : ""}
+                        confirmLabel={ask === "save" ? "Save template" : "Duplicate"}
+                        onSubmit={async (name) => {
+                            await (ask === "save" ? templates.saveAsTemplate(name, values) : templates.duplicate(name, values));
+                            setAsk(null);
+                        }}
+                        onClose={() => setAsk(null)}
+                    />
+                )}
             </Dialog>
         </Transition>
     );

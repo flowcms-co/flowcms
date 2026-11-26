@@ -99,7 +99,8 @@ export const FlowElement = Node.create({
     selectable: true,
     draggable: true,
     addAttributes() {
-        return { template: { default: "steps" }, values: { default: {} } };
+        // templateId: the workspace template this element links to (its values are then only a fallback snapshot).
+        return { template: { default: "steps" }, values: { default: {} }, templateId: { default: null } };
     },
     parseHTML() {
         return [
@@ -113,13 +114,13 @@ export const FlowElement = Node.create({
                     } catch {
                         /* keep null */
                     }
-                    return { template: node.getAttribute("data-flow-element") ?? "", values };
+                    return { template: node.getAttribute("data-flow-element") ?? "", values, templateId: node.getAttribute("data-template") || null };
                 },
             },
         ];
     },
     renderHTML({ node }) {
-        return ["div", { "data-flow-element": String(node.attrs.template), "data-values": safeJson(node.attrs.values ?? {}) }];
+        return ["div", { "data-flow-element": String(node.attrs.template), ...(node.attrs.templateId ? { "data-template": String(node.attrs.templateId) } : {}), "data-values": safeJson(node.attrs.values ?? {}) }];
     },
     addNodeView() {
         return ReactNodeViewRenderer(ElementNodeView);
