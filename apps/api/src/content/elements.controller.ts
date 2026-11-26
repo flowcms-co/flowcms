@@ -1,5 +1,5 @@
 import { Controller, Get, Header } from "@nestjs/common";
-import { elementsCss } from "@flowcms/shared";
+import { ELEMENTS_JS, elementsCss } from "@flowcms/shared";
 import { Public } from "../auth/decorators";
 
 /**
@@ -15,5 +15,13 @@ export class ElementsController {
     @Header("Cache-Control", "public, max-age=300")
     css(): string {
         return elementsCss();
+    }
+
+    /** The small script that makes calculators live. Open, same as the stylesheet. */
+    @Get("elements.js")
+    @Header("Content-Type", "application/javascript; charset=utf-8")
+    @Header("Cache-Control", "public, max-age=300")
+    js(): string {
+        return ELEMENTS_JS;
     }
 }

@@ -95,3 +95,9 @@ export function elementProblems(html: string): string[] {
     }
     return out;
 }
+
+const EXPANDED = /<[a-z][^>]*\sclass\s*=\s*(?:"[^"]*\bflow-el\b[^"]*"|'[^']*\bflow-el\b[^']*')[^>]*>/gi;
+
+/** True when the html holds delivered element markup (a `flow-el` class tag with no `data-values`). Only the stored form may be saved. */
+export const hasExpandedElements = (html: string): boolean =>
+    !!html && html.includes("flow-el") && (html.match(EXPANDED) ?? []).some((tag) => !/\sdata-values\s*=/i.test(tag));

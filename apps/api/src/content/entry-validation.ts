@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { blocking, checkContentRules, elementProblems, issueErrors, publishBlockedMessage, valueFor, type ContentRules, type RuleIssue } from "@flowcms/shared";
+import { blocking, checkContentRules, elementProblems, hasExpandedElements, issueErrors, publishBlockedMessage, valueFor, type ContentRules, type RuleIssue } from "@flowcms/shared";
 
 /** A field definition as authored in the Schema Builder (stored in ContentType.schema). */
 export type SchemaField = {
@@ -166,10 +166,14 @@ export type ValidateOpts = {
 export function validateEntryData(fields: SchemaField[], data: Record<string, unknown>, opts: ValidateOpts): void {
     const errors: Record<string, string> = {};
     validateFields(fields, data, opts, errors, "", true);
+    // Saved rich text must hold the stored form of an element. Delivered markup would lose its values, so refuse it on every save.
+    for (const r of richValues(fields, data, opts.components, "")) {
+        if (hasExpandedElements(r.html)) errors[r.path] = "This rich text holds an element as delivered HTML, which cannot be saved because its values would be lost. Edit the element in the editor instead.";
+    }
     // Elements inside rich text are checked at the moments an entry goes live, whether or not the type has rules.
     if (opts.enforceRules ?? opts.enforceRequired) {
         for (const r of richValues(fields, data, opts.components, "")) {
-            const bad = elementProblems(r.html);
+            const bad = errors[r.path] ? [] : elementProblems(r.html);
             if (bad.length) errors[r.path] = errors[r.path] ? `${errors[r.path]} ${bad.join(" ")}` : bad.join(" ");
         }
     }
@@ -205,7 +209,7 @@ function richValues(fields: SchemaField[], data: Record<string, unknown>, compon
         const value = valueFor(data, field.name);
         const path = prefix ? `${prefix}.${field.name}` : field.name;
         if (field.type === "Rich text") {
-            if (typeof value === "string" && value.includes("data-flow-element")) out.push({ path, html: value });
+            if (typeof value === "string" && value.includes("flow-el")) out.push({ path, html: value });
         } else if (field.type === "Component") {
             const sub = resolveFields(field, components);
             const items = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : [];

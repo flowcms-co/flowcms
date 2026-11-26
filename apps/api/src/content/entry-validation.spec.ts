@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BadRequestException } from "@nestjs/common";
-import { elementHtml } from "@flowcms/shared";
+import { elementHtml, expandElements } from "@flowcms/shared";
 import { contentWarnings, validateEntryData, type SchemaField } from "./entry-validation";
 
 /** Run validation and return the field-keyed error map (empty when it passes). */
@@ -76,5 +76,23 @@ describe("elements in rich text", () => {
         expect(w).toHaveLength(1);
         expect(w[0]).toMatchObject({ path: "body", level: "warn" });
         expect(contentWarnings(fields, { body: good }, null)).toEqual([]);
+    });
+});
+
+describe("delivered element markup is refused on every save", () => {
+    const fields: SchemaField[] = [
+        { name: "body", type: "Rich text" },
+        { name: "blocks", type: "Component", repeatable: true, fields: [{ name: "content", type: "Rich text" }] },
+    ];
+    const delivered = expandElements(elementHtml("steps", { title: "t", layout: "horizontal", steps: [1, 2, 3].map((n) => ({ label: `L${n}`, time: "", text: `T${n}` })) }));
+
+    it("refuses expanded markup, in a draft save too, at the field path", () => {
+        expect(errorsFor(fields, { body: `<p>x</p>${delivered}` }, false).body).toMatch(/delivered HTML/);
+        expect(errorsFor(fields, { blocks: [{ content: delivered }] }, false)["blocks[0].content"]).toMatch(/delivered HTML/);
+    });
+
+    it("lets the stored form and ordinary markup through", () => {
+        expect(errorsFor(fields, { body: `<p class="flow-elsewhere">x</p>` }, false)).toEqual({});
+        expect(errorsFor(fields, { body: elementHtml("steps", { steps: [] }) }, false)).toEqual({});
     });
 });
