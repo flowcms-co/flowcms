@@ -63,7 +63,7 @@ const ElementDrawer = ({
         return (
             <fieldset key={f.key}>
                 <legend className={label}>
-                    {f.label} ({rows.length} of {f.min} to {f.max})
+                    {f.label} ({rows.length} added, {f.min} to {f.max} allowed)
                 </legend>
                 <div className="flex flex-col gap-3">
                     {rows.map((r, i) => (
