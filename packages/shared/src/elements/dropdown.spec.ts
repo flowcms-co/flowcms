@@ -16,7 +16,9 @@ const cfg = {
     result: { label: "Est", breakdown: false },
 };
 
-const setup = () => {
+const setup = (style = "modern") => {
+    document.head.innerHTML = `<style>:root{--el-style:${style}}</style>`;
+    delete (window as any).FlowElements;
     document.body.innerHTML = `<div class="flow-el flow-el--calculator">${calculator.render({ preset: "builder", config: cfg })}</div>`;
     new Function(ELEMENTS_JS)();
     const q = <T extends Element>(s: string) => document.querySelector<T>(s)!;
@@ -60,5 +62,16 @@ describe("custom dropdown", () => {
         btn.click();
         document.body.click();
         expect(list.hidden).toBe(true);
+    });
+    it("is skipped under the Classic style: the native select stays", () => {
+        document.head.innerHTML = "<style>:root{--el-style:classic}</style>";
+        delete (window as any).FlowElements;
+        document.body.innerHTML = `<div class="flow-el flow-el--calculator">${calculator.render({ preset: "builder", config: cfg })}</div>`;
+        new Function(ELEMENTS_JS)();
+        expect(document.querySelector(".el-dd")).toBeNull();
+        const sel = document.querySelector<HTMLSelectElement>("select")!;
+        sel.value = "C";
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        expect(document.querySelector(".el-res .v")!.textContent).toContain("500");
     });
 });

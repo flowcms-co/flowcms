@@ -195,6 +195,7 @@ export function flowBind(box: any, calc: any): boolean {
         return st;
     };
     const update = () => {
+        upgrade();
         const out = calc(cfg, read());
         el.querySelectorAll("[data-f]").forEach((w: any) => {
             w.hidden = !!out.hidden[w.getAttribute("data-f")];
@@ -319,9 +320,28 @@ export function flowBind(box: any, calc: any): boolean {
         });
         sel.addEventListener("change", sync);
         sel.addEventListener("focus", () => btn.focus());
+        // The native popup must never open: a click on the label or the hidden select goes to the button instead.
+        sel.addEventListener("mousedown", (e: any) => e.preventDefault());
+        lab.addEventListener("click", (e: any) => {
+            e.preventDefault();
+            btn.focus();
+        });
         sync();
     };
-    el.querySelectorAll('[data-t="s"]').forEach(enhance);
+    // Only the Modern style (--el-style from the theme sheet) gets the custom dropdown; Classic keeps the native select.
+    const win = el.ownerDocument.defaultView;
+    const modern = () => {
+        try {
+            return win.getComputedStyle(el).getPropertyValue("--el-style").trim() === "modern";
+        } catch {
+            return false;
+        }
+    };
+    const upgrade = () => {
+        if (modern()) el.querySelectorAll('[data-t="s"]').forEach(enhance);
+    };
+    upgrade();
+    win.addEventListener("load", upgrade);
     el.addEventListener("input", update);
     el.addEventListener("change", update);
     el.addEventListener("click", (e: any) => {

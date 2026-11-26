@@ -105,6 +105,24 @@ const ThemePanel = ({ onClose }: { onClose: () => void }) => {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
                 <p className="mb-2 text-caption-2 text-grey">Changes show live on every preview. One theme for every element, in the editor and on your site.</p>
+                <div className="border-b border-grey-light py-2 dark:border-grey-light/15">
+                    <span className="mb-1.5 block text-caption-1 font-semibold text-black dark:text-white">Style</span>
+                    <div role="group" aria-label="Element style" className="grid grid-cols-2 gap-2">
+                        {([["classic", "Classic", "The original look with the browser's own dropdown."], ["modern", "Modern", "Lighter outlines and a custom dropdown."]] as const).map(([m, l, d]) => (
+                            <button key={m} type="button" aria-pressed={draft.style === m} onClick={() => change({ style: m })} className={`rounded-xl border p-2 text-left ${draft.style === m ? "border-primary bg-lavender-mist dark:bg-dark-3" : "border-grey-light dark:border-grey-light/15"}`}>
+                                <span aria-hidden="true" className="mb-1.5 block rounded-lg bg-white p-2 dark:bg-dark-2">
+                                    {m === "classic" ? (
+                                        <span className="block h-6 rounded-md border" style={{ borderColor: draft.border, background: draft.surface }} />
+                                    ) : (
+                                        <span className="block h-6 rounded-full border" style={{ borderColor: `color-mix(in srgb, ${draft.accent} 38%, ${draft.surface})`, background: `color-mix(in srgb, ${draft.accent} 8%, ${draft.surface})` }} />
+                                    )}
+                                </span>
+                                <span className="block text-caption-1 font-semibold text-black dark:text-white">{l}</span>
+                                <span className="block text-caption-2 text-grey">{d}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
                 {THEME_COLOR_KEYS.map((k) => (
                     <Row key={k} label={THEME_LABELS[k]} value={draft[k].toLowerCase()}>
                         <input type="color" aria-label={THEME_LABELS[k]} value={draft[k].toLowerCase()} onChange={(e) => change({ [k]: e.target.value })} className="h-8 w-10 cursor-pointer rounded-md border border-grey-light bg-white p-0.5" />

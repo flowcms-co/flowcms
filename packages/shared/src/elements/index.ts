@@ -15,7 +15,7 @@ import { cost } from "./cost";
 import { table } from "./table";
 import { calculator } from "./calculator";
 
-export { elementsCss, BASE_CSS, DEFAULT_THEME_CSS } from "./css";
+export { elementsCss, BASE_CSS, CLASSIC_CSS, MODERN_CSS, DEFAULT_THEME_CSS } from "./css";
 export { ELEMENTS_JS } from "./js";
 export { safeJson } from "./util";
 export { flowCalc, flowBind } from "./calc-core";

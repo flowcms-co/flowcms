@@ -3,8 +3,8 @@ import { DEFAULT_THEME, themeCss } from "./theme";
 /** The default theme as CSS. A workspace theme replaces it through `themeCss`. */
 export const DEFAULT_THEME_CSS = themeCss(DEFAULT_THEME);
 
-/** Base styles for every element: layout only, all colour comes from the --el-* variables. */
-export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-width:100%;margin:1.5rem 0;font-family:var(--el-font);color:var(--el-text);line-height:1.4;overflow-wrap:anywhere}
+/** Layout every style shares: the element shell, steps, cost and table. All colour comes from the --el-* variables. */
+const HEAD = `.flow-el{container-type:inline-size;min-width:0;max-width:100%;margin:1.5rem 0;font-family:var(--el-font);color:var(--el-text);line-height:1.4;overflow-wrap:anywhere}
 .flow-el *{box-sizing:border-box}
 .flow-el .el-title{margin:0;font-family:var(--el-font);font-size:1.5em;font-weight:800;line-height:1.2;color:var(--el-text)}
 .flow-el .el-steps-card{padding:24px;border:1px solid var(--el-border);border-radius:var(--el-radius);background:var(--el-surface);box-shadow:0 1px 2px rgba(0,0,0,.05)}
@@ -43,7 +43,37 @@ export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-wid
 .flow-el .el-table th{background:var(--el-surface);font-weight:700;border-bottom:2px solid var(--el-rule)}
 .flow-el .el-table tbody tr:nth-child(odd) td{background:var(--el-surface)}
 .flow-el .el-table tbody tr:nth-child(even) td{background:var(--el-panel)}
-.flow-el .el-calc{--bd:color-mix(in srgb,var(--el-border) 75%,var(--el-surface));--bd-h:color-mix(in srgb,var(--el-border) 70%,var(--el-text));--ac-bd:color-mix(in srgb,var(--el-accent) 38%,var(--el-surface));--ac-tx:color-mix(in srgb,var(--el-accent) 70%,var(--el-text));--ring:0 0 0 3px color-mix(in srgb,var(--el-accent) 16%,transparent)}
+`;
+
+/** The calculator controls as shipped in v2.3.2 (the Classic style). */
+const CALC_CLASSIC = `.flow-el .el-calc .el-card{padding:24px}
+.flow-el .el-calc .el-title{font-size:1.25em;margin-bottom:20px}
+.flow-el .el-cf{display:grid;gap:16px}
+.flow-el .el-cf label{display:block;font-size:.875em;font-weight:600;color:var(--el-text)}
+.flow-el .el-cf input,.flow-el .el-cf select{min-height:44px;transition:border-color .15s,box-shadow .15s;margin-top:4px;width:100%;border:1px solid var(--el-border);border-radius:calc(var(--el-radius) * .6);background:var(--el-surface);padding:10px 12px;font:inherit;font-size:calc(1em / .875);color:var(--el-text);outline:0}
+.flow-el .el-cf input:focus,.flow-el .el-cf select:focus{border-color:var(--el-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--el-accent) 30%,transparent)}
+.flow-el .el-res{margin-top:20px;border-radius:calc(var(--el-radius) * .75);background:var(--el-panel);padding:20px}
+.flow-el .el-res .v{font-size:2em;font-weight:800;line-height:1.2;color:var(--el-accent)}
+.flow-el .el-res .el-note{margin:4px 0 0;font-size:.875em;color:var(--el-muted)}
+.flow-el .el-intro{margin:-12px 0 20px;color:var(--el-muted)}
+.flow-el [hidden]{display:none!important}
+.flow-el .el-un{font-weight:400;color:var(--el-muted)}
+.flow-el .el-lb{display:block;font-size:.875em;font-weight:600;color:var(--el-text)}
+.flow-el .el-opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.flow-el .el-opts button{min-height:44px;padding:8px 16px;border:1px solid var(--el-border);border-radius:calc(var(--el-radius) * .6);background:var(--el-surface);font:inherit;font-size:.875em;font-weight:600;color:var(--el-text);cursor:pointer}
+.flow-el .el-opts button[aria-pressed="true"]{border-color:var(--el-accent);background:color-mix(in srgb,var(--el-accent) 12%,transparent);color:var(--el-accent)}
+.flow-el .el-cf .el-chk{display:flex;align-items:center;gap:8px;min-height:44px}
+.flow-el .el-cf .el-chk input{width:auto;min-height:0;margin:0}
+.flow-el .el-bd{width:100%;margin:8px 0 0;border-collapse:collapse;font-size:.875em}
+.flow-el .el-bd td{padding:6px 0;border-bottom:1px solid var(--el-border);vertical-align:top}
+.flow-el .el-bd td:last-child{text-align:right;white-space:nowrap;padding-left:12px}
+.flow-el .el-res .el-adv{font-weight:600;color:var(--el-text)}
+.flow-el .el-fine{margin:12px 0 0;font-size:.75em;color:var(--el-muted)}
+@container (min-width:420px){.flow-el .el-cf{grid-template-columns:1fr 1fr}.flow-el .el-cf .full{grid-column:1/-1}}
+`;
+
+/** The modern calculator controls: lighter outlines and a custom dropdown. */
+const CALC_MODERN = `.flow-el .el-calc{--bd:color-mix(in srgb,var(--el-border) 75%,var(--el-surface));--bd-h:color-mix(in srgb,var(--el-border) 70%,var(--el-text));--ac-bd:color-mix(in srgb,var(--el-accent) 38%,var(--el-surface));--ac-tx:color-mix(in srgb,var(--el-accent) 70%,var(--el-text));--ring:0 0 0 3px color-mix(in srgb,var(--el-accent) 16%,transparent)}
 .flow-el .el-calc .el-card{padding:24px;overflow:visible}
 .flow-el .el-calc .el-title{font-size:1.25em;margin-bottom:20px}
 .flow-el .el-cf{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}
@@ -64,7 +94,7 @@ export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-wid
 .flow-el .el-dd-b:after,.flow-el .el-dd-opt:after{content:"";flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:var(--ic) center/contain no-repeat;mask:var(--ic) center/contain no-repeat}
 .flow-el .el-dd-b:after{--ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 6l4.5 4.5L12.5 6'/%3E%3C/svg%3E");transition:transform .2s}
 .flow-el .el-dd-b[aria-expanded=true]:after{transform:rotate(180deg)}
-.flow-el .el-dd-l{position:absolute;z-index:30;top:calc(100% + 6px);left:0;min-width:100%;width:max-content;max-width:min(32em,calc(100cqi - 32px));margin:0;padding:6px;border:1px solid var(--bd);border-radius:calc(var(--el-radius) * 1.1);background:var(--el-surface);box-shadow:0 12px 32px rgba(24,24,27,.12),0 2px 6px rgba(24,24,27,.05);max-height:18em;overflow-y:auto;list-style:none}
+.flow-el .el-dd-l{position:absolute;z-index:30;top:calc(100% + 6px);left:0;min-width:100%;width:max-content;max-width:min(32em,calc(100cqi - 32px));margin:0;padding:6px;border:1px solid var(--bd);border-radius:calc(var(--el-radius) * 1.1);background:var(--el-surface);box-shadow:0 12px 32px color-mix(in srgb,var(--el-text) 14%,transparent),0 2px 6px color-mix(in srgb,var(--el-text) 6%,transparent);max-height:18em;overflow-y:auto;list-style:none}
 .flow-el .el-dd-opt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:8px 12px;border-radius:calc(var(--el-radius) * .6);font-size:calc(1em / .875 * .9375);font-weight:400;color:var(--el-text);cursor:pointer;transition:background-color .1s}
 .flow-el .el-dd-opt:after{--ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.5l3.2 3.2L13 4.8'/%3E%3C/svg%3E");color:var(--el-accent);opacity:0}
 .flow-el .el-dd-opt[aria-selected=true]{font-weight:700;color:var(--ac-tx);background:color-mix(in srgb,var(--el-accent) 8%,var(--el-surface))}
@@ -109,7 +139,10 @@ export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-wid
 .flow-el .el-fine{margin:14px 0 0;font-size:.75em;color:var(--el-muted)}
 @container (max-width:419px){.flow-el .el-dd-l{right:0;width:auto;max-width:none}}
 @container (min-width:420px){.flow-el .el-cf{grid-template-columns:repeat(2,minmax(0,1fr))}.flow-el .el-cf .full{grid-column:1/-1}}
-@container (min-width:520px){.flow-el .el-grid{grid-template-columns:minmax(0,1fr) 11em}.flow-el .el-side{grid-template-columns:1fr;border-top:0;border-left:1px solid var(--el-border)}.flow-el .el-big{font-size:clamp(1.25em,5.2cqi,2.4em)}}
+`;
+
+/** The wide and narrow container queries, then reduced motion. */
+const TAIL = `@container (min-width:520px){.flow-el .el-grid{grid-template-columns:minmax(0,1fr) 11em}.flow-el .el-side{grid-template-columns:1fr;border-top:0;border-left:1px solid var(--el-border)}.flow-el .el-big{font-size:clamp(1.25em,5.2cqi,2.4em)}}
 @container (max-width:359px){.flow-el .el-side{grid-template-columns:1fr}}
 @container (max-width:419px){
 .flow-el .el-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
@@ -126,5 +159,18 @@ export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-wid
 @container (max-width:399px){.flow-el .el-head,.flow-el .el-main,.flow-el .el-side{padding:16px}.flow-el .el-bar{padding:8px 16px 28px}.flow-el .el-steps-card,.flow-el .el-calc .el-card{padding:16px}.flow-el .el-title{font-size:1.25em}}
 @media (prefers-reduced-motion:reduce){.flow-el,.flow-el *{transition:none!important;animation:none!important;scroll-behavior:auto!important}}`;
 
+/** The Classic style: byte for byte the v2.3.2 sheet. */
+export const CLASSIC_CSS = HEAD + CALC_CLASSIC + TAIL;
+
+/** The Modern style. */
+export const MODERN_CSS = HEAD + CALC_MODERN + TAIL;
+
+/** Kept for existing imports: the current default style. */
+export const BASE_CSS = MODERN_CSS;
+
+/** Classic, after a live switch from Modern: hide a dropdown the script already added. */
+const CLASSIC_EXTRA = ".flow-el .el-dd{display:none}";
+
 /** What GET /api/public/elements.css serves, and what the Studio preview loads. */
-export const elementsCss = (themeCss: string = DEFAULT_THEME_CSS): string => `${themeCss}\n${BASE_CSS}\n`;
+export const elementsCss = (themeCss: string = DEFAULT_THEME_CSS): string =>
+    /--el-style:classic/.test(themeCss) ? `${themeCss}\n${CLASSIC_CSS}\n${CLASSIC_EXTRA}\n` : `${themeCss}\n${MODERN_CSS}\n`;

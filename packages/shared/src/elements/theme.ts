@@ -17,7 +17,10 @@ export const ELEMENT_FONTS: { name: string; stack: string; weights: string }[] =
 ];
 
 export type FontMode = "auto" | "custom";
+export type ElementsStyle = "classic" | "modern";
 export type ElementsTheme = Record<ThemeColorKey, string> & {
+    /** "classic": the original look and the native select. "modern": lighter outlines and a custom dropdown. */
+    style: ElementsStyle;
     radius: number;
     font: string;
     /** "auto": one size (fontSize) that shrinks on small containers. "custom": a size per device. All four numbers are always stored. */
@@ -29,6 +32,7 @@ export type ElementsTheme = Record<ThemeColorKey, string> & {
 };
 
 export const DEFAULT_THEME: ElementsTheme = {
+    style: "modern",
     accent: "#6C5CE7",
     accentHover: "#5A4BD4",
     text: "#1A1A2E",
@@ -83,6 +87,8 @@ export function parseTheme(input: unknown): { theme: ElementsTheme; errors: stri
     const f = src.font;
     if (f === "inherit" || (typeof f === "string" && ELEMENT_FONTS.some((x) => x.name === f))) theme.font = f as string;
     else errors.push("Font must be \"inherit\" or one from the list.");
+    // A stored theme from before styles existed has none: it stays Classic so live sites do not change.
+    theme.style = src.style === "modern" ? "modern" : "classic";
     // Font sizes never fail a theme (older stored themes have none): anything invalid is its default.
     theme.fontMode = src.fontMode === "custom" ? "custom" : "auto";
     for (const k of FONT_SIZE_KEYS) {
@@ -113,5 +119,5 @@ export function themeCss(t: ElementsTheme): string {
             ? `.flow-el>*{font-size:${t.fontSizeMobile}px}@container (min-width:560px){.flow-el>*{font-size:${t.fontSizeTablet}px}}@container (min-width:960px){.flow-el>*{font-size:${t.fontSizeDesktop}px}}`
             : `.flow-el>*{font-size:clamp(calc(var(--el-fs-n) * .875px),calc(var(--el-fs-n) * .75px + var(--el-fs-n) * .0446cqi),var(--el-font-size))}`;
     const auto = t.fontMode === "custom" ? "" : `--el-font-size:${t.fontSize}px;--el-fs-n:${t.fontSize};`;
-    return `${imp}:root{${auto}--el-accent:${t.accent};--el-accent-hover:${t.accentHover};--el-text:${t.text};--el-muted:${t.muted};--el-border:${t.border};--el-panel:${t.panel};--el-surface:${t.surface};--el-rule:${t.rule};--el-radius:${t.radius}px;--el-font:${font}}\n${sizes}`;
+    return `${imp}:root{${auto}--el-accent:${t.accent};--el-accent-hover:${t.accentHover};--el-text:${t.text};--el-muted:${t.muted};--el-border:${t.border};--el-panel:${t.panel};--el-surface:${t.surface};--el-rule:${t.rule};--el-radius:${t.radius}px;--el-font:${font};--el-style:${t.style}}\n${sizes}`;
 }

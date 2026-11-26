@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_THEME, DEFAULT_THEME_CSS, elementsCss, parseTheme, themeCss, themeOrDefault } from "./index";
+import { createHash } from "node:crypto";
+import { CLASSIC_CSS, DEFAULT_THEME, DEFAULT_THEME_CSS, MODERN_CSS, elementsCss, parseTheme, themeCss, themeOrDefault } from "./index";
 
 const withField = (k: string, v: unknown) => ({ ...DEFAULT_THEME, [k]: v });
 
@@ -89,5 +90,33 @@ describe("elements theme font sizes", () => {
         expect(css).toContain("@container (min-width:960px){.flow-el>*{font-size:20px}}");
         expect(css).not.toContain("22px");
         expect(css).not.toContain("clamp(");
+    });
+});
+
+describe("elements style", () => {
+    it("new and unset workspaces are modern, a stored theme without a style stays classic", () => {
+        expect(DEFAULT_THEME.style).toBe("modern");
+        expect(themeOrDefault(null).style).toBe("modern");
+        const { style: _s, ...legacy } = DEFAULT_THEME;
+        const parsed = parseTheme(legacy);
+        expect(parsed.errors).toEqual([]);
+        expect(parsed.theme.style).toBe("classic");
+        expect(themeOrDefault(legacy).style).toBe("classic");
+        expect(parseTheme({ ...DEFAULT_THEME, style: "modern" }).theme.style).toBe("modern");
+        expect(parseTheme({ ...DEFAULT_THEME, style: "bogus" }).theme.style).toBe("classic");
+    });
+
+    it("the sheet follows the style and tells the script which one", () => {
+        expect(themeCss(DEFAULT_THEME)).toContain("--el-style:modern");
+        const classic = elementsCss(themeCss({ ...DEFAULT_THEME, style: "classic" }));
+        expect(classic).toContain("--el-style:classic");
+        expect(classic).toContain(CLASSIC_CSS);
+        expect(classic).not.toContain(".el-dd-b{");
+        expect(elementsCss()).toContain(MODERN_CSS);
+        expect(elementsCss()).toContain(".el-dd-b{");
+    });
+
+    it("the classic sheet is byte for byte the v2.3.2 sheet", () => {
+        expect(createHash("sha256").update(CLASSIC_CSS).digest("hex")).toBe("f117f8a76f5caba9bf55019f76d297e37305dd91630e639609b9cf5465daaa61");
     });
 });
