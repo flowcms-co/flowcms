@@ -57,6 +57,7 @@ model Workspace {
   brandName     String? // replaces the "Flow CMS" wordmark in the studio chrome
   brandLogoUrl  String? // custom logo shown in the sidebar (image URL or /media ref)
   brandAccent   String? // hex accent (e.g. #0EA5E9); retints the studio's primary
+  elementsTheme Json? // Enterprise (elements): the one Elements theme, validated by parseTheme in @flowcms/shared; null = default theme
   onboardedAt   DateTime? // null until the first-run guided setup is finished/skipped
   auditRetentionDays Int  @default(365) // activity log rows older than this are pruned daily (minimum 365)
   alertEmails   String[] @default([]) // who is emailed on sensitive activity (publish/unpublish of a live page, slug change, delete, restore, role change, new token)

@@ -4,7 +4,11 @@ import { PrismaClient } from "@flowcms/db";
 import { elementHtml, expandElements } from "@flowcms/shared";
 import { ContentEntriesService } from "./content-entries.service";
 import { PublicQueryService } from "./public-query.service";
-import { ElementsController } from "./elements.controller";
+import { ForbiddenException } from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { DEFAULT_THEME } from "@flowcms/shared";
+import { FeatureGuard } from "../license/feature.guard";
+import { ElementsController, ElementsThemeController } from "./elements.controller";
 
 /**
  * Elements end to end against a live Postgres (gated on RUN_DB_TESTS, like the other
@@ -79,8 +83,84 @@ describe.skipIf(!RUN)("elements (integration)", () => {
 
 describe("elements.js route", () => {
     it("is open and serves the script", () => {
-        const c = new ElementsController();
+        const c = new ElementsController({} as never);
         expect(c.js()).toContain("w.FlowElements = { init: init }");
         expect(Reflect.getMetadata("__headers__", ElementsController.prototype.js)).toEqual(expect.arrayContaining([{ name: "Content-Type", value: "application/javascript; charset=utf-8" }]));
+    });
+});
+
+describe("elements theme routes", () => {
+    it("the stylesheet is cached briefly and varies by token", () => {
+        const h = Reflect.getMetadata("__headers__", ElementsController.prototype.css) as { name: string; value: string }[];
+        expect(h).toEqual(expect.arrayContaining([{ name: "Cache-Control", value: "public, max-age=60" }, { name: "Vary", value: "Authorization" }]));
+    });
+
+    it("without the elements licence the guard refuses the theme routes, read and write", async () => {
+        const guard = new FeatureGuard(new Reflector(), { has: async (f: string) => f !== "elements" } as never);
+        for (const handler of [ElementsThemeController.prototype.get, ElementsThemeController.prototype.set]) {
+            const ctx = { getHandler: () => handler, getClass: () => ElementsThemeController } as never;
+            await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(ForbiddenException);
+        }
+        const licensed = new FeatureGuard(new Reflector(), { has: async () => true } as never);
+        const ctx = { getHandler: () => ElementsThemeController.prototype.set, getClass: () => ElementsThemeController } as never;
+        await expect(licensed.canActivate(ctx)).resolves.toBe(true);
+    });
+});
+
+describe.skipIf(!RUN)("elements theme (integration)", () => {
+    const prisma = new PrismaClient();
+    const staff = new ElementsThemeController(prisma as never);
+    const site = new ElementsController(prisma as never);
+    const req = (auth?: string) => ({ headers: auth ? { authorization: auth } : {} }) as never;
+    let workspaceId = "";
+    let slug = "";
+    let other = "";
+    const user = () => ({ workspaceId }) as never;
+
+    beforeAll(async () => {
+        const id = uniq();
+        slug = `th-${id}`;
+        workspaceId = (await prisma.workspace.create({ data: { name: `th ${id}`, slug } })).id;
+        other = (await prisma.workspace.create({ data: { name: `th2 ${id}`, slug: `th2-${id}` } })).id;
+    });
+    afterAll(async () => {
+        await prisma.workspace.deleteMany({ where: { id: { in: [workspaceId, other] } } });
+        await prisma.$disconnect();
+    });
+
+    it("starts at the default and round-trips a saved theme", async () => {
+        expect(await staff.get(user())).toEqual(DEFAULT_THEME);
+        const saved = { ...DEFAULT_THEME, accent: "#F3462A", radius: 20, font: "Poppins" };
+        expect(await staff.set(user(), saved)).toEqual(saved);
+        expect(await staff.get(user())).toEqual(saved);
+    });
+
+    it("refuses a bad theme and keeps the saved one", async () => {
+        const before = await staff.get(user());
+        for (const bad of [{ ...before, accent: "#fff;}body{display:none" }, { ...before, accent: "red" }, { ...before, radius: 99 }, { ...before, font: "Comic Sans" }, {}, null]) {
+            await expect(staff.set(user(), bad)).rejects.toBeInstanceOf(BadRequestException);
+        }
+        expect(await staff.get(user())).toEqual(before);
+    });
+
+    it("elements.css reflects the saved theme for that workspace only", async () => {
+        await staff.set(user(), { ...DEFAULT_THEME, accent: "#123ABC", font: "Lato" });
+        const css = await site.css(req(), slug);
+        expect(css).toContain("--el-accent:#123ABC");
+        expect(css).toContain("family=Lato");
+        expect(css).toContain(".flow-el{");
+        const otherSlug = (await prisma.workspace.findUniqueOrThrow({ where: { id: other } })).slug;
+        expect(await site.css(req(), otherSlug)).toContain("--el-accent:#6C5CE7");
+    });
+
+    it("a stored value that is no longer valid serves the default, never raw", async () => {
+        await prisma.workspace.update({ where: { id: workspaceId }, data: { elementsTheme: { accent: "red;}x{" } } });
+        const css = await site.css(req(), slug);
+        expect(css).toContain("--el-accent:#6C5CE7");
+        expect(css).not.toContain("red;}");
+    });
+
+    it("an unknown slug or bad token falls to the default", async () => {
+        expect(await site.css(req("Bearer nope"), "no-such-workspace-xyz")).toContain("--el-accent:#6C5CE7");
     });
 });
