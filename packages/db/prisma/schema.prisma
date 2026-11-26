@@ -85,6 +85,7 @@ model Workspace {
   knowledgeFiles  KnowledgeFile[]
   plugins         Plugin[]
   pageTemplates   PageTemplate[]
+  elementTemplates ElementTemplate[]
   pageAudits      PageAudit[]
   aiQuotaDaily    AiQuotaDaily[]
   jobs            Job[]
@@ -918,4 +919,22 @@ model WorkspaceBackup {
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId, createdAt])
+}
+
+/// A saved element (calculator, cost, steps, table) that pages link to by id
+/// (`data-template` on the stored element). Changing its values changes every page
+/// that links to it; a page keeps its own snapshot only as a fallback.
+model ElementTemplate {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  element     String // the element key: "calculator", "cost", "steps", "table"
+  values      Json
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
 }
