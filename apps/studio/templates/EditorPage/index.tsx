@@ -26,6 +26,8 @@ import { RichTextTracker } from "@/lib/richTextTracker";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { confirm } from "@/components/providers/ConfirmProvider";
 import { openPreviewSync, type PreviewDraft, type PreviewSyncHandle, type PreviewSyncMessage } from "@/lib/previewSync";
+import { createSnapshotStack } from "@/lib/snapshotStack";
+import { EditorIcon } from "@/components/editor/EditorIcons";
 import { slugify } from "@flowcms/shared/strings";
 import { isEmptyBody, showsBodyEditor } from "@flowcms/shared/editor";
 import { CONTENT_LIST_URL_KEY } from "@/lib/contentListUrl";
@@ -159,6 +161,8 @@ const EditorPage = () => {
     const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving">("saved");
     const [error, setError] = useState<string | null>(null);
     const [rev, setRev] = useState(0);
+    // Ticks when the entry is reloaded from the server, so undo history restarts from it.
+    const [histEpoch, setHistEpoch] = useState(0);
     // Draft-over-published: a live entry whose edits are staged (not yet published).
     const [hasDraft, setHasDraft] = useState(false);
     const [draftApproved, setDraftApproved] = useState(false);
@@ -587,10 +591,71 @@ const EditorPage = () => {
             setDraftApproved(!!e.draftApproved);
             editor?.commands.setContent(typeof e.data?.body === "string" ? (e.data.body as string) : "");
             setSaveState("saved");
+            setHistEpoch((n) => n + 1);
         } catch {
             /* ignore */
         }
     }, [entryId, editor]);
+
+    // ── Page-level undo / redo ─────────────────────────────────────────────────
+    // Snapshots of title, slug, fields and body for this session. Undo puts one back and the
+    // normal autosave stores it. The rich text canvas and text inputs keep their own native undo.
+    type PageSnap = { title: string; slug: string; data: Record<string, unknown>; body: string | null };
+    const history = useMemo(() => createSnapshotStack<PageSnap>(50, 600), []);
+    const [histTick, setHistTick] = useState(0);
+    const settleNext = useRef(false);
+    const snapNow = (): PageSnap => ({ title, slug, data: entryData, body: hasBody ? bodyHtml(editor) : null });
+    const snapRef = useRef(snapNow);
+    useEffect(() => {
+        snapRef.current = snapNow;
+    });
+    // A fresh baseline whenever an entry is loaded or reloaded (opening, restore, discard).
+    useEffect(() => {
+        if (!ready || !editor && hasBody) return;
+        history.reset(snapRef.current());
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- re-render so the Undo / Redo buttons follow the stack
+        setHistTick((n) => n + 1);
+    }, [ready, editor, entryId, histEpoch, history, hasBody]);
+    useEffect(() => {
+        if (rev === 0) return;
+        if (settleNext.current) {
+            settleNext.current = false;
+            history.settle(snapRef.current());
+        } else history.commit(snapRef.current(), Date.now());
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- re-render so the Undo / Redo buttons follow the stack
+        setHistTick((n) => n + 1);
+    }, [rev, history]);
+    const applySnap = useCallback(
+        (snap: PageSnap | null) => {
+            if (!snap) return;
+            settleNext.current = true;
+            setTitle(snap.title);
+            setSlug(snap.slug);
+            setSlugEdited(!!snap.slug.trim());
+            setEntryData(snap.data);
+            if (snap.body !== null && editor && bodyHtml(editor) !== snap.body) {
+                editor.commands.setContent(snap.body, { emitUpdate: false });
+                body.load(snap.body, editor.getHTML());
+            }
+            bumpRemote();
+        },
+        [editor, bodyHtml, body, bumpRemote],
+    );
+    const undoPage = useCallback(() => applySnap(history.undo()), [applySnap, history]);
+    const redoPage = useCallback(() => applySnap(history.redo()), [applySnap, history]);
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.metaKey || e.ctrlKey) || e.altKey || e.key.toLowerCase() !== "z") return;
+            const t = e.target as HTMLElement | null;
+            if (t?.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']")) return;
+            e.preventDefault();
+            if (e.shiftKey) redoPage();
+            else undoPage();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [undoPage, redoPage]);
+    void histTick; // re-render so the buttons follow the stack
 
     const save = async () => {
         setSaveState("saving");
@@ -677,7 +742,7 @@ const EditorPage = () => {
     /** Throw away staged edits and revert the editor to the live version. */
     const discardDraft = async () => {
         if (!entryId) return;
-        if (!(await confirm({ title: "Discard your unpublished changes?", message: "This reverts to the live version.", confirmLabel: "Discard", tone: "danger" }))) return;
+        if (!(await confirm({ title: "Discard changes?", message: "The draft goes back to the live page. Your current draft stays in version history.", confirmLabel: "Discard", tone: "danger" }))) return;
         try {
             await api(`/entries/${entryId}/discard-draft`, { method: "POST" });
             setHasDraft(false);
@@ -896,6 +961,12 @@ const EditorPage = () => {
                 </div>
 
                 <div data-tour="editor-actions" className="flex items-center gap-1.5 ml-auto md:gap-2">
+                    <button type="button" onClick={undoPage} disabled={!history.canUndo()} className="btn-ghost btn-md disabled:opacity-40" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo page change">
+                        <EditorIcon name="undo" className="h-4 w-4" />
+                    </button>
+                    <button type="button" onClick={redoPage} disabled={!history.canRedo()} className="btn-ghost btn-md disabled:opacity-40" title="Redo (Shift+Ctrl/Cmd+Z)" aria-label="Redo page change">
+                        <EditorIcon name="redo" className="h-4 w-4" />
+                    </button>
                     <button type="button" onClick={openPreview} className="btn-ghost btn-md" title="Open live preview">
                         <Icon className="h-4 w-4 fill-current" name="eye" />
                         <span className="hidden sm:inline">Preview</span>
@@ -916,7 +987,7 @@ const EditorPage = () => {
                                 <>
                                     {canUpdate && (
                                         <button type="button" onClick={discardDraft} className="btn-ghost btn-md" title="Discard unpublished changes">
-                                            Discard
+                                            Discard changes
                                         </button>
                                     )}
                                     {draftApproved ? (
