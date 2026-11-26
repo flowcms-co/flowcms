@@ -493,7 +493,7 @@ const PreviewClient = () => {
                 // No published sibling to borrow: fall back to the type's configured
                 // preview URL (a representative page) so the live preview + editor still
                 // render the template, with the same "previewing on your template" notice.
-                const typeUrl = resolveTypePreviewUrl(type.previewUrl, entry, type, previewToken);
+                const typeUrl = resolveTypePreviewUrl(type.previewUrl, entry, type, previewToken ?? undefined);
                 if (typeUrl) {
                     setSiteEditable(false);
                     setTemplateTarget(typeUrl);
