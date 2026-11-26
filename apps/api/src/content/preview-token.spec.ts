@@ -60,6 +60,8 @@ describe("preview token endpoint", () => {
                 workspace: {
                     findUniqueOrThrow: async () => ({ previewSecretEnc: stored }),
                     update: async ({ data }: { data: { previewSecretEnc: string } }) => void (stored = data.previewSecretEnc),
+                    // Sets only while empty, like the real conditional update
+                    updateMany: async ({ data }: { data: { previewSecretEnc: string } }) => void (stored ??= data.previewSecretEnc),
                 },
             },
             rbac: { allowedTypeIds: async () => allowed },

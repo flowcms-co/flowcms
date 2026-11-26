@@ -30,6 +30,7 @@ type SecretStore = {
     workspace: {
         findUniqueOrThrow(a: { where: { id: string }; select: { previewSecretEnc: true } }): Promise<{ previewSecretEnc: string | null }>;
         update(a: { where: { id: string }; data: { previewSecretEnc: string } }): Promise<unknown>;
+        updateMany(a: { where: { id: string; previewSecretEnc: null }; data: { previewSecretEnc: string } }): Promise<unknown>;
     };
 };
 
@@ -40,6 +41,12 @@ export async function previewSecretFor(db: SecretStore, workspaceId: string, rot
         if (w.previewSecretEnc) return decryptSecret(w.previewSecretEnc);
     }
     const secret = newPreviewSecret();
-    await db.workspace.update({ where: { id: workspaceId }, data: { previewSecretEnc: encryptSecret(secret) } });
-    return secret;
+    if (rotate) {
+        await db.workspace.update({ where: { id: workspaceId }, data: { previewSecretEnc: encryptSecret(secret) } });
+        return secret;
+    }
+    // First use: only set it if still empty, then read back, so two first previews agree on one secret
+    await db.workspace.updateMany({ where: { id: workspaceId, previewSecretEnc: null }, data: { previewSecretEnc: encryptSecret(secret) } });
+    const w = await db.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { previewSecretEnc: true } });
+    return decryptSecret(w.previewSecretEnc!);
 }
