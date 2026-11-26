@@ -49,4 +49,4 @@ export const pagesWord = (n: number) => `${n} ${n === 1 ? "page" : "pages"}`;
 
 /** The wording that names what a change to a template reaches. */
 export const changeMessage = (name: string, n: number) =>
-    n === 0 ? `No page uses “${name}” yet.` : `This changes ${pagesWord(n)} that use “${name}”. Their public output follows the new values without a republish.`;
+    n === 0 ? `No page uses “${name}” yet.` : `This changes ${pagesWord(n)} that ${n === 1 ? "uses" : "use"} “${name}”. Their public output follows the new values without a republish.`;

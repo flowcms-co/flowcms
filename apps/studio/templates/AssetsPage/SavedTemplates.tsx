@@ -52,8 +52,10 @@ const SavedTemplates = () => {
             const a = document.createElement("a");
             a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
             a.download = "element-templates.json";
+            document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(a.href);
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
         } catch (e) {
             void fail("Could not export", e);
         }
