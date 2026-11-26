@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkContentRules, configProblems, blocking, issueErrors, inlineMessages, isRichEmpty, publishBlockedMessage, startsWithAction, titleCaseProblem, tidyEntryData, type ContentRules } from "./content-rules";
+import { elementHtml } from "./elements";
 import { BAD_WATER_DAMAGE, CLEAN_ARTICLE, RESOURCES_FIELDS, RESOURCES_RULES } from "./content-rules.fixtures";
 
 const run = (rules: ContentRules, data: Record<string, unknown>) => checkContentRules(rules, RESOURCES_FIELDS, {}, data);
@@ -352,5 +353,25 @@ describe("what tidy leaves alone", () => {
         const out = tidyEntryData(rules, RESOURCES_FIELDS, {}, sc({ introText: styled, sections: [{ heading: "H", content: styled }] })).data as { servicePageContent: { introText: string; sections: { content: string }[] } };
         expect(out.servicePageContent.introText).toBe("<p>Hi</p>");
         expect(out.servicePageContent.sections[0].content).toBe(styled);
+    });
+});
+
+describe("elements in rich text", () => {
+    const el = elementHtml("steps", { title: "Many words here in the title https://x.test <a href=1>", layout: "horizontal", steps: [{ label: "word ".repeat(80), time: "", text: "<a href=\"/x\">link</a>" }] });
+    const intro = (html: string, rules: Record<string, unknown>) => one({ "servicePageContent.introText": rules } as ContentRules["fields"], sc({ introText: html }));
+
+    it("word counts and link rules ignore the values in data-values", () => {
+        expect(intro(`<p>Just five words in here.</p>${el}`, { maxWords: 6, noLinks: true })).toEqual([]);
+    });
+
+    it("an element alone is not an empty box", () => {
+        expect(isRichEmpty(el)).toBe(false);
+    });
+
+    it("is allowed only where the allow list names it", () => {
+        const list = intro(`<p>Hi</p>${el}`, { allow: ["paragraph"] });
+        expect(list).toHaveLength(1);
+        expect(list[0].message).toMatch(/element/);
+        expect(intro(`<p>Hi</p>${el}`, { allow: ["paragraph", "element"] })).toEqual([]);
     });
 });

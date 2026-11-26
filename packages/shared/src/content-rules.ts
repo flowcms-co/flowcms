@@ -155,7 +155,7 @@ const labelOf = (f: { label?: string; name: string }) => f.label?.trim() || huma
 
 // ─── Reading rich text ──────────────────────────────────────────────────────
 
-type BlockKind = "paragraph" | "heading" | "bulletList" | "orderedList" | "taskList" | "blockquote" | "table" | "image" | "codeBlock" | "rule" | "other";
+type BlockKind = "paragraph" | "heading" | "bulletList" | "orderedList" | "taskList" | "blockquote" | "table" | "image" | "codeBlock" | "rule" | "element" | "other";
 type Block = { kind: BlockKind; text: string; html: string };
 
 const decode = (s: string) =>
@@ -186,6 +186,8 @@ function blocksOf(html: string): Block[] {
         if (tag === "img") return { kind: "image", text, html: b };
         if (tag === "pre") return { kind: "codeBlock", text, html: b };
         if (tag === "hr") return { kind: "rule", text, html: b };
+        // An element (steps, ...): its values live in an attribute, so `text` above is empty and never counted.
+        if (tag === "div" && /^<div\b[^>]*\sdata-flow-element=/i.test(b)) return { kind: "element", text, html: b };
         return { kind: "other", text, html: b };
     });
 }
@@ -194,7 +196,7 @@ const isList = (b: Block) => b.kind === "bulletList" || b.kind === "orderedList"
 
 /** Whether a rich text value holds anything a reader would see. Empty paragraphs do not count. */
 export function isRichEmpty(html: string): boolean {
-    return !blocksOf(html).some((b) => b.text || b.kind === "image" || b.kind === "table" || b.kind === "rule");
+    return !blocksOf(html).some((b) => b.text || b.kind === "image" || b.kind === "table" || b.kind === "rule" || b.kind === "element");
 }
 
 const MARKS: { token: string; name: string; re: RegExp }[] = [
@@ -310,7 +312,7 @@ const M: Record<string, (c: Ctx) => string> = {
     maxItems: (c) => `This block can have at most ${c.need} items and has ${c.n}. Remove ${c.diff}, or merge them.`,
 };
 
-const THING: Partial<Record<BlockKind, string>> = { table: "table", image: "picture", blockquote: "quote", codeBlock: "code block", rule: "divider line", taskList: "checklist", other: "block that is not plain text" };
+const THING: Partial<Record<BlockKind, string>> = { table: "table", image: "picture", blockquote: "quote", codeBlock: "code block", rule: "divider line", element: "element", taskList: "checklist", other: "block that is not plain text" };
 
 /** A custom message from the config, with {text} {n} {need} {diff} {item} {suggestion} {list} {other} filled in. */
 const fill = (tpl: string, c: Ctx) =>
@@ -595,7 +597,7 @@ function richRules(w: Walk, f: RuleField, path: string, pattern: string, where: 
         if (heading && !ok.has("heading")) say(M.headingNotAllowed({ text: heading.text }), { text: heading.text });
         if (blocks.some((b) => b.kind === "bulletList") && !ok.has("bulletList")) say(M.listNotAllowed({}));
         if (blocks.some((b) => b.kind === "orderedList") && !ok.has("orderedList")) say(ok.has("bulletList") ? M.numberedNotAllowed({}) : M.listNotAllowed({}));
-        for (const kind of ["taskList", "table", "image", "blockquote", "codeBlock", "rule", "other"] as const) {
+        for (const kind of ["taskList", "table", "image", "blockquote", "codeBlock", "rule", "element", "other"] as const) {
             const hit = blocks.find((b) => b.kind === kind);
             // A divider or an unknown tag counts only when the config does not name it.
             if (hit && !ok.has(kind)) say(M.blockNotAllowed({ thing: THING[kind] }), { thing: THING[kind] });

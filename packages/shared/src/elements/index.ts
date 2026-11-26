@@ -1,0 +1,104 @@
+/**
+ * Elements: premade templates (steps, later cost, table, calculator) that an author drops into
+ * rich text. One definition per template serves the Studio form and preview, publish validation
+ * and public delivery.
+ *
+ * Stored form (what the editor saves, and what Studio and agent reads return):
+ *   <div data-flow-element="steps" data-values="{...escaped JSON...}"></div>
+ * Public delivery expands it with `expandElements`:
+ *   <div class="flow-el flow-el--steps" data-flow-element="steps">...</div>
+ * Pure string work, no DOM.
+ */
+import { esc, safeJson } from "./util";
+import { steps } from "./steps";
+
+export { elementsCss, BASE_CSS, DEFAULT_THEME_CSS } from "./css";
+export { safeJson } from "./util";
+export type { StepsValues } from "./steps";
+
+export type ElementField =
+    | { key: string; label: string; type: "text" }
+    | { key: string; label: string; type: "choice"; options: { value: string; label: string }[] }
+    | { key: string; label: string; type: "rows"; min: number; max: number; columns: { key: string; label: string; long?: boolean }[] };
+
+export interface ElementTemplate {
+    id: string;
+    name: string;
+    description: string;
+    /** Templates not built yet are listed as "coming soon". */
+    enabled: boolean;
+    fields: ElementField[];
+    defaults(): Record<string, unknown>;
+    /** Plain messages, one per problem. Empty means valid. */
+    validate(values: unknown): string[];
+    /** The inside of the element, every value escaped. */
+    render(values: unknown): string;
+}
+
+const soon = (id: string, name: string, description: string): ElementTemplate => ({
+    id,
+    name,
+    description,
+    enabled: false,
+    fields: [],
+    defaults: () => ({}),
+    validate: () => [],
+    render: () => "",
+});
+
+export const ELEMENT_TEMPLATES: ElementTemplate[] = [
+    steps,
+    soon("cost", "Cost Estimator", "Low, average and high price with a range bar."),
+    soon("table", "Table", "A header row and rows of values."),
+    soon("calculator", "Calculator", "A small working calculator with presets."),
+];
+
+export const elementTemplate = (id: string): ElementTemplate | undefined => ELEMENT_TEMPLATES.find((t) => t.id === id && t.enabled);
+
+/** The stored form of one element. */
+export const elementHtml = (template: string, values: unknown): string =>
+    `<div data-flow-element="${esc(template)}" data-values="${esc(safeJson(values ?? {}))}"></div>`;
+
+const STORED = /<div\b[^>]*?\sdata-flow-element\s*=\s*(?:"([\w-]*)"|'([\w-]*)')[^>]*>\s*<\/div>/gi;
+const unescape = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+/** Pull the template and values out of one stored element tag. Values is null when the JSON cannot be read. */
+function readStored(tag: string, template: string): { template: string; values: unknown } {
+    const m = /\sdata-values\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
+    let values: unknown = null;
+    try {
+        values = m ? JSON.parse(unescape(m[1] ?? m[2] ?? "")) : {};
+    } catch {
+        values = null;
+    }
+    return { template, values };
+}
+
+/** Each stored element in a rich text value, in order. */
+export function storedElements(html: string): { template: string; values: unknown }[] {
+    if (!html || !html.includes("data-flow-element")) return [];
+    return [...html.matchAll(STORED)].map((m) => readStored(m[0], m[1] ?? m[2] ?? ""));
+}
+
+/** Public delivery: every stored element becomes finished, escaped HTML. Anything that cannot be read is dropped, never half shown. */
+export function expandElements(html: string): string {
+    if (!html || !html.includes("data-flow-element")) return html;
+    return html.replace(STORED, (tag, a: string | undefined, b: string | undefined) => {
+        const { template, values } = readStored(tag, a ?? b ?? "");
+        const t = elementTemplate(template);
+        if (!t || values === null) return "";
+        return `<div class="flow-el flow-el--${esc(t.id)}" data-flow-element="${esc(t.id)}">${t.render(values)}</div>`;
+    });
+}
+
+/** Problems in the elements of one rich text value, each tagged with its template name. */
+export function elementProblems(html: string): string[] {
+    const out: string[] = [];
+    for (const e of storedElements(html)) {
+        const t = elementTemplate(e.template);
+        if (!t) out.push(`An element of an unknown kind (“${e.template}”) cannot be shown. Remove it.`);
+        else if (e.values === null) out.push(`The ${t.name} element could not be read. Remove it and insert it again.`);
+        else for (const m of t.validate(e.values)) out.push(`${t.name}: ${m}`);
+    }
+    return out;
+}

@@ -36,6 +36,10 @@
     "./html": {
       "types": "./dist/html.d.ts",
       "default": "./dist/html.js"
+    },
+    "./elements": {
+      "types": "./dist/elements/index.d.ts",
+      "default": "./dist/elements/index.js"
     }
   },
   "files": [

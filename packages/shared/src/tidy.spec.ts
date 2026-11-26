@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { elementHtml } from "./elements";
 import { filterPastedHtml, tidyNote, tidyRich, tidyText, totalCount, emptyCounts } from "./tidy";
 
 describe("tidyText", () => {
@@ -126,5 +127,21 @@ describe("filterPastedHtml", () => {
         expect(filterPastedHtml("<ul><li>One</li></ul>", section)).toBe("<ul><li>One</li></ul>");
         expect(filterPastedHtml("<ol><li>One</li></ol>", section)).toBe("<ul><li>One</li></ul>");
         expect(filterPastedHtml("<h3>Q?</h3><p>A</p>", section)).toBe("<p>Q?</p><p>A</p>");
+    });
+});
+
+describe("elements in rich text", () => {
+    const el = elementHtml("steps", { title: "Style 'x'   double  space  style=\"a\" <b>", layout: "horizontal", steps: [] });
+
+    it("tidy keeps the element and its values byte for byte", () => {
+        const html = `<p>Intro</p>${el}<p>After</p>`;
+        const r = tidyRich(html);
+        expect(r.value).toBe(html);
+        expect(totalCount(r.counts)).toBe(0);
+        expect(tidyRich(html, { keepStyles: true }).value).toBe(html);
+    });
+
+    it("pasted-html filtering leaves it alone too", () => {
+        expect(filterPastedHtml(el, ["paragraph"])).toBe(el);
     });
 });
