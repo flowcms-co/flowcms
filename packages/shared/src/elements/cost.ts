@@ -3,7 +3,7 @@ import type { ElementTemplate } from "./index";
 
 const read = (values: unknown) => {
     const v = (values && typeof values === "object" ? values : {}) as Record<string, unknown>;
-    return { title: str(v.title), location: str(v.location), low: num(v.low), avg: num(v.avg), high: num(v.high), min: num(v.min), max: num(v.max), note: str(v.note) };
+    return { title: str(v.title), location: str(v.location), low: num(v.low), avg: num(v.avg), high: num(v.high), min: num(v.min), max: num(v.max), note: str(v.note), unit: str(v.unit) };
 };
 
 /** Position on the bar as a number from 0 to 100, two decimals. Anything unusable is 0. */
@@ -25,9 +25,10 @@ export const cost: ElementTemplate = {
         { key: "high", label: "High end ($)", type: "number" },
         { key: "min", label: "Bar minimum ($)", type: "number", hint: "The left edge of the bar. Use a value at or below the low end." },
         { key: "max", label: "Bar maximum ($)", type: "number", hint: "The right edge of the bar. Use a value at or above the high end." },
+        { key: "unit", label: "Price unit (optional)", type: "text", hint: "Shown after the range, for example: per visit, per treatment, per roof square." },
         { key: "note", label: "How we get this data (optional)", type: "text", long: true },
     ],
-    defaults: () => ({ title: "Water Damage Restoration Cost", location: "Baltimore, MD", low: 1450, avg: 3450, high: 6200, min: 450, max: 15000, note: "" }),
+    defaults: () => ({ title: "Service Cost", location: "", low: 1450, avg: 3450, high: 6200, min: 450, max: 15000, unit: "", note: "" }),
     validate(values) {
         const v = read(values);
         const out: string[] = [];
@@ -55,7 +56,7 @@ export const cost: ElementTemplate = {
             .join("");
         return (
             `<div class="el-card"><div class="el-head">${v.title ? `<p class="el-title">${esc(v.title)}</p>` : ""}${loc ? `<p class="el-loc">${loc}</p>` : ""}</div>` +
-            `<div class="el-grid"><div class="el-main"><p class="el-cap">Normal range${loc ? ` for ${loc}` : ""}</p><p class="el-big">${usd(v.low)} - ${usd(v.high)}</p>` +
+            `<div class="el-grid"><div class="el-main"><p class="el-cap">Normal range${loc ? ` for ${loc}` : ""}</p><p class="el-big">${usd(v.low)} - ${usd(v.high)}${v.unit ? ` ${esc(v.unit)}` : ""}</p>` +
             `${v.note ? `<details class="el-det"><summary>How we get this data</summary><p>${esc(v.note)}</p></details>` : ""}</div>` +
             `<div class="el-side">${side}</div></div>` +
             `<div class="el-bar" style="${style}"><div class="el-track"><div class="el-fill"></div><div class="el-dot"></div><span class="el-avg">${usd(v.avg)} AVG</span></div><div class="el-lh el-cap"><span>Low</span><span>High</span></div></div></div>`
