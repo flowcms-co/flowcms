@@ -1,5 +1,5 @@
 /**
- * Elements: premade templates (steps, later cost, table, calculator) that an author drops into
+ * Elements: premade templates (steps, cost, table, calculator) that an author drops into
  * rich text. One definition per template serves the Studio form and preview, publish validation
  * and public delivery.
  *
@@ -11,13 +11,18 @@
  */
 import { esc, safeJson } from "./util";
 import { steps } from "./steps";
+import { cost } from "./cost";
+import { table } from "./table";
+import { calculator } from "./calculator";
 
 export { elementsCss, BASE_CSS, DEFAULT_THEME_CSS } from "./css";
+export { ELEMENTS_JS } from "./js";
 export { safeJson } from "./util";
 export type { StepsValues } from "./steps";
 
 export type ElementField =
-    | { key: string; label: string; type: "text" }
+    | { key: string; label: string; type: "text"; long?: boolean; hint?: string }
+    | { key: string; label: string; type: "number"; hint?: string }
     | { key: string; label: string; type: "choice"; options: { value: string; label: string }[] }
     | { key: string; label: string; type: "rows"; itemLabel: string; min: number; max: number; columns: { key: string; label: string; long?: boolean }[] };
 
@@ -25,7 +30,7 @@ export interface ElementTemplate {
     id: string;
     name: string;
     description: string;
-    /** Templates not built yet are listed as "coming soon". */
+    /** A template not built yet is listed as "coming soon". */
     enabled: boolean;
     fields: ElementField[];
     defaults(): Record<string, unknown>;
@@ -35,23 +40,7 @@ export interface ElementTemplate {
     render(values: unknown): string;
 }
 
-const soon = (id: string, name: string, description: string): ElementTemplate => ({
-    id,
-    name,
-    description,
-    enabled: false,
-    fields: [],
-    defaults: () => ({}),
-    validate: () => [],
-    render: () => "",
-});
-
-export const ELEMENT_TEMPLATES: ElementTemplate[] = [
-    steps,
-    soon("cost", "Cost Estimator", "Low, average and high price with a range bar."),
-    soon("table", "Table", "A header row and rows of values."),
-    soon("calculator", "Calculator", "A small working calculator with presets."),
-];
+export const ELEMENT_TEMPLATES: ElementTemplate[] = [steps, cost, table, calculator];
 
 export const elementTemplate = (id: string): ElementTemplate | undefined => ELEMENT_TEMPLATES.find((t) => t.id === id && t.enabled);
 

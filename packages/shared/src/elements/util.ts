@@ -7,6 +7,16 @@ export const esc = (v: unknown): string =>
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
 
+/** A finite number from a number or a plain numeric string, else NaN. Never reads anything else, so markup positions can only ever be numbers. */
+export const num = (v: unknown): number => {
+    if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
+    if (typeof v === "string" && /^\s*-?\d+(\.\d+)?\s*$/.test(v)) return Number(v);
+    return NaN;
+};
+
+/** Whole dollars with thousands separators, or "n/a" for a value that is not a number. */
+export const usd = (n: number): string => (Number.isFinite(n) ? `$${Math.round(n).toLocaleString("en-US")}` : "n/a");
+
 /** A trimmed string, whatever came in. */
 export const str = (v: unknown): string => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
 

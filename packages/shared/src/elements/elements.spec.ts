@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { elementHtml, elementProblems, elementTemplate, expandElements, storedElements } from "./index";
 import { steps } from "./steps";
+import { cost } from "./cost";
+import { table } from "./table";
+import { calculator } from "./calculator";
+import { ELEMENTS_JS } from "./js";
 
 const NASTY = `<script>alert(1)</script> "quoted" & 'single' <img src=x onerror=1>`;
 const good = () => steps.defaults();
@@ -81,8 +85,107 @@ describe("stored form and delivery", () => {
         expect(elementProblems('<div data-flow-element="steps" data-values="{x"></div>')[0]).toMatch(/could not be read/);
     });
 
-    it("lists the other three templates as not available yet", () => {
-        expect(elementTemplate("steps")?.enabled).toBe(true);
-        expect(elementTemplate("cost")).toBeUndefined();
+    it("all four templates are available", () => {
+        for (const id of ["steps", "cost", "table", "calculator"]) expect(elementTemplate(id)?.enabled).toBe(true);
+    });
+});
+
+const clean = (html: string) => {
+    expect(html).not.toMatch(/<script|<img/i);
+    expect(html).toContain("&lt;script&gt;");
+};
+
+describe("cost", () => {
+    const base = () => cost.defaults() as Record<string, unknown>;
+
+    it("escapes every text field", () => {
+        const html = cost.render({ ...base(), title: NASTY, location: NASTY, note: NASTY });
+        clean(html);
+        expect(html.split("&lt;script&gt;").length - 1).toBe(4); // title, location (twice), note
+    });
+
+    it("validates each rule", () => {
+        expect(cost.validate(base())).toEqual([]);
+        expect(cost.validate({ ...base(), low: 5000 })).toEqual(["Low end cannot be above the average."]);
+        expect(cost.validate({ ...base(), avg: 7000 })).toEqual(["Average cannot be above the high end."]);
+        expect(cost.validate({ ...base(), min: 2000 })).toEqual(["Bar minimum cannot be above the low end."]);
+        expect(cost.validate({ ...base(), max: 5000 })).toEqual(["High end cannot be above the bar maximum."]);
+        expect(cost.validate({ ...base(), low: "abc" })).toEqual(["Low end must be a number."]);
+    });
+
+    it("shows the data note only when filled", () => {
+        expect(cost.render(base())).not.toContain("How we get this data");
+        expect(cost.render({ ...base(), note: "Survey of 120 jobs" })).toContain("How we get this data");
+        expect(cost.render({ ...base(), note: "   " })).not.toContain("<details");
+    });
+
+    it("bar positions are numbers only, even for hostile strings", () => {
+        const hostile = '12%;background:url(//evil)"><script>';
+        const html = cost.render({ ...base(), low: hostile, avg: hostile, high: hostile, min: hostile, max: hostile });
+        const style = /class="el-bar" style="([^"]*)"/.exec(html)![1];
+        expect(style).toMatch(/^--p-low:\d+(\.\d+)?%;--p-high:\d+(\.\d+)?%;--p-avg:\d+(\.\d+)?%$/);
+        expect(html).not.toMatch(/evil|<script/);
+        const ok = /--p-low:([\d.]+)%;--p-high:([\d.]+)%;--p-avg:([\d.]+)%/.exec(cost.render(base()))!;
+        expect(ok.slice(1).map(Number)).toEqual([6.87, 39.52, 20.62]);
+    });
+
+    it("has no call to action button", () => expect(cost.render(base())).not.toMatch(/<a |<button/));
+});
+
+describe("table", () => {
+    const base = () => table.defaults() as Record<string, unknown>;
+
+    it("escapes every text field", () => {
+        const html = table.render({ caption: NASTY, columns: `${NASTY} | B`, rows: `${NASTY} | ${NASTY}\nx | y` });
+        clean(html);
+        // caption, header, 2 data-label attributes, 2 cells in row one
+        expect(html.split("&lt;script&gt;").length - 1).toBe(6);
+    });
+
+    it("needs a header and two rows", () => {
+        expect(table.validate(base())).toEqual([]);
+        expect(table.validate({ ...base(), columns: " | " })).toEqual(["Table needs a header row."]);
+        expect(table.validate({ ...base(), rows: "a | b" })).toEqual(["Table needs at least 2 rows (it has 1)."]);
+        expect(table.validate({ ...base(), rows: "a | b | c\nd | e" })).toEqual(["Row 1 has more cells than the header has columns."]);
+    });
+
+    it("labels each cell with its column, for the stacked layout", () => {
+        expect(table.render(base())).toContain('<td data-label="Typical cost">$300 - $1,000</td>');
+    });
+});
+
+describe("calculator", () => {
+    const base = () => calculator.defaults() as Record<string, unknown>;
+
+    it("escapes the title", () => clean(calculator.render({ ...base(), title: NASTY })));
+
+    it("needs positive drying rates, the insurance preset needs none", () => {
+        expect(calculator.validate(base())).toEqual([]);
+        expect(calculator.validate({ ...base(), rateGray: 0 })).toEqual(["The gray water rate must be a number above zero."]);
+        expect(calculator.validate({ ...base(), rateBlack: "x" })).toEqual(["The black water rate must be a number above zero."]);
+        expect(calculator.validate({ ...base(), preset: "insurance-out-of-pocket", rateGray: 0 })).toEqual([]);
+    });
+
+    it("renders readable static markup with the values as data attributes", () => {
+        const html = calculator.render(base());
+        expect(html).toContain('data-preset="drying" data-rate-clean="3.75" data-rate-gray="4.5" data-rate-black="7"');
+        expect(html).toContain("$2,400 - $3,750"); // 800 sq ft x 3.75 x 0.8 and x 1.25
+        const ins = calculator.render({ ...base(), preset: "insurance-out-of-pocket" });
+        expect(ins).toContain('data-preset="insurance"');
+        expect(ins).toContain('<div class="v">$1,000</div>');
+    });
+
+    it("hostile rates never reach an attribute", () => {
+        const html = calculator.render({ ...base(), rateClean: '1" onmouseover="x', rateGray: "<b>", rateBlack: NaN });
+        expect(html).toContain('data-rate-clean="0" data-rate-gray="0" data-rate-black="0"');
+    });
+});
+
+describe("elements.js", () => {
+    it("is plain script with the init entry point", () => {
+        expect(ELEMENTS_JS).toContain("window");
+        expect(ELEMENTS_JS).toContain("FlowElements");
+        expect(() => new Function(ELEMENTS_JS)).not.toThrow();
+        expect(ELEMENTS_JS).not.toMatch(/innerHTML/);
     });
 });
