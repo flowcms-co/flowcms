@@ -109,6 +109,29 @@ curl "${displayBase}/graphql" -H "Authorization: Bearer YOUR_CONTENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"query":"{ entries(type:\\"article\\", limit:5){ id slug data } }"}'`}</Code>
 
+        {/* Preview drafts */}
+        <Card className="flex flex-col gap-3">
+            <div>
+                <h3 className="text-title text-black dark:text-white">Preview drafts on your site</h3>
+                <p className="mt-0.5 text-caption-2 text-grey">Show an unpublished entry on your own site without a Preview API key or a copy of the preview secret. Your site keeps using its normal <b>Content</b> token and just passes along the preview token from the URL.</p>
+            </div>
+            <ol className="flex flex-col gap-1 text-caption-2 text-grey">
+                <li>1. Add <code className="font-mono">{"{previewToken}"}</code> to the preview URL (Content type settings), for example <code className="font-mono">https://yoursite.com/{"{slug}"}?preview_token={"{previewToken}"}</code>. Studio fills in a fresh, one-hour token bound to that entry.</li>
+                <li>2. When the page loads with <code className="font-mono">preview_token</code>, request the entry from your server and forward the token as the <code className="font-mono">X-FlowCMS-Preview-Token</code> header (the <code className="font-mono">?preview_token=</code> query parameter also works, but headers stay out of logs).</li>
+                <li>3. A valid token returns that one entry even as a draft (or with its pending draft changes), fully expanded like a published entry. Its related entries stay published-only. A wrong, expired or other-entry token is ignored: you get the published page, or a 404.</li>
+                <li>4. Responses that carry a token are sent with <code className="font-mono">Cache-Control: private, no-store</code>. Do not cache them on your side either. List endpoints ignore preview tokens.</li>
+            </ol>
+            <Code>{`# Fetch one draft entry
+curl "${displayBase}/public/city/springfield" \\
+  -H "Authorization: Bearer YOUR_CONTENT_TOKEN" \\
+  -H "X-FlowCMS-Preview-Token: TOKEN_FROM_THE_PREVIEW_URL"
+
+# Should edit mode be on for this page? (works for published pages too)
+curl "${displayBase}/public/preview/verify?type=city&slug=springfield&token=TOKEN_FROM_THE_PREVIEW_URL" \\
+  -H "Authorization: Bearer YOUR_CONTENT_TOKEN"
+# -> { "valid": true, "expiresAt": 1790000000 }   (seconds since epoch)`}</Code>
+        </Card>
+
         {/* Agent API */}
         <Card className="!p-0 overflow-hidden">
             <div className="px-5 py-4 border-b border-grey-light dark:border-grey-light/10">

@@ -1,11 +1,21 @@
-import { Controller, Get, Param, Query, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { Public } from "../auth/decorators";
 import { ApiTokenGuard } from "./api-token.guard";
 import { PublicQueryService, type QueryOpts } from "./public-query.service";
 
 type TokenReq = Request & { apiToken: { workspaceId: string; type: string } };
+
+/** The signed preview token a site forwards: header first, `preview_token` query param as a fallback. */
+function previewTokenOf(req: Request, query: Record<string, unknown>): string | undefined {
+    const h = req.headers["x-flowcms-preview-token"];
+    const t = (typeof h === "string" ? h : undefined) ?? (typeof query.preview_token === "string" ? query.preview_token : undefined);
+    return t && t.length <= 300 ? t : undefined;
+}
+
+/** Draft content must never sit in a browser, CDN or proxy cache. */
+const noStore = (res: Response) => void res.setHeader("Cache-Control", "private, no-store");
 
 /** Parse Strapi-style ?filters[key]=value plus ?fields=a,b,ref.c and ?populate= into QueryOpts. */
 function parseOpts(req: TokenReq, query: Record<string, unknown>): QueryOpts {
@@ -49,18 +59,32 @@ function parseOpts(req: TokenReq, query: Record<string, unknown>): QueryOpts {
 export class PublicController {
     constructor(private readonly query: PublicQueryService) {}
 
+    /** Does this preview token open this entry? A site calls it to decide whether to switch on edit mode. */
+    @Get("preview/verify")
+    @Throttle({ default: { limit: 60, ttl: 60_000 } })
+    async verifyPreview(@Req() req: TokenReq, @Res({ passthrough: true }) res: Response, @Query() query: Record<string, unknown>) {
+        noStore(res);
+        const s = (v: unknown) => (typeof v === "string" ? v : "");
+        return this.query.verifyPreview(req.apiToken.workspaceId, s(query.type), s(query.slug), previewTokenOf(req, { preview_token: query.token }) ?? "");
+    }
+
     @Get(":type")
-    async list(@Req() req: TokenReq, @Param("type") type: string, @Query() query: Record<string, unknown>) {
+    async list(@Req() req: TokenReq, @Res({ passthrough: true }) res: Response, @Param("type") type: string, @Query() query: Record<string, unknown>) {
+        // Lists never honour a preview token (one token unlocks one entry), but their response is still never cached.
+        if (previewTokenOf(req, query)) noStore(res);
         return this.query.list(req.apiToken.workspaceId, type, parseOpts(req, query));
     }
 
     @Get(":type/:idOrSlug")
     async one(
         @Req() req: TokenReq,
+        @Res({ passthrough: true }) res: Response,
         @Param("type") type: string,
         @Param("idOrSlug") idOrSlug: string,
         @Query() query: Record<string, unknown>,
     ) {
-        return this.query.one(req.apiToken.workspaceId, type, idOrSlug, parseOpts(req, query));
+        const token = previewTokenOf(req, query);
+        if (token) noStore(res);
+        return this.query.one(req.apiToken.workspaceId, type, idOrSlug, parseOpts(req, query), token);
     }
 }

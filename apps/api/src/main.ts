@@ -130,7 +130,7 @@ async function bootstrap() {
             res.header("Vary", "Origin"); // so a shared cache never serves this wildcard ACAO to the credentialed studio
             res.header("Access-Control-Allow-Origin", "*");
             res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-            res.header("Access-Control-Allow-Headers", "Authorization,Content-Type");
+            res.header("Access-Control-Allow-Headers", "Authorization,Content-Type,X-FlowCMS-Preview-Token");
             res.header("Access-Control-Max-Age", "86400");
             if (req.method === "OPTIONS") {
                 res.sendStatus(204);

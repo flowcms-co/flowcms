@@ -5,7 +5,8 @@ import { entryToCanonicalContent, buildJsonLd } from "./canonical-content";
 import { fieldsOf, type ComponentMap, type SchemaField } from "./entry-validation";
 import { altBackfillPatch, altLookupFrom, type AltLookup } from "./alt-backfill";
 import { CacheService } from "../cache/cache.service";
-import { expandElements, linkedTemplateIds } from "@flowcms/shared";
+import { decryptSecret, expandElements, linkedTemplateIds } from "@flowcms/shared";
+import { verifyPreviewToken } from "./preview-token";
 
 /** What `shape` needs to default empty alt text from the asset library. */
 type AltCtx = { components: ComponentMap; altFor: AltLookup; /** Current values of the element templates these entries link to, by id. */ templates: Map<string, unknown> };
@@ -382,11 +383,39 @@ export class PublicQueryService {
         return { data, meta: { total, limit: take, offset: skip } };
     }
 
-    async oneForType(ct: ContentType, idOrSlug: string, opts: QueryOpts) {
-        const entry = await this.prisma.contentEntry.findFirst({
-            where: { ...this.where(ct, { ...opts, filters: {} }), OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
-        });
+    /** Seconds-since-epoch expiry of a preview token that is valid for this exact workspace, type and slug; else null.
+     *  Read-only: a workspace with no preview secret yet simply has no valid tokens. */
+    async previewExpiry(workspaceId: string, typeApiId: string, slug: string, token: string): Promise<number | null> {
+        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { slug: true, previewSecretEnc: true } });
+        if (!ws?.previewSecretEnc) return null;
+        let secret: string;
+        try {
+            secret = decryptSecret(ws.previewSecretEnc);
+        } catch {
+            return null;
+        }
+        if (!verifyPreviewToken(secret, ws.slug, typeApiId, slug, token)) return null;
+        return Number(token.slice(0, token.indexOf(".")));
+    }
+
+    /** `previewToken` is an extra permission for this one entry: when it checks out, the entry is
+     *  delivered even as a draft, from its pending draft copy when there is one (what Studio shows).
+     *  Anything else about the token (wrong, expired, other entry) is ignored: normal published delivery. */
+    async oneForType(ct: ContentType, idOrSlug: string, opts: QueryOpts, previewToken?: string) {
+        const match = { OR: [{ id: idOrSlug }, { slug: idOrSlug }] };
+        if (previewToken && !opts.preview) {
+            const any = await this.prisma.contentEntry.findFirst({ where: { ...this.where(ct, { ...opts, filters: {}, preview: true }), ...match } });
+            if (any && (await this.previewExpiry(ct.workspaceId, ct.apiId, any.slug ?? "", previewToken))) {
+                // Relations stay published-only (opts.preview unset): the token unlocks one entry, not the ones it links to.
+                return this.deliver(ct, { ...any, data: any.draftData ?? any.data }, opts);
+            }
+        }
+        const entry = await this.prisma.contentEntry.findFirst({ where: { ...this.where(ct, { ...opts, filters: {} }), ...match } });
         if (!entry) throw new NotFoundException("Not found.");
+        return this.deliver(ct, entry, opts);
+    }
+
+    private async deliver(ct: ContentType, entry: ContentEntry, opts: QueryOpts) {
         const data = this.shape(entry, projectionOf(opts).top, ct.schema, await this.altCtx(ct.workspaceId, [entry]));
         await this.populateRefs(ct, [data], opts);
         return { data };
@@ -409,9 +438,16 @@ export class PublicQueryService {
         return this.listForType(ct, opts);
     }
 
-    async one(workspaceId: string, type: string, idOrSlug: string, opts: QueryOpts) {
+    async one(workspaceId: string, type: string, idOrSlug: string, opts: QueryOpts, previewToken?: string) {
         const ct = await this.resolveType(workspaceId, type);
         if (ct.kind === "SINGLE") return this.singleForType(ct, opts);
-        return this.oneForType(ct, idOrSlug, opts);
+        return this.oneForType(ct, idOrSlug, opts, previewToken);
+    }
+
+    /** Does this preview token open this entry? Unknown types are just "not valid". */
+    async verifyPreview(workspaceId: string, type: string, slug: string, token: string): Promise<{ valid: boolean; expiresAt?: number }> {
+        const ct = await this.resolveType(workspaceId, type).catch(() => null);
+        const exp = ct && token ? await this.previewExpiry(workspaceId, ct.apiId, slug, token) : null;
+        return exp ? { valid: true, expiresAt: exp } : { valid: false };
     }
 }
