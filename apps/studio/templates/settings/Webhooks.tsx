@@ -21,6 +21,47 @@ const blank = { name: "", url: "", events: [] as string[], secret: "", enabled: 
  * Webhooks — outbound event subscriptions. Create endpoints, pick events, sign
  * with a secret, toggle, test-send, and inspect the delivery log (with resend).
  */
+const PreviewSecretCard = () => {
+    const [secret, setSecret] = useState<string | null>(null);
+    const [shown, setShown] = useState(false);
+    const [note, setNote] = useState<string | null>(null);
+    const load = async (rotate: boolean) => {
+        try {
+            const r = await api<{ secret: string }>(rotate ? "/workspace/preview-secret/rotate" : "/workspace/preview-secret", rotate ? { method: "POST" } : undefined);
+            setSecret(r.secret);
+            setShown(true);
+            setNote(rotate ? "New secret made. Update your site's environment; old preview links stop working." : null);
+        } catch (e) {
+            setNote(e instanceof ApiError ? e.message : "Could not load the preview secret.");
+        }
+    };
+    const rotate = async () => {
+        if (await confirm({ title: "Rotate the preview secret?", message: "Preview links made with the old secret stop working until your site has the new one." })) void load(true);
+    };
+    const copy = () => void navigator.clipboard?.writeText(secret ?? "").then(() => setNote("Copied."));
+    return (
+        <Card className="flex flex-col gap-3">
+            <div>
+                <h2 className="text-h5 text-black dark:text-white">Preview secret</h2>
+                <p className="text-caption-2 text-grey">Signs the short-lived {"{previewToken}"} in your preview URL, so your site shows drafts only to this CMS. Put it in your site&apos;s environment.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                <code className="min-w-0 grow truncate rounded-2xl bg-lavender-mist px-4 py-2.5 font-mono text-caption-2 text-black dark:bg-dark-2 dark:text-white">{secret && shown ? secret : "••••••••••••••••••••"}</code>
+                {!secret ? (
+                    <button type="button" onClick={() => void load(false)} className="btn-primary">Reveal</button>
+                ) : (
+                    <>
+                        <button type="button" onClick={() => setShown((v) => !v)} className="btn-primary">{shown ? "Hide" : "Show"}</button>
+                        <button type="button" onClick={copy} className="btn-primary">Copy</button>
+                    </>
+                )}
+                <button type="button" onClick={() => void rotate()} className="btn-primary">Rotate</button>
+            </div>
+            {note && <p className="text-caption-2 text-grey">{note}</p>}
+        </Card>
+    );
+};
+
 const Webhooks = () => {
     const [hooks, setHooks] = useState<Hook[]>([]);
     const [events, setEvents] = useState<string[]>(FALLBACK_EVENTS);
@@ -123,6 +164,7 @@ const Webhooks = () => {
 
     return (
         <div className="flex flex-col gap-6">
+            <PreviewSecretCard />
             <Card className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                     <span className="flex items-center justify-center w-10 h-10 rounded-2xl bg-lavender-mist dark:bg-dark-3">

@@ -162,8 +162,52 @@ const TAIL = `@container (min-width:520px){.flow-el .el-grid{grid-template-colum
 /** The Classic style: byte for byte the v2.3.2 sheet. */
 export const CLASSIC_CSS = HEAD + CALC_CLASSIC + TAIL;
 
+/** Modern cost, steps and table. */
+const MODERN_ELEMENTS = `.flow-el{--bd:color-mix(in srgb,var(--el-border) 75%,var(--el-surface));--ac-bd:color-mix(in srgb,var(--el-accent) 38%,var(--el-surface));--ac-tx:color-mix(in srgb,var(--el-accent) 70%,var(--el-text));--ring:0 0 0 3px color-mix(in srgb,var(--el-accent) 16%,transparent)}
+.flow-el--cost .el-card{border-color:var(--bd);box-shadow:none}
+.flow-el--cost .el-head{padding:20px 24px;border-bottom:1px solid var(--bd)}
+.flow-el--cost .el-title{font-size:1.25em}
+.flow-el--cost .el-cap{letter-spacing:.06em}
+.flow-el--cost .el-big{margin-top:6px;font-size:clamp(1.75em,9cqi,2.5em);line-height:1.1;letter-spacing:-.01em}
+.flow-el--cost .el-side{border-color:var(--bd)}
+.flow-el--cost .el-side b{font-size:1.125em;font-weight:700;font-variant-numeric:tabular-nums}
+.flow-el--cost .el-track{height:6px;background:color-mix(in srgb,var(--el-border) 80%,var(--el-text))}
+.flow-el--cost .el-fill{background:color-mix(in srgb,var(--el-accent) 75%,var(--el-surface))}
+.flow-el--cost .el-dot{width:14px;height:14px;border-width:2px}
+.flow-el--cost .el-avg{color:var(--ac-tx);font-weight:600}
+.flow-el--cost .el-det{margin-top:16px;padding-top:4px;border-top:1px solid var(--bd)}
+.flow-el--cost .el-det summary{gap:8px;list-style:none;text-decoration:none;font-weight:600;color:var(--el-text)}
+.flow-el--cost .el-det summary::-webkit-details-marker{display:none}
+.flow-el--cost .el-det summary:before{content:"";flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3.5l4.5 4.5L6 12.5'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3.5l4.5 4.5L6 12.5'/%3E%3C/svg%3E") center/contain no-repeat;transition:transform .15s}
+.flow-el--cost .el-det[open] summary:before{transform:rotate(90deg)}
+.flow-el--cost .el-det summary:focus-visible{outline:0;box-shadow:var(--ring);border-radius:4px}
+.flow-el--cost .el-det p{line-height:1.5}
+.flow-el--steps .el-steps-card{border-color:var(--bd);box-shadow:none}
+.flow-el--steps .el-n{background:color-mix(in srgb,var(--el-accent) 10%,var(--el-surface));border:1px solid var(--ac-bd);color:var(--ac-tx);font-weight:600}
+.flow-el--steps .el-steps li:not(:last-child):after{background:color-mix(in srgb,var(--el-accent) 22%,var(--el-surface));left:19.5px;width:1px}
+.flow-el--steps .el-steps .l{font-weight:600}
+.flow-el--steps .el-steps .tm{color:var(--ac-tx);font-weight:600}
+.flow-el--steps .el-steps .el-tx{line-height:1.5}
+.flow-el--table .el-tw{border-color:var(--bd);border-radius:var(--el-radius)}
+.flow-el--table .el-table{font-variant-numeric:tabular-nums}
+.flow-el--table .el-table th{background:color-mix(in srgb,var(--el-accent) 5%,var(--el-surface));padding:12px 20px;font-size:.8125em;font-weight:600;letter-spacing:.02em;color:var(--el-muted);border-bottom:1px solid var(--bd)}
+.flow-el .el-table tbody tr:nth-child(odd) td,.flow-el .el-table tbody tr:nth-child(even) td{background:var(--el-surface)}
+.flow-el .el-table td{padding:14px 20px;border-bottom:1px solid var(--bd)}
+.flow-el .el-table tbody tr:last-child td{border-bottom:0}
+.flow-el .el-table tbody tr:hover td{background:color-mix(in srgb,var(--el-accent) 4%,var(--el-surface))}
+.flow-el--table .el-table caption{padding:14px 20px;font-weight:600;color:var(--el-text)}
+`;
+
+/** Modern table on narrow containers; after TAIL so it wins over the stacked rules. */
+const MODERN_NARROW = `@container (max-width:419px){
+.flow-el .el-table tr{border-bottom:1px solid var(--bd);padding:4px 0}
+.flow-el .el-table tbody tr:last-child{border-bottom:0}
+.flow-el .el-table td,.flow-el .el-table tbody tr:last-child td{border-bottom:0;padding:8px 16px}
+.flow-el .el-table td:before{font-weight:600;font-size:.8125em}
+}`;
+
 /** The Modern style. */
-export const MODERN_CSS = HEAD + CALC_MODERN + TAIL;
+export const MODERN_CSS = HEAD + CALC_MODERN + "\n" + MODERN_ELEMENTS + TAIL + "\n" + MODERN_NARROW;
 
 /** Kept for existing imports: the current default style. */
 export const BASE_CSS = MODERN_CSS;

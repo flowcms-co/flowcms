@@ -10,6 +10,7 @@ import { AUTHOR_MODES } from "../content/author";
 import { normalizeSiteUrl } from "../seo/site-pages.service";
 import { isFetchPrefix, maskPrefix } from "../seo/polite";
 import { Prisma } from "@flowcms/db";
+import { previewSecretFor } from "../content/preview-token";
 import { decryptSecret, encryptSecret } from "@flowcms/shared";
 
 class UpdateWorkspaceDto {
@@ -135,6 +136,20 @@ export class WorkspaceController {
         if (dto.authorMode !== undefined) data.authorMode = dto.authorMode;
         const w = await this.prisma.workspace.update({ where: { id: user.workspaceId }, data });
         return shape(w);
+    }
+
+    /** The secret that signs preview links. Admins copy it into the site's environment. */
+    @Get("preview-secret")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    async previewSecret(@CurrentUser() user: AuthUser) {
+        return { secret: await previewSecretFor(this.prisma, user.workspaceId) };
+    }
+
+    /** New secret; links minted with the old one stop working. */
+    @Post("preview-secret/rotate")
+    @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
+    async rotatePreviewSecret(@CurrentUser() user: AuthUser) {
+        return { secret: await previewSecretFor(this.prisma, user.workspaceId, true) };
     }
 
     /** Mark first-run guided setup as complete (stops the auto-redirect). */

@@ -95,6 +95,13 @@ export class ContentEntriesController {
         return this.entries.list(user.workspaceId, { typeId, status, q, locale, authorId, limit: num(limit), offset: num(offset) }, user.role);
     }
 
+    /** Short-lived signed token for the {previewToken} placeholder of a preview URL. */
+    @Get(":id/preview-token")
+    @RequirePermissions(PERMISSIONS.CONTENT_READ)
+    previewToken(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+        return this.entries.previewToken(user.workspaceId, id, user.role);
+    }
+
     /** Pending drafts that only differ from the live page by editor formatting. */
     @Get("drafts/formatting-only")
     @RequirePermissions(PERMISSIONS.CONTENT_READ)

@@ -182,10 +182,10 @@ const pathSegments = (e: Entry, type?: ApiType | null): string[] => {
     return [prefix, e.slug ?? ""].filter(Boolean) as string[];
 };
 
-/** Fill a preview-URL template ({slug}/{id}/{type}/{locale}/{status}/{path}); when
+/** Fill a preview-URL template ({slug}/{id}/{type}/{locale}/{status}/{path}/{previewToken}); when
  *  the template has no placeholder, treat it as the site base and append the
  *  type-prefixed path (/services/<slug>, /blogs/<slug>, or the root for a homepage). */
-const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
+const buildTarget = (tpl: string, e: Entry, type?: ApiType | null, previewToken = ""): string => {
     const segs = pathSegments(e, type);
     const map: Record<string, string> = {
         ...(e.placeholders ?? {}),
@@ -195,6 +195,7 @@ const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
         locale: e.locale ?? "",
         status: (e.status ?? "").toLowerCase(),
         path: segs.join("/"),
+        previewToken,
     };
     if (/\{[\w.]+\}/.test(tpl)) {
         return tpl.replace(/\{([\w.]+)\}/g, (_, k: string) => (k === "path" ? map.path : encodeURIComponent(map[k] ?? "")));
@@ -208,10 +209,10 @@ const buildTarget = (tpl: string, e: Entry, type?: ApiType | null): string => {
  *  {slug}/{id}/{type}/{locale}/… placeholders) is filled in like the workspace URL;
  *  a plain URL is used verbatim, since it points at a representative, already
  *  published page of this type rather than this (unpublished) entry. */
-const resolveTypePreviewUrl = (raw: string | null | undefined, e: Entry, type?: ApiType | null): string => {
+const resolveTypePreviewUrl = (raw: string | null | undefined, e: Entry, type?: ApiType | null, previewToken = ""): string => {
     const tpl = (raw ?? "").trim();
     if (!tpl) return "";
-    if (/\{[\w.]+\}/.test(tpl)) return buildTarget(tpl, e, type);
+    if (/\{[\w.]+\}/.test(tpl)) return buildTarget(tpl, e, type, previewToken);
     return tpl;
 };
 
@@ -261,6 +262,8 @@ const PreviewClient = () => {
     // published page 404s on the site, or its page hasn't rebuilt), we preview it on a
     // published sibling of the same type and push this entry's values onto it, so live
     // editing works before publish. `templateTarget` is that borrowed page's URL.
+    // Short-lived signed token for {previewToken}; the API mints it (the secret never reaches the browser).
+    const [previewToken, setPreviewToken] = useState<string | null>(null);
     const [templateTarget, setTemplateTarget] = useState<string | null>(null);
     const fellBackRef = useRef(false); // guard: only borrow a template once per entry
     const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -333,6 +336,31 @@ const PreviewClient = () => {
         };
     }, []);
 
+    // Mint the preview token for this entry and renew it a few minutes before it expires.
+    const wantsToken = !!entry && ((type?.previewUrl ?? "").trim() || (ws?.previewUrl ?? "")).includes("{previewToken}");
+    useEffect(() => {
+        if (!id || !wantsToken) return;
+        let off = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const mint = () =>
+            api<{ token: string; expiresAt: number }>(`/entries/${id}/preview-token`)
+                .then((r) => {
+                    if (off) return;
+                    setPreviewToken(r.token);
+                    timer = setTimeout(mint, Math.max(60_000, r.expiresAt * 1000 - Date.now() - 5 * 60_000));
+                })
+                .catch(() => {
+                    if (off) return;
+                    setPreviewToken("");
+                    timer = setTimeout(mint, 60_000);
+                });
+        void mint();
+        return () => {
+            off = true;
+            if (timer) clearTimeout(timer);
+        };
+    }, [id, wantsToken]);
+
     const shownError = error ?? (!id ? "No entry to preview." : null);
     // The type's own preview URL comes first when set (a template keeps its query
     // string, e.g. ?cms=edit); the workspace URL is the fallback.
@@ -354,7 +382,10 @@ const PreviewClient = () => {
     // Wait for the type before choosing a URL, so the frame never loads the
     // workspace fallback first and then jumps to the type's own URL.
     const typeReady = !entry?.contentType || !!type;
-    const target = entry && hasSite && typeReady ? buildTarget(previewUrl, entry, type) : "";
+    // A URL that carries {previewToken} waits for the token so the frame loads once, signed.
+    const needsToken = previewUrl.includes("{previewToken}");
+    const tokenReady = !needsToken || previewToken !== null;
+    const target = entry && hasSite && typeReady && tokenReady ? buildTarget(previewUrl, entry, type, previewToken ?? "") : "";
     // The URL the preview iframe actually loads: the entry's own page, or a borrowed
     // published-sibling template when that page can't render this (unpublished) entry.
     const frameSrc = templateTarget ?? target;
@@ -462,7 +493,7 @@ const PreviewClient = () => {
                 // No published sibling to borrow: fall back to the type's configured
                 // preview URL (a representative page) so the live preview + editor still
                 // render the template, with the same "previewing on your template" notice.
-                const typeUrl = resolveTypePreviewUrl(type.previewUrl, entry, type);
+                const typeUrl = resolveTypePreviewUrl(type.previewUrl, entry, type, previewToken);
                 if (typeUrl) {
                     setSiteEditable(false);
                     setTemplateTarget(typeUrl);
