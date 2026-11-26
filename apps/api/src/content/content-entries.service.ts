@@ -869,12 +869,12 @@ export class ContentEntriesService {
 
     /** A signed, one-hour preview token for this entry, so the site can show it while it is a draft. */
     async previewToken(workspaceId: string, id: string, role?: RoleRules) {
-        const e = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, select: { slug: true, contentTypeId: true, contentType: { select: { apiId: true } } } });
+        const e = await this.prisma.contentEntry.findFirst({ where: { id, workspaceId }, select: { slug: true, contentTypeId: true, contentType: { select: { apiId: true } }, workspace: { select: { slug: true } } } });
         if (!e) throw new NotFoundException("Entry not found.");
         const allowed = this.rbac && role ? await this.rbac.allowedTypeIds(role) : null;
         if (allowed && !allowed.includes(e.contentTypeId)) throw new ForbiddenException("Your role can't read content of this type.");
         const secret = await previewSecretFor(this.prisma, workspaceId);
-        const { token, exp } = mintPreviewToken(secret, workspaceId, e.contentType.apiId, e.slug ?? "");
+        const { token, exp } = mintPreviewToken(secret, e.workspace.slug, e.contentType.apiId, e.slug ?? "");
         return { token, expiresAt: exp };
     }
 

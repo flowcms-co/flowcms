@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ForbiddenException, NotFoundException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { PERMISSIONS } from "@flowcms/shared";
+import { PERMISSIONS, decryptSecret } from "@flowcms/shared";
 import { PermissionsGuard } from "../auth/permissions.guard";
 import { ContentEntriesService } from "./content-entries.service";
 import { PREVIEW_TOKEN_TTL_SECONDS, mintPreviewToken, verifyPreviewToken } from "./preview-token";
@@ -51,8 +51,9 @@ describe("preview token endpoint", () => {
         expect(guard.canActivate(ctx(user([PERMISSIONS.CONTENT_READ])))).toBe(true);
     });
 
+    let stored: string | null = null;
+    const secretOf = async () => decryptSecret(stored!);
     const run = (entry: unknown, allowed: string[] | null) => {
-        let stored: string | null = null;
         const self = {
             prisma: {
                 contentEntry: { findFirst: async () => entry },
@@ -65,11 +66,12 @@ describe("preview token endpoint", () => {
         };
         return ContentEntriesService.prototype.previewToken.call(self as never, "ws", "e1", {} as never);
     };
-    const entry = { slug: "well-pump-repair", contentTypeId: "t1", contentType: { apiId: "service" } };
+    const entry = { slug: "well-pump-repair", contentTypeId: "t1", contentType: { apiId: "services" }, workspace: { slug: "acme" } };
 
     it("mints a token bound to the entry's type and slug", async () => {
         const { token } = await run(entry, null);
         expect(token).toMatch(/^\d+\.[\w-]+$/);
+        expect(verifyPreviewToken(await secretOf(), "acme", "services", "well-pump-repair", token)).toBe(true);
     });
     it("is not found for an entry outside the workspace, forbidden for a role that cannot read the type", async () => {
         await expect(run(null, null)).rejects.toBeInstanceOf(NotFoundException);

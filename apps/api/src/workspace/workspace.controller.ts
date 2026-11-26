@@ -142,14 +142,16 @@ export class WorkspaceController {
     @Get("preview-secret")
     @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
     async previewSecret(@CurrentUser() user: AuthUser) {
-        return { secret: await previewSecretFor(this.prisma, user.workspaceId) };
+        const w = await this.prisma.workspace.findUniqueOrThrow({ where: { id: user.workspaceId }, select: { slug: true } });
+        return { secret: await previewSecretFor(this.prisma, user.workspaceId), workspace: w.slug };
     }
 
     /** New secret; links minted with the old one stop working. */
     @Post("preview-secret/rotate")
     @RequirePermissions(PERMISSIONS.WORKSPACE_MANAGE)
     async rotatePreviewSecret(@CurrentUser() user: AuthUser) {
-        return { secret: await previewSecretFor(this.prisma, user.workspaceId, true) };
+        const w = await this.prisma.workspace.findUniqueOrThrow({ where: { id: user.workspaceId }, select: { slug: true } });
+        return { secret: await previewSecretFor(this.prisma, user.workspaceId, true), workspace: w.slug };
     }
 
     /** Mark first-run guided setup as complete (stops the auto-redirect). */

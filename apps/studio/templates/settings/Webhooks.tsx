@@ -23,12 +23,14 @@ const blank = { name: "", url: "", events: [] as string[], secret: "", enabled: 
  */
 const PreviewSecretCard = () => {
     const [secret, setSecret] = useState<string | null>(null);
+    const [workspace, setWorkspace] = useState("");
     const [shown, setShown] = useState(false);
     const [note, setNote] = useState<string | null>(null);
     const load = async (rotate: boolean) => {
         try {
-            const r = await api<{ secret: string }>(rotate ? "/workspace/preview-secret/rotate" : "/workspace/preview-secret", rotate ? { method: "POST" } : undefined);
+            const r = await api<{ secret: string; workspace: string }>(rotate ? "/workspace/preview-secret/rotate" : "/workspace/preview-secret", rotate ? { method: "POST" } : undefined);
             setSecret(r.secret);
+            setWorkspace(r.workspace);
             setShown(true);
             setNote(rotate ? "New secret made. Update your site's environment; old preview links stop working." : null);
         } catch (e) {
@@ -57,6 +59,7 @@ const PreviewSecretCard = () => {
                 )}
                 <button type="button" onClick={() => void rotate()} className="btn-primary">Rotate</button>
             </div>
+            {workspace && <p className="text-caption-2 text-grey">Workspace name for the site: <code className="font-mono">{workspace}</code></p>}
             {note && <p className="text-caption-2 text-grey">{note}</p>}
         </Card>
     );
