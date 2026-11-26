@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
     MAX_ADVICE,
     MAX_FIELDS,
@@ -168,11 +168,14 @@ const nextId = (cfg: BuilderConfig, prefix: string): string => {
  * which runs the same compute as the published page.
  */
 const CalculatorBuilderEditor = ({ value, onChange }: { value: unknown; onChange: (c: BuilderConfig) => void }) => {
-    const cfg = useMemo(() => normConfig(value), [value]);
+    // Read once. Re-reading on every change would trim a space the moment it is typed.
+    const [cfg, setCfg] = useState(() => normConfig(value));
     const edit = (fn: (c: BuilderConfig) => void, prune = false) => {
         const next = structuredClone(cfg);
         fn(next);
-        onChange(prune ? pruneConfig(next) : next);
+        const out = prune ? pruneConfig(next) : next;
+        setCfg(out);
+        onChange(out);
     };
     const numbers = cfg.fields.filter((f): f is NumberField => f.type === "number");
     const choices = cfg.fields.filter((f): f is ChoiceField => f.type === "choice");

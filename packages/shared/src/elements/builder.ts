@@ -144,6 +144,7 @@ export function pruneConfig(cfg: BuilderConfig): BuilderConfig {
         if (f.type === "choice")
             return withShow({
                 ...f,
+                default: f.options.some((o) => o.label === f.default) ? f.default : (f.options[0]?.label ?? ""),
                 options: f.options.map((o) => {
                     if (!o.rates) return o;
                     const rates = Object.fromEntries(Object.entries(o.rates).filter(([k]) => numbers.has(k)));
@@ -161,6 +162,7 @@ export function pruneConfig(cfg: BuilderConfig): BuilderConfig {
     const plan = cfg.plan ? { ...cfg.plan, ...(cfg.plan.replaces && !ids.has(cfg.plan.replaces) ? { replaces: undefined } : {}) } : undefined;
     if (plan) {
         if (!plan.replaces) delete plan.replaces;
+        if (!plan.options.some((o) => o.label === plan.default)) plan.default = plan.options[0]?.label ?? "";
         const s = fix(plan.showIf);
         if (s) plan.showIf = s;
         else delete plan.showIf;

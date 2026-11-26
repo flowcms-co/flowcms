@@ -139,4 +139,13 @@ describe("calculator builder: validation", () => {
         expect(per.per!.field).toBe("n1");
         expect(validateConfig(p)).toEqual([]);
     });
+    it("pruneConfig resets a default that pointed at a removed option", () => {
+        const c = everything();
+        (c.fields[2] as { options: { label: string }[] }).options.shift(); // Basic was the default
+        c.plan!.options.shift(); // Once was the default
+        const p = pruneConfig(c);
+        expect((p.fields[2] as { default: string }).default).toBe("Premium");
+        expect(p.plan!.default).toBe("Quarterly");
+        expect(validateConfig(p)).toEqual([]);
+    });
 });
