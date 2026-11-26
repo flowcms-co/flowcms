@@ -19,7 +19,9 @@ import { TableKit } from "@tiptap/extension-table";
 import { TextStyle, Color } from "@tiptap/extension-text-style";
 import { Plugin } from "@tiptap/pm/state";
 import type { Node as PmNode } from "@tiptap/pm/model";
-import { Extension, type AnyExtension } from "@tiptap/react";
+import { Extension, Node, ReactNodeViewRenderer, type AnyExtension } from "@tiptap/react";
+import { safeJson } from "@flowcms/shared/elements";
+import ElementNodeView from "@/components/editor/ElementNodeView";
 import type { EditorProps } from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
 import { uploadFile, mediaUrl } from "@/lib/api";
@@ -45,6 +47,7 @@ const ALLOW_TYPES: Record<string, string[]> = {
     superscript: ["superscript"],
     link: ["link"],
     color: ["textStyle"],
+    element: ["flowElement"],
 };
 
 const countTypes = (doc: PmNode, names: Set<string>): Map<string, number> => {
@@ -84,6 +87,45 @@ export const allowOnly = (allow: readonly string[]) => {
     });
 };
 
+/**
+ * An element (steps, ...): an atom block that stores its template and values and shows the
+ * rendered preview in the editor. Stored as `<div data-flow-element="steps" data-values="...">`,
+ * never as expanded HTML, so a save can only ever write the small stored form.
+ */
+export const FlowElement = Node.create({
+    name: "flowElement",
+    group: "block",
+    atom: true,
+    selectable: true,
+    draggable: true,
+    addAttributes() {
+        return { template: { default: "steps" }, values: { default: {} } };
+    },
+    parseHTML() {
+        return [
+            {
+                tag: "div[data-flow-element]",
+                getAttrs: (el) => {
+                    const node = el as HTMLElement;
+                    let values: unknown = null; // unreadable JSON: the node view says so, nothing is silently dropped
+                    try {
+                        values = JSON.parse(node.getAttribute("data-values") ?? "{}");
+                    } catch {
+                        /* keep null */
+                    }
+                    return { template: node.getAttribute("data-flow-element") ?? "", values };
+                },
+            },
+        ];
+    },
+    renderHTML({ node }) {
+        return ["div", { "data-flow-element": String(node.attrs.template), "data-values": safeJson(node.attrs.values ?? {}) }];
+    },
+    addNodeView() {
+        return ReactNodeViewRenderer(ElementNodeView);
+    },
+});
+
 /** Build the extension list for a rich-text editor with the given placeholder. `allow` is a
  *  content rule's allowed names: anything else cannot be added to this field. */
 export const richTextExtensions = (placeholder: string, allow?: readonly string[]): AnyExtension[] => [
@@ -110,6 +152,8 @@ export const richTextExtensions = (placeholder: string, allow?: readonly string[
     // Inline text color (Color rides on top of TextStyle).
     TextStyle,
     Color,
+    // Premade elements (steps, ...). Always registered so stored ones open; inserting is gated by the license.
+    FlowElement,
 ];
 
 /** Common emojis offered by the toolbar's emoji picker (plain unicode — inserted as

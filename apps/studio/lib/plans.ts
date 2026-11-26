@@ -32,6 +32,7 @@ export type FeatureKey =
     | "multi_workspace"
     | "ip_policies"
     | "content_rules"
+    | "elements"
     | "seo_automation";
 
 export const FEATURE_TIER: Record<FeatureKey, Plan> = {
@@ -47,6 +48,7 @@ export const FEATURE_TIER: Record<FeatureKey, Plan> = {
     multi_workspace: "enterprise",
     ip_policies: "enterprise",
     content_rules: "enterprise",
+    elements: "enterprise",
     seo_automation: "pro",
 };
 
@@ -63,6 +65,7 @@ export const FEATURE_LABEL: Record<FeatureKey, string> = {
     multi_workspace: "Multi-workspace console",
     ip_policies: "IP allowlists & session policy",
     content_rules: "Content rules & publishing guardrails",
+    elements: "Elements: premade infographics in rich text",
     seo_automation: "Scheduled AI auditing",
 };
 
@@ -122,6 +125,7 @@ export const PLANS: PlanCard[] = [
             FEATURE_LABEL.multi_workspace,
             FEATURE_LABEL.ip_policies,
             FEATURE_LABEL.content_rules,
+            FEATURE_LABEL.elements,
             "Priority support & SLA",
         ],
     },

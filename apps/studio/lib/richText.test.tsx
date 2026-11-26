@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import { render, waitFor } from "@testing-library/react";
+import { elementHtml } from "@flowcms/shared/elements";
 import { richTextExtensions } from "./tiptap";
 import { RichTextTracker } from "./richTextTracker";
 
@@ -90,5 +91,36 @@ describe("link options", () => {
         expect(linkAttrs("https://other.com", site, { newTab: false, nofollow: false })).toEqual({ target: null, rel: null });
         expect(linkAttrs("https://other.com", site, { newTab: true, nofollow: false })).toEqual({ target: "_blank", rel: "noopener noreferrer" });
         expect(linkAttrs("https://other.com", site, { newTab: false, nofollow: true })).toEqual({ target: null, rel: "nofollow" });
+    });
+});
+
+describe("elements in the editor", () => {
+    const values = { title: "Fix it & go", layout: "vertical", steps: [1, 2, 3].map((n) => ({ label: `L${n}`, time: "", text: `T${n} "q"` })) };
+    const stored = `<p>Intro</p>${elementHtml("steps", values)}<p>After</p>`;
+
+    it("opens a stored element as one node and saves the same stored form back", () => {
+        const editor = open(stored);
+        const node = editor.state.doc.child(1);
+        expect(node.type.name).toBe("flowElement");
+        expect(node.attrs).toEqual({ template: "steps", values });
+        expect(editor.getHTML()).toBe(stored);
+    });
+
+    it("an element in the middle of a stored article keeps its bytes when another block is edited", () => {
+        const original = `<h2>Costs</h2>\n${elementHtml("steps", values)}\n<p>Old words.</p>`;
+        const editor = open(original);
+        const baseline = editor.getHTML();
+        retype(editor, "Old", "New");
+        const out = new RichTextTracker();
+        out.load(original);
+        out.ready(baseline);
+        expect(out.changed(editor.getHTML())).toBe(true);
+        expect(out.current).toBe(`<h2>Costs</h2>\n${elementHtml("steps", values)}\n<p>New words.</p>`);
+    });
+
+    it("an unreadable element is kept as a node, not dropped", () => {
+        const editor = open('<p>x</p><div data-flow-element="steps" data-values="{broken"></div>');
+        expect(editor.state.doc.childCount).toBeGreaterThanOrEqual(2);
+        expect(editor.state.doc.child(1).type.name).toBe("flowElement");
     });
 });

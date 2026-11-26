@@ -6,12 +6,18 @@
  * is a small popover button that runs TipTap commands on the passed editor.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { isInternalHref } from "@flowcms/shared/html";
 import { useWorkspace } from "@/lib/useWorkspace";
 import type { Editor } from "@tiptap/react";
 import { cn } from "@/lib/cn";
 import { EMOJIS, TEXT_COLORS } from "@/lib/tiptap";
+import { ELEMENT_TEMPLATES, elementTemplate, type ElementTemplate } from "@flowcms/shared/elements";
+import { usePlanIfAny } from "@/components/providers/LicenseProvider";
+import { EDIT_ELEMENT_EVENT, type EditElementDetail } from "@/lib/elements";
+import ElementDrawer from "./ElementDrawer";
+
+const ElementUpgrade = lazy(() => import("./ElementUpgrade"));
 import { EditorIcon } from "./EditorIcons";
 
 /** Prefix a bare host (no scheme) with https:// so "open in new tab" works. */
@@ -275,5 +281,73 @@ export const TableMenu = ({ editor, iconClass }: { editor: Editor; iconClass?: s
                 </div>
             )}
         </Popover>
+    );
+};
+
+/**
+ * Insert > Element. Lists the premade templates (only the built ones can be picked) and opens the
+ * fill drawer. Without the `elements` license the menu stays visible but only offers the upgrade;
+ * elements already in the text keep showing, and can be removed but not edited.
+ * The drawer also opens from an element's own Edit button (EDIT_ELEMENT_EVENT).
+ */
+export const ElementMenu = ({ editor, iconClass }: { editor: Editor; iconClass?: string }) => {
+    const licensed = usePlanIfAny()?.has("elements") ?? false;
+    const [drawer, setDrawer] = useState<{ template: ElementTemplate; values: Record<string, unknown>; pos: number | null } | null>(null);
+
+    useEffect(() => {
+        if (!licensed) return;
+        const on = (e: Event) => {
+            const d = (e as CustomEvent<EditElementDetail>).detail;
+            if (d.editor !== editor) return;
+            const node = editor.state.doc.nodeAt(d.pos);
+            const template = node ? elementTemplate(String(node.attrs.template)) : undefined;
+            if (node && template) setDrawer({ template, values: (node.attrs.values ?? {}) as Record<string, unknown>, pos: d.pos });
+        };
+        window.addEventListener(EDIT_ELEMENT_EVENT, on);
+        return () => window.removeEventListener(EDIT_ELEMENT_EVENT, on);
+    }, [editor, licensed]);
+
+    const save = (values: Record<string, unknown>) => {
+        if (!drawer) return;
+        const { template, pos } = drawer;
+        if (pos !== null) {
+            editor.chain().focus().command(({ tr }) => { tr.setNodeMarkup(pos, undefined, { template: template.id, values }); return true; }).run();
+        } else {
+            // The block boundary after the block the cursor is in (after the whole list, table or quote).
+            const { $to, to } = editor.state.selection;
+            const at = $to.depth >= 1 ? $to.after(1) : to;
+            editor.chain().focus().insertContentAt(at, { type: "flowElement", attrs: { template: template.id, values } }).run();
+        }
+        setDrawer(null);
+    };
+
+    return (
+        <>
+            <Popover title="Insert element" trigger={<EditorIcon name="element" className={iconClass} />} panelClass="w-64">
+                {(close) =>
+                    licensed ? (
+                        <div className="flex flex-col">
+                            {ELEMENT_TEMPLATES.map((t) => (
+                                <button
+                                    key={t.id}
+                                    type="button"
+                                    disabled={!t.enabled}
+                                    onClick={() => { setDrawer({ template: t, values: t.defaults(), pos: null }); close(); }}
+                                    className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption-1 text-black transition-colors hover:bg-lavender-mist hover:text-primary disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-black dark:text-white dark:hover:bg-dark-3 dark:disabled:hover:text-white"
+                                >
+                                    {t.name}
+                                    {!t.enabled && <span className="text-caption-2 text-grey">Coming soon</span>}
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <Suspense fallback={null}>
+                            <ElementUpgrade />
+                        </Suspense>
+                    )
+                }
+            </Popover>
+            {drawer && <ElementDrawer template={drawer.template} initial={drawer.values} editing={drawer.pos !== null} onSave={save} onClose={() => setDrawer(null)} />}
+        </>
     );
 };

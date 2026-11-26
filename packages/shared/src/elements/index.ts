@@ -19,7 +19,7 @@ export type { StepsValues } from "./steps";
 export type ElementField =
     | { key: string; label: string; type: "text" }
     | { key: string; label: string; type: "choice"; options: { value: string; label: string }[] }
-    | { key: string; label: string; type: "rows"; min: number; max: number; columns: { key: string; label: string; long?: boolean }[] };
+    | { key: string; label: string; type: "rows"; itemLabel: string; min: number; max: number; columns: { key: string; label: string; long?: boolean }[] };
 
 export interface ElementTemplate {
     id: string;
@@ -80,14 +80,18 @@ export function storedElements(html: string): { template: string; values: unknow
     return [...html.matchAll(STORED)].map((m) => readStored(m[0], m[1] ?? m[2] ?? ""));
 }
 
+/** One element as public HTML: the wrapper plus the template's markup. Empty for an unknown template. */
+export function renderElement(template: string, values: unknown): string {
+    const t = elementTemplate(template);
+    return t ? `<div class="flow-el flow-el--${esc(t.id)}" data-flow-element="${esc(t.id)}">${t.render(values)}</div>` : "";
+}
+
 /** Public delivery: every stored element becomes finished, escaped HTML. Anything that cannot be read is dropped, never half shown. */
 export function expandElements(html: string): string {
     if (!html || !html.includes("data-flow-element")) return html;
     return html.replace(STORED, (tag, a: string | undefined, b: string | undefined) => {
         const { template, values } = readStored(tag, a ?? b ?? "");
-        const t = elementTemplate(template);
-        if (!t || values === null) return "";
-        return `<div class="flow-el flow-el--${esc(t.id)}" data-flow-element="${esc(t.id)}">${t.render(values)}</div>`;
+        return values === null ? "" : renderElement(template, values);
     });
 }
 

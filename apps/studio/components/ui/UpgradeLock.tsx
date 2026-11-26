@@ -26,7 +26,7 @@ type Props = {
 };
 
 /** The "Upgrade to Pro/Enterprise" call-to-action, gated to license managers. */
-const UpgradeCta = ({ feature }: { feature: FeatureKey }) => {
+export const UpgradeCta = ({ feature }: { feature: FeatureKey }) => {
     const { can } = useAuth();
     const { tierFor } = usePlan();
     const tier = tierFor(feature);
@@ -46,7 +46,7 @@ const UpgradeCta = ({ feature }: { feature: FeatureKey }) => {
 };
 
 /** A small uppercase plan badge (Pro / Enterprise). */
-const TierBadge = ({ feature }: { feature: FeatureKey }) => {
+export const TierBadge = ({ feature }: { feature: FeatureKey }) => {
     const { tierFor } = usePlan();
     const tier = tierFor(feature);
     return (

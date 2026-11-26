@@ -8,7 +8,7 @@ import { runAi, aiErrorMessage } from "@/lib/useAi";
 import { richTextExtensions, imageUploadProps } from "@/lib/tiptap";
 import { filterPastedHtml, tidyRich, totalCount, type TidyCounts } from "@flowcms/shared/tidy";
 import { RichTextTracker } from "@/lib/richTextTracker";
-import { ColorMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
+import { ColorMenu, ElementMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
 import { EditorIcon } from "./EditorIcons";
 import MediaPicker from "@/components/ui/MediaPicker";
 
@@ -84,6 +84,7 @@ const Toolbar = ({ editor, onInsertImage, onAi, aiBusy, allow }: { editor: Edito
         [
             ok("emoji") && <EmojiMenu key="em" editor={editor} iconClass={ICON} />,
             ok("table") && <TableMenu key="tb" editor={editor} iconClass={ICON} />,
+            ok("element") && <ElementMenu key="el" editor={editor} iconClass={ICON} />,
             ok("rule") && <TBtn key="hr" title="Horizontal rule" label={<EditorIcon name="rule" className={ICON} />} on={() => editor.chain().focus().setHorizontalRule().run()} />,
             ok("image") && <TBtn key="im" title="Insert image" label={<EditorIcon name="image" className={ICON} />} on={onInsertImage} />,
         ],

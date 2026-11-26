@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { mediaUrl } from "@/lib/api";
 import { runAi, aiErrorMessage } from "@/lib/useAi";
 import { richTextExtensions, imageUploadProps } from "@/lib/tiptap";
-import { ColorMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
+import { ColorMenu, ElementMenu, EmojiMenu, LinkMenu, TableMenu } from "./RichToolbarMenus";
 import { EditorIcon } from "./EditorIcons";
 import MediaPicker from "@/components/ui/MediaPicker";
 
@@ -176,6 +176,7 @@ const EditorCanvas = ({
                 <Sep />
                 <EmojiMenu editor={editor} iconClass={ICON} />
                 <TableMenu editor={editor} iconClass={ICON} />
+                <ElementMenu editor={editor} iconClass={ICON} />
                 <TBtn title="Horizontal rule" onClick={() => editor.chain().focus().setHorizontalRule().run()}><EditorIcon name="rule" className={ICON} /></TBtn>
                 <Sep />
                 <button

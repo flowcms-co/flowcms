@@ -43,6 +43,7 @@ export const steps: ElementTemplate = {
             key: "steps",
             label: "Steps",
             type: "rows",
+            itemLabel: "step",
             min: MIN_STEPS,
             max: MAX_STEPS,
             columns: [

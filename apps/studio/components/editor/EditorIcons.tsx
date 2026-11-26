@@ -172,6 +172,15 @@ const PATHS: Record<string, ReactNode> = {
             <path d="M12 3v18" />
         </>
     ),
+    element: (
+        <>
+            <circle cx="5" cy="6" r="2" />
+            <circle cx="19" cy="18" r="2" />
+            <circle cx="12" cy="12" r="2" />
+            <path d="M7 7l3.5 3.5" />
+            <path d="M13.5 13.5 17 17" />
+        </>
+    ),
     rule: <line x1="4" y1="12" x2="20" y2="12" />,
     emoji: (
         <>

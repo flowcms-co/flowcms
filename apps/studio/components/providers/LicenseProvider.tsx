@@ -110,3 +110,8 @@ export function usePlan(): PlanContextValue {
     if (!ctx) throw new Error("usePlan must be used within a LicenseProvider");
     return ctx;
 }
+
+/** Like usePlan, but null outside a LicenseProvider (small embedded editors and tests). */
+export function usePlanIfAny(): PlanContextValue | null {
+    return useContext(PlanContext);
+}
