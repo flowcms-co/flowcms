@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import Card from "@/components/ui/Card";
 import ContentTable from "@/templates/ContentPage/ContentTable";
 import { api } from "@/lib/api";
@@ -19,7 +20,9 @@ type ApiType = { id: string; name: string; pageType?: string; routePattern?: str
 const ReferenceContent = () => {
     const [types, setTypes] = useState<RefType[]>([]);
     const [loading, setLoading] = useState(true);
-    const [activeId, setActiveId] = useState<string | null>(null);
+    // The active tab lives in the URL (?tab=<type id>), so back from the editor reopens the same tab.
+    const router = useRouter();
+    const activeId = useSearchParams().get("tab");
 
     useEffect(() => {
         let cancelled = false;
@@ -30,7 +33,6 @@ const ReferenceContent = () => {
                     .filter((t) => t.pageType === "reference")
                     .map((t) => ({ id: t.id, name: t.name, routePattern: t.routePattern }));
                 setTypes(refs);
-                setActiveId((cur) => cur ?? refs[0]?.id ?? null);
             })
             .catch(() => {
                 /* content.read required */
@@ -70,7 +72,7 @@ const ReferenceContent = () => {
                     <button
                         key={t.id}
                         type="button"
-                        onClick={() => setActiveId(t.id)}
+                        onClick={() => router.replace(`/content/reference?tab=${encodeURIComponent(t.id)}`, { scroll: false })}
                         className={cn(
                             "shrink-0 rounded-md px-4 py-2 text-menu transition-colors",
                             t.id === active.id
@@ -89,7 +91,7 @@ const ReferenceContent = () => {
                 </p>
             )}
 
-            {/* Remount per type so selection/paging resets on tab switch. */}
+            {/* Remount per type so selection and paging reset on a real tab switch; a restored URL keeps its page. */}
             <ContentTable key={active.id} lockedTypeId={active.id} />
         </div>
     );

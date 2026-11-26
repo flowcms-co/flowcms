@@ -23,7 +23,7 @@ import { formatDate } from "@/lib/format";
 import CountUp from "@/components/motion/CountUp";
 import { useWorkspace, localeName } from "@/lib/useWorkspace";
 import { cn } from "@/lib/cn";
-import { CONTENT_LIST_URL_KEY } from "@/lib/contentListUrl";
+import { CONTENT_LIST_URL_KEY, CONTENT_SCROLL_KEY, listUrl } from "@/lib/contentListUrl";
 import { useScrollResetOnChange } from "@/lib/useScroll";
 import { confirm, notice } from "@/components/providers/ConfirmProvider";
 
@@ -136,14 +136,13 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     const loadSeq = useRef(0);
     const [types, setTypes] = useState<{ id: string; name: string; pageType?: string }[]>([]);
     const [loading, setLoading] = useState(true);
-    // The All-content list keeps its view (search, filters, sort, page) in the URL, so
-    // coming back from the editor or reloading lands on the same place. Type-locked
-    // reference lists don't: they share their page with a tab switcher.
-    const syncUrl = !lockedTypeId;
-    const param = (k: string) => (syncUrl ? searchParams.get(k) : null);
+    // Every content list keeps its view (search, filters, sort, page) in the URL, so
+    // coming back from the editor or reloading lands on the same place. A type-locked
+    // Reference list shares its page with a tab switcher, which owns the `tab` param.
+    const param = (k: string) => searchParams.get(k);
     const [filters, setFilters] = useState<Filters>(() => ({
         query: param("q") ?? "",
-        type: param("type") ?? "all",
+        type: lockedTypeId ? "all" : (param("type") ?? "all"),
         status: statusFromParam(searchParams.get("status")),
         author: param("by") ?? "all",
     }));
@@ -176,26 +175,20 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
     // Mirror the view into the URL (replaceState: no history entry per keystroke) and
     // remember it for the editor's back button. Defaults are left out to keep URLs clean.
     useEffect(() => {
-        if (!syncUrl) return;
-        const params = new URLSearchParams(window.location.search);
-        const set = (k: string, v: string, def: string) => (v && v !== def ? params.set(k, v) : params.delete(k));
-        set("q", filters.query.trim(), "");
-        set("type", filters.type, "all");
-        set("status", filters.status, "all");
-        set("by", filters.author, "all");
-        set("locale", localeFilter, "all");
-        set("sort", sort.key, "updated");
-        set("dir", sort.dir, "desc");
-        set("page", String(page), "1");
-        const qs = params.toString();
-        const url = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+        const url = listUrl(
+            window.location.pathname,
+            window.location.search,
+            { q: filters.query.trim(), type: filters.type, status: filters.status, by: filters.author, locale: localeFilter, sort: sort.key, dir: sort.dir, page: String(page) },
+            { type: "all", status: "all", by: "all", locale: "all", sort: "updated", dir: "desc", page: "1" },
+            !!lockedTypeId,
+        );
         if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(window.history.state, "", url);
         try {
             sessionStorage.setItem(CONTENT_LIST_URL_KEY, url);
         } catch {
             /* storage blocked: back falls through to plain /content */
         }
-    }, [syncUrl, filters, localeFilter, sort, page]);
+    }, [lockedTypeId, filters, localeFilter, sort, page]);
 
     const mineOnly = searchParams.get("author") === "me";
     const multiLocale = (ws?.locales.length ?? 1) > 1;
@@ -400,10 +393,43 @@ const ContentTable = ({ lockedTypeId }: { lockedTypeId?: string } = {}) => {
         ...(ws?.locales ?? []).map((l) => ({ value: l, label: localeName(l) })),
     ], [ws]);
 
+    /* ─── scroll position across a trip to the editor ─────── */
+
+    // Opening an entry saves where the list was scrolled to, for this list URL; coming back
+    // restores it once, after the rows are in.
+    const scroller = () => {
+        for (let el = listTopRef.current?.parentElement ?? null; el; el = el.parentElement) {
+            const oy = getComputedStyle(el).overflowY;
+            if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight) return el;
+        }
+        return null;
+    };
+    const rememberScroll = (e: React.MouseEvent) => {
+        if (!(e.target as HTMLElement).closest('a[href^="/content/editor"]')) return;
+        try {
+            sessionStorage.setItem(CONTENT_SCROLL_KEY, JSON.stringify({ url: `${window.location.pathname}${window.location.search}`, top: scroller()?.scrollTop ?? window.scrollY }));
+        } catch {
+            /* storage blocked: the list opens at the top */
+        }
+    };
+    useEffect(() => {
+        if (loading) return;
+        try {
+            const saved = JSON.parse(sessionStorage.getItem(CONTENT_SCROLL_KEY) ?? "null") as { url: string; top: number } | null;
+            if (!saved || saved.url !== `${window.location.pathname}${window.location.search}`) return;
+            sessionStorage.removeItem(CONTENT_SCROLL_KEY);
+            const el = scroller();
+            if (el) el.scrollTop = saved.top;
+            else window.scrollTo(0, saved.top);
+        } catch {
+            /* nothing saved */
+        }
+    }, [loading]);
+
     /* ─── render ──────────────────────────────────────────── */
 
     return (
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-5" onClickCapture={rememberScroll}>
             <div ref={listTopRef} className="scroll-mt-6" />
 
             {mineOnly && (
