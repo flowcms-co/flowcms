@@ -53,7 +53,14 @@ export const elementHtml = (template: string, values: unknown, templateId?: stri
     `<div data-flow-element="${esc(template)}"${templateId ? ` data-template="${esc(templateId)}"` : ""} data-values="${esc(safeJson(values ?? {}))}"></div>`;
 
 const STORED = /<div\b[^>]*?\sdata-flow-element\s*=\s*(?:"([\w-]*)"|'([\w-]*)')[^>]*>\s*<\/div>/gi;
-const unescape = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+const NAMED: Record<string, string> = { quot: '"', apos: "'", lt: "<", gt: ">", amp: "&" };
+/** Decode the attribute in one pass: the five named entities plus any decimal or hex numeric entity, so values written by any HTML escaper (`&#39;`, `&#x27;`, `&#34;`) read back the same. */
+const unescape = (s: string) =>
+    s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(quot|apos|lt|gt|amp));/gi, (m, dec, hex, name) => {
+        if (name) return NAMED[name.toLowerCase()];
+        const n = dec ? Number(dec) : parseInt(hex, 16);
+        return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+    });
 
 /** The template id a stored element is linked to, if any. */
 const linkOf = (tag: string): string | undefined => /\sdata-template\s*=\s*(?:"([\w-]+)"|'([\w-]+)')/i.exec(tag)?.slice(1).find(Boolean);

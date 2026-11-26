@@ -75,6 +75,18 @@ describe("stored form and delivery", () => {
 
     it("drops an element it cannot read or does not know", () => {
         expect(expandElements('<p>x</p><div data-flow-element="steps" data-values="{broken"></div>')).toBe("<p>x</p>");
+    });
+
+    it("reads values written by any HTML escaper (hex, decimal and named entities)", () => {
+        const json = JSON.stringify({ ...good(), title: `Policy's "limit" <b> & co` });
+        const variants = [
+            json.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+            json.replace(/&/g, "&#x26;").replace(/"/g, "&#x22;").replace(/'/g, "&#x27;").replace(/</g, "&#x3C;").replace(/>/g, "&#x3E;"),
+            json.replace(/&/g, "&#38;").replace(/"/g, "&#34;").replace(/'/g, "&apos;").replace(/</g, "&#60;").replace(/>/g, "&#62;"),
+        ];
+        for (const v of variants)
+            expect(storedElements(`<div data-flow-element="steps" data-values="${v}"></div>`)[0].values).toEqual({ ...good(), title: `Policy's "limit" <b> & co` });
+        expect(storedElements('<div data-flow-element="steps" data-values="{&quot;t&quot;:&quot;a&amp;#39;b&quot;}"></div>')[0].values).toEqual({ t: "a&#39;b" });
         expect(expandElements('<div data-flow-element="nope" data-values="{}"></div>')).toBe("");
     });
 
