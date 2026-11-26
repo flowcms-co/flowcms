@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { BadRequestException } from "@nestjs/common";
-import { validateEntryData, type SchemaField } from "./entry-validation";
+import { elementHtml } from "@flowcms/shared";
+import { contentWarnings, validateEntryData, type SchemaField } from "./entry-validation";
 
 /** Run validation and return the field-keyed error map (empty when it passes). */
 function errorsFor(fields: SchemaField[], data: Record<string, unknown>, enforceRequired = true): Record<string, string> {
@@ -48,5 +49,32 @@ describe("Reference field validation", () => {
             { name: "posts", type: "Reference", referencedTypeId: "t1", mappedByField: "author", multiple: true, required: true },
         ];
         expect(errorsFor(fields, {})).toEqual({});
+    });
+});
+
+describe("elements in rich text", () => {
+    const fields: SchemaField[] = [
+        { name: "body", type: "Rich text" },
+        { name: "blocks", type: "Component", repeatable: true, fields: [{ name: "content", type: "Rich text" }] },
+    ];
+    const step = (n: number) => ({ label: `L${n}`, time: "", text: `T${n}` });
+    const good = elementHtml("steps", { title: "t", layout: "horizontal", steps: [1, 2, 3].map(step) });
+    const bad = elementHtml("steps", { title: "t", layout: "horizontal", steps: [1, 2].map(step) });
+
+    it("a good element publishes, with no rules on the type", () => {
+        expect(errorsFor(fields, { body: `<p>x</p>${good}` })).toEqual({});
+    });
+
+    it("a bad element blocks publishing, at the field path, even inside a component", () => {
+        expect(errorsFor(fields, { body: `<p>x</p>${bad}` }).body).toMatch(/at least 3 steps/);
+        expect(errorsFor(fields, { blocks: [{ content: bad }] })["blocks[0].content"]).toMatch(/at least 3 steps/);
+    });
+
+    it("a draft saves with the bad element and only warns", () => {
+        expect(errorsFor(fields, { body: bad }, false)).toEqual({});
+        const w = contentWarnings(fields, { body: bad }, null);
+        expect(w).toHaveLength(1);
+        expect(w[0]).toMatchObject({ path: "body", level: "warn" });
+        expect(contentWarnings(fields, { body: good }, null)).toEqual([]);
     });
 });

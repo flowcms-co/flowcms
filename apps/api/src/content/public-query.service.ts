@@ -5,6 +5,7 @@ import { entryToCanonicalContent, buildJsonLd } from "./canonical-content";
 import { fieldsOf, type ComponentMap, type SchemaField } from "./entry-validation";
 import { altBackfillPatch, altLookupFrom, type AltLookup } from "./alt-backfill";
 import { CacheService } from "../cache/cache.service";
+import { expandElements } from "@flowcms/shared";
 
 /** What `shape` needs to default empty alt text from the asset library. */
 type AltCtx = { components: ComponentMap; altFor: AltLookup };
@@ -88,6 +89,16 @@ const coerce = (v: string): string | number | boolean => {
  */
 const MEDIA_BASE = (process.env.MEDIA_PUBLIC_URL || process.env.STUDIO_URL || "").replace(/\/$/, "");
 
+/** Deep-expand every stored element (`<div data-flow-element=...>`) in any string into finished HTML. Delivery only: stored data is never rewritten. */
+const expandDeep = (v: unknown): unknown => {
+    if (typeof v === "string") return v.includes("data-flow-element") ? expandElements(v) : v;
+    if (Array.isArray(v)) return v.map(expandDeep);
+    if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) {
+        return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, expandDeep(val)]));
+    }
+    return v;
+};
+
 /** Deep-rewrite relative "/media/..." strings to absolute CMS URLs. */
 const absolutizeMedia = (v: unknown): unknown => {
     if (typeof v === "string") return v.startsWith("/media/") ? `${MEDIA_BASE}${v}` : v;
@@ -170,9 +181,11 @@ export class PublicQueryService {
             const jsonLd = [...manual, ...derived];
             if (jsonLd.length) base.jsonLd = jsonLd;
         }
+        // Elements become finished HTML on delivery (every public route shapes through here).
+        const expanded = expandDeep(base) as Record<string, unknown>;
         // Make relative "/media/..." refs absolute so they load from the CMS on any
         // frontend domain (not the consuming site's own origin).
-        return MEDIA_BASE ? (absolutizeMedia(base) as Record<string, unknown>) : base;
+        return MEDIA_BASE ? (absolutizeMedia(expanded) as Record<string, unknown>) : expanded;
     }
 
     /** Fetch + shape entries by id, keyed by id, each tagged with its content type

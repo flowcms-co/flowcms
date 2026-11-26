@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { elementHtml } from "@flowcms/shared";
 import { PublicQueryService } from "./public-query.service";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -90,5 +91,21 @@ describe("delivery of references: projection and populate", () => {
         const { data } = await svc().q.oneForType(type, "page", { populate: "service" });
         expect(data.service).toMatchObject({ id: "g1", title: "Guide g1" });
         expect(data.guides).toEqual([{ id: "g1", slug: "guide-g1", __type: "resource" }, { id: "g2", slug: "guide-g2", __type: "resource" }]);
+    });
+});
+
+describe("delivery expands elements", () => {
+    const stored = `<p>Before</p>${elementHtml("steps", { title: "Fix <it> & go", layout: "vertical", steps: [1, 2, 3].map((n) => ({ label: `L${n}`, time: "", text: `T${n}` })) })}<p>After</p>`;
+
+    it("turns a stored element into finished html, in rich text at any depth, and leaves the stored data alone", async () => {
+        const data = { Intro: stored, sections: [{ __component: "s", content: stored }] };
+        const { data: out } = await service([], data).oneForType(ct, "home", {});
+        for (const html of [out.Intro as string, (out.sections as any[])[0].content as string]) {
+            expect(html).toContain('<div class="flow-el flow-el--steps" data-flow-element="steps">');
+            expect(html).toContain("Fix &lt;it&gt; &amp; go");
+            expect(html).not.toContain("data-values");
+            expect(html.startsWith("<p>Before</p>") && html.endsWith("<p>After</p>")).toBe(true);
+        }
+        expect(data.Intro).toBe(stored);
     });
 });

@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { blocking, checkContentRules, issueErrors, publishBlockedMessage, valueFor, type ContentRules, type RuleIssue } from "@flowcms/shared";
+import { blocking, checkContentRules, elementProblems, issueErrors, publishBlockedMessage, valueFor, type ContentRules, type RuleIssue } from "@flowcms/shared";
 
 /** A field definition as authored in the Schema Builder (stored in ContentType.schema). */
 export type SchemaField = {
@@ -166,6 +166,13 @@ export type ValidateOpts = {
 export function validateEntryData(fields: SchemaField[], data: Record<string, unknown>, opts: ValidateOpts): void {
     const errors: Record<string, string> = {};
     validateFields(fields, data, opts, errors, "", true);
+    // Elements inside rich text are checked at the moments an entry goes live, whether or not the type has rules.
+    if (opts.enforceRules ?? opts.enforceRequired) {
+        for (const r of richValues(fields, data, opts.components, "")) {
+            const bad = elementProblems(r.html);
+            if (bad.length) errors[r.path] = errors[r.path] ? `${errors[r.path]} ${bad.join(" ")}` : bad.join(" ");
+        }
+    }
     const hard = opts.rules && (opts.enforceRules ?? opts.enforceRequired) ? blocking(checkContentRules(opts.rules, fields, opts.components ?? {}, data)) : [];
     if (hard.length > 0) {
         // A rule problem reads better than a bare required/type message on the same path.
@@ -180,7 +187,39 @@ export function validateEntryData(fields: SchemaField[], data: Record<string, un
 
 /** Every rule problem in the data, hard and soft, without throwing. Returned with saves so people and agents see what is left to fix. */
 export function contentWarnings(fields: SchemaField[], data: Record<string, unknown>, rules: ContentRules | null | undefined, components?: ComponentMap): RuleIssue[] {
-    return rules ? checkContentRules(rules, fields, components ?? {}, data) : [];
+    const out = rules ? checkContentRules(rules, fields, components ?? {}, data) : [];
+    // A draft only warns about its elements; publishing blocks (see validateEntryData).
+    for (const r of richValues(fields, data, components, "")) {
+        for (const message of elementProblems(r.html)) {
+            out.push({ path: r.path, pattern: r.path, location: r.path, rule: "allow", level: "warn", message, text: `${r.path}: ${message}` });
+        }
+    }
+    return out;
+}
+
+/** Every Rich text value in the data (top level and inside components and dynamic zones), with its data path. */
+function richValues(fields: SchemaField[], data: Record<string, unknown>, components: ComponentMap | undefined, prefix: string): { path: string; html: string }[] {
+    const out: { path: string; html: string }[] = [];
+    for (const field of fields) {
+        if (!field?.name || !field.type) continue;
+        const value = valueFor(data, field.name);
+        const path = prefix ? `${prefix}.${field.name}` : field.name;
+        if (field.type === "Rich text") {
+            if (typeof value === "string" && value.includes("data-flow-element")) out.push({ path, html: value });
+        } else if (field.type === "Component") {
+            const sub = resolveFields(field, components);
+            const items = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : [];
+            items.forEach((it, i) => {
+                if (it && typeof it === "object") out.push(...richValues(sub, it as Record<string, unknown>, components, Array.isArray(value) ? `${path}[${i}]` : path));
+            });
+        } else if (field.type === "DynamicZone" && Array.isArray(value)) {
+            value.forEach((it, i) => {
+                const comp = it && typeof it === "object" ? (it as Record<string, unknown>).__component : undefined;
+                if (typeof comp === "string" && components?.[comp]) out.push(...richValues(components[comp], it as Record<string, unknown>, components, `${path}[${i}]`));
+            });
+        }
+    }
+    return out;
 }
 
 /** Resolve a Component field's sub-fields: a library reference resolves via the

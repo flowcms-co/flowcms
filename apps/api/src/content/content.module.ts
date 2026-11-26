@@ -11,6 +11,7 @@ import { ContentListService } from "./content-list.service";
 import { ApiTokensController } from "./api-tokens.controller";
 import { ApiTokensService } from "./api-tokens.service";
 import { PublicController } from "./public.controller";
+import { ElementsController } from "./elements.controller";
 import { PublicQueryService } from "./public-query.service";
 import { RelationSyncService } from "./relation-sync.service";
 import { ContentSchedulerService } from "./content-scheduler.service";
@@ -34,6 +35,8 @@ import { BackupsModule } from "../backups/backups.module";
         ContentTypesController,
         ContentEntriesController,
         ApiTokensController,
+        // Before PublicController: its `:type` route would otherwise take /public/elements.css.
+        ElementsController,
         PublicController,
         GraphqlController,
         // Before AgentController: its `:type` routes would otherwise take /agent/assets and /agent/model.

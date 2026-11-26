@@ -616,8 +616,10 @@ export class ContentEntriesService {
      *  (a failing hard rule only stops publishing, never saving) and what was tidied. */
     private async ruleExtras(workspaceId: string, schema: unknown, data: Record<string, unknown>, note: string | null): Promise<{ warnings?: unknown[]; tidied?: string }> {
         const rules = await this.rulesOf(schema);
-        if (!rules) return {};
+        if (!rules && !JSON.stringify(data).includes("data-flow-element")) return {};
         const warnings = contentWarnings(fieldsOf(schema), data, rules, await this.componentMap(workspaceId));
+        // No rules: nothing to report unless an element has a problem (a draft only warns about those).
+        if (!rules && !warnings.length) return {};
         return { warnings, ...(note ? { tidied: note } : {}) };
     }
 
