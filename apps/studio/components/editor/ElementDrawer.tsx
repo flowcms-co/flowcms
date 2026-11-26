@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Transition } from "@headlessui/react";
-import { renderElement, type ElementField, type ElementTemplate } from "@flowcms/shared/elements";
+import { flowBind, flowCalc, renderElement, type BuilderConfig, type ElementField, type ElementTemplate } from "@flowcms/shared/elements";
 import Icon from "@/components/ui/Icon";
 import { useElementStyles } from "@/lib/elements";
+import CalculatorBuilderEditor from "./CalculatorBuilderEditor";
 
 type Row = Record<string, string>;
 type Values = Record<string, unknown>;
@@ -33,6 +34,13 @@ const ElementDrawer = ({
     const set = (key: string, v: unknown) => setValues((cur) => ({ ...cur, [key]: v }));
     const problems = useMemo(() => template.validate(values), [template, values]);
     const preview = useMemo(() => renderElement(template.id, values), [template.id, values]);
+    // The calculator builder has its own editor (the generic fields only go one level deep).
+    const builder = template.id === "calculator" && values.preset === "builder";
+    const previewRef = useRef<HTMLDivElement>(null);
+    // Make the builder preview live with the same compute the published page runs. A new preview is new markup, so it binds again.
+    useEffect(() => {
+        if (builder && previewRef.current) flowBind(previewRef.current, flowCalc);
+    }, [builder, preview]);
 
     const field = (f: ElementField) => {
         if (f.type === "text" || f.type === "number") {
@@ -135,11 +143,13 @@ const ElementDrawer = ({
                                     <Icon className="h-4 w-4 fill-grey" name="close" />
                                 </button>
                             </div>
-                            <div className="grid min-h-0 flex-1 gap-0 overflow-y-auto md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] md:overflow-hidden">
-                                <div className="flex flex-col gap-5 p-6 md:overflow-y-auto">{template.fields.map(field)}</div>
+                            <div className={`grid min-h-0 flex-1 gap-0 overflow-y-auto ${builder ? "md:grid-cols-[minmax(0,30rem)_minmax(0,1fr)]" : "md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]"} md:overflow-hidden`}>
+                                <div className="flex flex-col gap-5 p-6 md:overflow-y-auto">
+                                    {builder ? <CalculatorBuilderEditor value={values.config} onChange={(c: BuilderConfig) => set("config", c)} /> : template.fields.map(field)}
+                                </div>
                                 <div className="border-t border-grey-light bg-lavender-mist/40 p-6 dark:border-grey-light/15 dark:bg-dark-3/40 md:overflow-y-auto md:border-l md:border-t-0">
                                     <p className="mb-3 text-caption-2 font-semibold text-grey">Live preview</p>
-                                    <div dangerouslySetInnerHTML={{ __html: preview }} />
+                                    <div ref={previewRef} dangerouslySetInnerHTML={{ __html: preview }} />
                                 </div>
                             </div>
                             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-grey-light px-6 py-4 dark:border-grey-light/15">
