@@ -1,5 +1,7 @@
-/** Theme variables, one place. Slice 3 stores a per-workspace override and builds this from it. */
-export const DEFAULT_THEME_CSS = `:root{--el-accent:#6C5CE7;--el-accent-hover:#5A4BD4;--el-text:#1A1A2E;--el-muted:#6A6A85;--el-border:#ECEAF5;--el-panel:#F5F3FF;--el-surface:#FFFFFF;--el-rule:#D4D4D8;--el-radius:12px;--el-font:inherit}`;
+import { DEFAULT_THEME, themeCss } from "./theme";
+
+/** The default theme as CSS. A workspace theme replaces it through `themeCss`. */
+export const DEFAULT_THEME_CSS = themeCss(DEFAULT_THEME);
 
 /** Base styles for every element: layout only, all colour comes from the --el-* variables. */
 export const BASE_CSS = `.flow-el{container-type:inline-size;min-width:0;max-width:100%;margin:1.5rem 0;font-family:var(--el-font);color:var(--el-text);line-height:1.4;overflow-wrap:anywhere}

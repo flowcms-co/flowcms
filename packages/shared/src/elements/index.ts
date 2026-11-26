@@ -18,6 +18,7 @@ import { calculator } from "./calculator";
 export { elementsCss, BASE_CSS, DEFAULT_THEME_CSS } from "./css";
 export { ELEMENTS_JS } from "./js";
 export { safeJson } from "./util";
+export * from "./theme";
 export type { StepsValues } from "./steps";
 
 export type ElementField =
