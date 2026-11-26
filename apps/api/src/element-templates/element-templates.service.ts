@@ -10,7 +10,10 @@ type Usage = { id: string; title: string | null; slug: string; status: string };
 
 const MAX_NAME = 80;
 const MAX_IMPORT = 200;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** Deep equality that ignores key order (Postgres jsonb does not keep it). */
+const sorted = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(sorted) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, sorted(x)])) : v;
+const same = (a: unknown, b: unknown) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 
 /** The stored body holds `data-template=\"<id>\"` (a quote is escaped inside jsonb text). */
 const LINK = 'data-template=\\"';
